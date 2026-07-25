@@ -63,9 +63,10 @@ const clip = (name: string, ms: number, loop: boolean, settle = 0, count = 9): C
 const ANIMS: Record<State, Clip> = {
   idle: clip("sitswing", 150, true, 0), // seated, swinging his dangling legs (loops)
   thinking: clip("sitthink", 220, true, 8), // seated, chin on hand, thinking
-  coding: clip("anim", 80, true, 0),
-  searching: clip("anim", 110, true, 0),
-  speaking: clip("anim", 130, true, 0),
+  // work states: stands, arms crossed, "on the job" (the old front-walk clip was removed)
+  coding: clip("sit", 200, true, 8),
+  searching: clip("sit", 220, true, 8),
+  speaking: clip("sit", 240, true, 8),
   success: clip("cheer", 90, false), // once -> idle
   error: clip("stagger", 80, false), // once -> idle
 };
