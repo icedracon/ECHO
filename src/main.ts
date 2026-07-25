@@ -224,7 +224,18 @@ let pendingTimer: number | undefined;
 let prevStars = -1;
 const STAR_MILESTONE = 25;
 
+// Presence: after AWAY_AFTER_MS of no AI activity he wanders off; the next real
+// event brings him back. lastActivity is refreshed on every agent-event.
+const AWAY_AFTER_MS = 10 * 60 * 1000; // 10 min of silence -> he leaves
+let lastActivity = Date.now();
+let away = false;
+let returning = false;
+const LEAVE_LINES = ["Тишина… я на перекур.", "Зови, если что.", "Скучно. Пойду разомнусь."];
+const RETURN_LINES = ["Ну, погнали.", "Я вернулся.", "Начнём работать."];
+const pickLine = (a: string[]) => a[Math.floor(Math.random() * a.length)];
+
 function applyEvent(e: AgentEvent) {
+  lastActivity = Date.now(); // any event means the AI is active
   // HUD + bubble are always live, even while a state is being held.
   starsEl.textContent = `★ ${e.stars}`;
   levelEl.textContent = `Lv.${e.level}`;
@@ -236,7 +247,11 @@ function applyEvent(e: AgentEvent) {
     Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
   prevStars = e.stars;
   showBubble(e.phrase);
-  if (gagActive || showcasing) return; // a scene owns the sprite + window until it finishes
+  if (gagActive || showcasing || returning) return; // a scene owns the sprite + window
+  if (away) {
+    returnScene(); // he's off-screen -> walk back in first; next events drive state
+    return;
+  }
 
   // Hold thinking/speaking for a minimum so they don't get clobbered instantly
   // by the next JSONL line. Defer (coalescing to the latest) until the hold ends.
@@ -397,24 +412,53 @@ async function runIntro() {
   }
 }
 
-// Every so often (only while idle) Dante walks off the left edge, hangs out
-// off-screen, then walks back to his corner.
-async function wander() {
-  if (!home || wandering || stage.dataset.state !== "idle") return;
-  wandering = true;
+// After a long silence (no AI activity), Dante stands, crosses his arms, says
+// something, and walks off the left edge. He stays gone until the next event.
+async function leaveScene() {
+  if (!home || away || returning || wandering || gagActive || showcasing) return;
+  if (stage.dataset.state !== "idle") return;
+  wandering = true; // reuse the guard to block laugh / idle churn
+  const h = home;
   try {
-    const offX = home.ox - home.winW - 8;
+    delete stage.dataset.facing;
+    afterClip = null;
+    await new Promise<void>((res) => (moveWindowY(h.y, 300), window.setTimeout(res, 320)));
+    curClip = STAND_CROSS; // stand tall, arms crossed
+    frameIdx = 0;
+    showBubble(pickLine(LEAVE_LINES));
+    await sleep(2400);
+    const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
     playWalk();
-    await slideWindow(offX, 150); // walk out to the left (px/sec pace)
-    await sleep(3000 + Math.random() * 5000); // gone for a bit
-    stage.dataset.facing = "right";
-    playWalk();
-    await slideWindow(home.cornerX, 150); // walk back in
-    delete stage.dataset.facing;
-    setState("idle");
+    await slideWindow(offX, 150); // walk off to the left
+    away = true;
   } finally {
     wandering = false;
+  }
+}
+
+// A real AI event arrived while away -> walk back in from the left and sit down.
+async function returnScene() {
+  if (!home || returning) return;
+  returning = true;
+  away = false;
+  const h = home;
+  try {
+    h.lastX = h.ox - h.winW - 8; // start fully off-screen left
+    await h.win.setPosition(new PhysicalPosition(h.lastX, h.y));
+    h.lastY = h.y;
+    stage.dataset.facing = "right";
+    playWalk();
+    await slideWindow(h.cornerX, 150); // walk back to the corner
+    delete stage.dataset.facing;
+    curClip = SITDOWN; // sit down onto the panel
+    frameIdx = 0;
+    posture("idle");
+    await sleep(SITDOWN.frames.length * SITDOWN.ms);
+    setState("idle");
+    showBubble(pickLine(RETURN_LINES));
+  } finally {
+    returning = false;
   }
 }
 
@@ -569,17 +613,13 @@ async function main() {
 
   await listen<AgentEvent>("agent-event", (evt) => applyEvent(evt.payload));
 
-  // Everything else is driven by real session events. The only self-motion is a
-  // rare, jittered "stretch" — he wanders off and back once every few minutes of
-  // genuine idle (not a fixed clock tick).
-  const scheduleStretch = () => {
-    const delay = 300000 + Math.random() * 300000; // 5–10 min
-    window.setTimeout(() => {
-      if (!wandering && !gagActive && stage.dataset.state === "idle") wander();
-      scheduleStretch();
-    }, delay);
-  };
-  scheduleStretch();
+  // Presence loop: if there's been no AI activity for AWAY_AFTER_MS while he's
+  // idle, he leaves. The next agent-event (applyEvent) walks him back in.
+  window.setInterval(() => {
+    if (away || returning || wandering || gagActive || showcasing) return;
+    if (stage.dataset.state !== "idle") return;
+    if (Date.now() - lastActivity > AWAY_AFTER_MS) leaveScene();
+  }, 30000);
   frameLoop();
   runIntro();
   scheduleIdle();

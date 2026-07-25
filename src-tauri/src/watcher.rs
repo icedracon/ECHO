@@ -125,6 +125,8 @@ fn emit(app: &AppHandle, store: &Arc<Mutex<Store>>, phrases: &Arc<Phrases>, det:
         (s.stars, level_for(s.stars))
     };
 
+    log_sync(det.state_key(), stars, level);
+
     let payload = AgentEvent {
         state: det.state_key().to_string(),
         phrase: phrases.pick(det.state_key()),
@@ -132,4 +134,23 @@ fn emit(app: &AppHandle, store: &Arc<Mutex<Store>>, phrases: &Arc<Phrases>, det:
         level,
     };
     let _ = app.emit("agent-event", payload);
+}
+
+/// Append every synced event to ~/.echo/echo.log so the sync is auditable.
+fn log_sync(state: &str, stars: i64, level: u32) {
+    let Some(home) = dirs::home_dir() else { return };
+    let dir = home.join(".echo");
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("echo.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{ts}\t{state}\tstars={stars}\tlevel={level}");
+    }
 }
