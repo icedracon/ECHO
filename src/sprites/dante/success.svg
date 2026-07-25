@@ -1,0 +1,93 @@
+<svg viewBox="0 0 260 560" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <radialGradient id="glow" cx="50%" cy="30%" r="60%">
+   <stop offset="0%" stop-color="#f1c40f" stop-opacity="0.30"/><stop offset="100%" stop-color="#f1c40f" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="blade" x1="0" y1="1" x2="1" y2="0">
+   <stop offset="0%" stop-color="#9aa2ac"/><stop offset="50%" stop-color="#f0f4f8"/><stop offset="100%" stop-color="#9aa2ac"/></linearGradient>
+ </defs>
+ <ellipse cx="130" cy="200" rx="150" ry="230" fill="url(#glow)"/>
+
+ <!-- REBELLION on back (diagonal) -->
+ <g transform="rotate(24 130 250)">
+  <rect x="123" y="20" width="14" height="210" rx="3" fill="url(#blade)" stroke="#6f767e" stroke-width="1.4"/>
+  <polygon points="123,20 137,20 130,2" fill="#f0f4f8" stroke="#6f767e" stroke-width="1.4"/>
+  <line x1="130" y1="30" x2="130" y2="222" stroke="#c7d0d9" stroke-width="1.6" opacity="0.6"/>
+  <path d="M96 232 h68 v14 h-68 Z" fill="#c9a233"/>
+  <path d="M108 246 q22 22 44 0 q-22 10 -44 0 Z" fill="#b8912e"/>
+  <circle cx="130" cy="240" r="11" fill="#e9e2d0" stroke="#b9a97e" stroke-width="1.4"/>
+  <circle cx="125" cy="238" r="2.3" fill="#2b2b2b"/><circle cx="135" cy="238" r="2.3" fill="#2b2b2b"/>
+  <rect x="122" y="246" width="16" height="52" rx="4" fill="#2b2b2b"/>
+  <circle cx="130" cy="302" r="9" fill="#c9a233"/>
+ </g>
+
+ <!-- LEGS (black pants + boots) -->
+ <path d="M112 300 L104 486 L96 486 L100 300 Z" fill="#15161b"/>
+ <path d="M148 300 L156 486 L164 486 L160 300 Z" fill="#15161b"/>
+ <path d="M112 300 Q130 292 148 300 L150 400 L136 470 L124 470 L110 400 Z" fill="#26282f"/>
+ <path d="M118 300 L120 470 L134 470 L138 300 Z" fill="#1c1e24"/>
+ <path d="M96 470 L138 470 L142 512 Q120 522 92 512 Z" fill="#2b2d34"/>
+ <path d="M122 470 L164 470 L168 512 Q146 522 118 512 Z" fill="#232529"/>
+ <ellipse cx="115" cy="516" rx="26" ry="9" fill="#000" opacity="0.28"/>
+ <ellipse cx="145" cy="516" rx="26" ry="9" fill="#000" opacity="0.28"/>
+
+ <!-- COAT tails (long red) -->
+ <path d="M92 250 L66 452 L104 452 L112 300 Z" fill="#8d0f1d"/>
+ <path d="M168 250 L194 452 L156 452 L148 300 Z" fill="#8d0f1d"/>
+ <path d="M112 300 L104 452 L150 452 L148 300 Z" fill="#5e0a14"/>
+
+ <!-- GREY SHIRT -->
+ <path d="M96 150 Q130 138 164 150 L152 290 Q130 300 108 290 Z" fill="#b8bcc4"/>
+ <path d="M130 150 L130 290" stroke="#9aa0ab" stroke-width="2" opacity="0.5"/>
+ <path d="M118 150 L130 196 L142 150 Z" fill="#f1c9a5"/>
+ <ellipse cx="130" cy="188" rx="7" ry="9" fill="#d81f2f" stroke="#d4af37" stroke-width="2.4"/>
+ <line x1="123" y1="150" x2="128" y2="181" stroke="#8a8f98" stroke-width="1.4"/>
+ <line x1="137" y1="150" x2="132" y2="181" stroke="#8a8f98" stroke-width="1.4"/>
+ <rect x="104" y="286" width="52" height="12" rx="2" fill="#4a3418"/>
+ <rect x="124" y="286" width="12" height="12" rx="2" fill="#c9a233"/>
+
+ <!-- COAT upper (shoulders + popped collar) -->
+ <path d="M84 156 Q84 120 118 128 L118 150 L96 172 Z" fill="#c01528"/>
+ <path d="M176 156 Q176 120 142 128 L142 150 L164 172 Z" fill="#c01528"/>
+ <path d="M108 132 L130 158 L108 158 Z" fill="#d8283b"/>
+ <path d="M152 132 L130 158 L152 158 Z" fill="#d8283b"/>
+
+ <!-- ARMS (red sleeves + gloves) -->
+ <path d="M92 154 Q74 176 72 236 L92 240 Q92 190 108 162 Z" fill="#c01528"/>
+ <path d="M168 154 Q186 176 188 236 L168 240 Q168 190 152 162 Z" fill="#c01528"/>
+ <path d="M74 232 Q70 200 88 178 L96 182 Q82 206 92 236 Z" fill="#8d0f1d"/>
+ <path d="M70 234 Q70 258 84 262 Q96 258 94 236 Z" fill="#1c1e24"/>
+ <path d="M72 236 Q84 244 92 238" stroke="#b01523" stroke-width="3" fill="none"/>
+ <path d="M166 234 Q166 258 180 262 Q192 258 190 236 Z" fill="#1c1e24"/>
+ <path d="M168 236 Q180 244 188 238" stroke="#b01523" stroke-width="3" fill="none"/>
+ <ellipse cx="82" cy="266" rx="9" ry="7" fill="#f1c9a5"/>
+ <ellipse cx="178" cy="266" rx="9" ry="7" fill="#f1c9a5"/>
+
+ <!-- HEAD -->
+ <rect x="120" y="104" width="20" height="30" rx="4" fill="#e7bd91"/>
+ <ellipse cx="130" cy="74" rx="34" ry="38" fill="#f1c9a5"/>
+ <path d="M96 78 Q94 100 112 112 Q102 96 100 78 Z" fill="#e0b487"/>
+
+ <!-- HAIR: back mass -->
+ <path d="M92 70 Q88 34 130 30 Q172 34 168 70 Q168 108 150 122 L150 96 Q150 66 130 66 Q110 66 110 96 L110 122 Q92 108 92 70 Z" fill="#e3e8ee"/>
+ <g fill="#eef1f4" stroke="#c3ccd5" stroke-width="1.2">
+  <path d="M100 52 L86 26 L114 46 Z"/>
+  <path d="M114 46 L108 16 L132 42 Z"/>
+  <path d="M132 42 L142 14 L150 46 Z"/>
+  <path d="M150 46 L170 28 L158 56 Z"/>
+  <path d="M96 60 L74 46 L100 68 Z"/>
+  <path d="M100 66 L88 104 L104 74 Z"/>
+  <path d="M160 66 L172 104 L156 74 Z"/>
+  <path d="M104 62 L100 86 L116 66 Z"/>
+  <path d="M156 62 L160 86 L144 66 Z"/>
+  <path d="M126 60 L122 84 L132 60 Z"/>
+  <path d="M132 60 L138 84 L142 62 Z"/>
+ </g>
+
+ <!-- FACE -->
+ <path d="M106 64 Q116 60 126 65" stroke="#cfd6de" stroke-width="2.6" fill="none" stroke-linecap="round"/><path d="M154 64 Q144 60 134 65" stroke="#cfd6de" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+ <path d="M108 77 Q118 83 128 77" stroke="#3a2c22" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M132 74 Q142 68 152 74 L150 82 Q142 78 134 82 Z" fill="#fff"/><circle cx="142" cy="77" r="5" fill="#3f7fc4"/><circle cx="142" cy="77" r="2.3" fill="#12263d"/>
+ <path d="M129 82 Q131 90 127 91" stroke="#cc9a6b" stroke-width="1.4" fill="none"/>
+ <path d="M118 94 Q130 106 143 94 Z" fill="#7a2b2b"/><path d="M118 94 Q130 99 143 94" stroke="#fff" stroke-width="1.8" fill="none"/>
+ <text x="206" y="60" font-size="40" text-anchor="middle" fill="#ffd94a" font-family="Segoe UI, sans-serif" font-weight="800">★</text>
+</svg>

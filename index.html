@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ECHO</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main id="stage" data-state="idle">
+      <div id="bubble" class="hidden"></div>
+      <img id="sprite" src="/pixel/dante_idle.png" alt="Dante" draggable="false" />
+      <div id="hud">
+        <span id="stars">★ 0</span>
+        <span id="level">Lv.1</span>
+      </div>
+    </main>
+  </body>
+</html>
