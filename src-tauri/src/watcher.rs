@@ -12,9 +12,31 @@ use crate::events::{classify, Detected};
 use crate::phrases::Phrases;
 use crate::{level_for, AgentEvent, Store};
 
-/// Root that Claude Code writes session JSONL into: ~/.claude/projects/**/*.jsonl
-fn projects_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+/// How a watched source is interpreted.
+enum Kind {
+    /// Claude Code session logs — parsed line-by-line into rich states.
+    Jsonl,
+    /// Other AI tools (Cursor, Claude Desktop) — their storage isn't parseable,
+    /// so any file change counts as a coarse "AI is active" pulse.
+    Pulse,
+}
+
+/// Every AI log/data location ECHO watches. Missing ones are skipped.
+fn sources() -> Vec<(PathBuf, Kind)> {
+    let mut v = Vec::new();
+    if let Some(h) = dirs::home_dir() {
+        v.push((h.join(".claude").join("projects"), Kind::Jsonl)); // Claude Code
+    }
+    if let Some(cfg) = dirs::config_dir() {
+        // %APPDATA%\Cursor\User\workspaceStorage — Cursor's chat/state SQLite.
+        v.push((
+            cfg.join("Cursor").join("User").join("workspaceStorage"),
+            Kind::Pulse,
+        ));
+        v.push((cfg.join("Claude"), Kind::Pulse)); // Claude Desktop app
+    }
+    v.retain(|(p, _)| p.exists());
+    v
 }
 
 fn is_jsonl(p: &Path) -> bool {
@@ -38,18 +60,29 @@ fn seed_offsets(root: &Path, offsets: &mut HashMap<PathBuf, u64>) {
 }
 
 pub fn spawn(app: AppHandle, store: Arc<Mutex<Store>>, phrases: Arc<Phrases>) {
-    let Some(root) = projects_root() else {
-        eprintln!("[watcher] no home dir; log watching disabled");
-        return;
-    };
-    if !root.exists() {
-        eprintln!("[watcher] {} not found; log watching disabled", root.display());
+    let srcs = sources();
+    if srcs.is_empty() {
+        eprintln!("[watcher] no AI log sources found; disabled");
         return;
     }
 
     std::thread::spawn(move || {
+        let jsonl_roots: Vec<PathBuf> = srcs
+            .iter()
+            .filter(|(_, k)| matches!(k, Kind::Jsonl))
+            .map(|(p, _)| p.clone())
+            .collect();
+        let pulse_roots: Vec<PathBuf> = srcs
+            .iter()
+            .filter(|(_, k)| matches!(k, Kind::Pulse))
+            .map(|(p, _)| p.clone())
+            .collect();
+
+        // Only JSONL sources need offset seeding (so we don't replay history).
         let mut offsets: HashMap<PathBuf, u64> = HashMap::new();
-        seed_offsets(&root, &mut offsets);
+        for r in &jsonl_roots {
+            seed_offsets(r, &mut offsets);
+        }
 
         let (tx, rx) = channel();
         let mut watcher = match notify::recommended_watcher(tx) {
@@ -59,17 +92,26 @@ pub fn spawn(app: AppHandle, store: Arc<Mutex<Store>>, phrases: Arc<Phrases>) {
                 return;
             }
         };
-        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
-            eprintln!("[watcher] failed to watch {}: {e}", root.display());
-            return;
+        for (root, _) in &srcs {
+            match watcher.watch(root, RecursiveMode::Recursive) {
+                Ok(()) => eprintln!("[watcher] watching {}", root.display()),
+                Err(e) => eprintln!("[watcher] failed to watch {}: {e}", root.display()),
+            }
         }
-        eprintln!("[watcher] watching {}", root.display());
 
+        // Coarse "AI is active" pulses (Cursor / Claude Desktop) are debounced so
+        // frequent autosaves don't spam the companion.
+        let mut last_pulse = std::time::Instant::now() - std::time::Duration::from_secs(60);
         for res in rx {
             let Ok(event) = res else { continue };
             for path in event.paths {
-                if is_jsonl(&path) {
+                if is_jsonl(&path) && jsonl_roots.iter().any(|r| path.starts_with(r)) {
                     process_file(&app, &store, &phrases, &mut offsets, &path);
+                } else if pulse_roots.iter().any(|r| path.starts_with(r)) {
+                    if last_pulse.elapsed() >= std::time::Duration::from_secs(4) {
+                        last_pulse = std::time::Instant::now();
+                        emit(&app, &store, &phrases, Detected::Coding);
+                    }
                 }
             }
         }
