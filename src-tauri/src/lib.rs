@@ -76,6 +76,67 @@ fn idle_phrase(shared: tauri::State<Shared>) -> Option<String> {
     shared.phrases.pick("idle")
 }
 
+/// User-supplied voice clips from ~/.echo/voice/<name>.(wav|mp3|ogg).
+/// Returned as (name, data-url) so the webview can play them directly.
+/// Nothing ships with ECHO — whatever the user drops in is theirs.
+#[tauri::command]
+fn voice_clips() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(home) = dirs::home_dir() else {
+        return out;
+    };
+    let dir = home.join(".echo").join("voice");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let Some(ext) = p.extension().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let mime = match ext.to_ascii_lowercase().as_str() {
+            "wav" => "audio/wav",
+            "mp3" => "audio/mpeg",
+            "ogg" => "audio/ogg",
+            _ => continue,
+        };
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Keep it sane: skip anything huge for a one-liner clip.
+        if p.metadata().map(|m| m.len() > 4 * 1024 * 1024).unwrap_or(true) {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&p) {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            out.push((stem.to_lowercase(), format!("data:{mime};base64,{b64}")));
+        }
+    }
+    out
+}
+
+/// Frontend diagnostics -> ~/.echo/echo-fe.log (so overlay behaviour is auditable).
+#[tauri::command]
+fn fe_log(line: String) {
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".echo");
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("echo-fe.log"))
+        {
+            use std::io::Write;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "{ts}\t{line}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -98,7 +159,12 @@ pub fn run() {
             watcher::spawn(app.handle().clone(), store, phrases);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_state, idle_phrase])
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            idle_phrase,
+            fe_log,
+            voice_clips
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

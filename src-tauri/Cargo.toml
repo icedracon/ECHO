@@ -29,4 +29,5 @@ serde_json = "1"
 notify = "6"
 dirs = "5"
 rand = "0.8"
+base64 = "0.22"
 

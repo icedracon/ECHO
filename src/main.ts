@@ -2,6 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, currentMonitor, primaryMonitor } from "@tauri-apps/api/window";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { Life } from "./life";
+import {
+  pickIdle,
+  type IdleUrge,
+  voiceLineOk,
+  markVoiceLine,
+  sceneBudgetOk,
+  markScene as budgetScene,
+} from "./planner";
+
+// v2: the evolving internal state (life) drives the planner's decisions.
+const life = new Life();
 
 type State =
   | "idle"
@@ -36,11 +48,240 @@ const IDLE_AFTER_MS = 6000;
 const MIN_HOLD: Record<string, number> = { thinking: 1100, speaking: 750 };
 const isTauri = "__TAURI_INTERNALS__" in window;
 
+// Diagnostics -> ~/.echo/echo-fe.log (his overlay can't be screenshotted).
+function dbg(msg: string) {
+  if (isTauri) void invoke("fe_log", { line: msg }).catch(() => {});
+}
+
 const stage = document.getElementById("stage") as HTMLElement;
 const sprite = document.getElementById("sprite") as HTMLImageElement;
 const bubble = document.getElementById("bubble") as HTMLElement;
 const starsEl = document.getElementById("stars") as HTMLElement;
 const levelEl = document.getElementById("level") as HTMLElement;
+const vignetteEl = document.getElementById("vignette") as HTMLElement;
+
+// ---- Camera FX (pure CSS/JS) ----
+function shake(ms = 400) {
+  stage.classList.remove("shake");
+  void stage.offsetWidth; // restart the animation
+  stage.classList.add("shake");
+  window.setTimeout(() => stage.classList.remove("shake"), ms);
+}
+function vignettePulse() {
+  vignetteEl.classList.remove("pulse");
+  void vignetteEl.offsetWidth;
+  vignetteEl.classList.add("pulse");
+  window.setTimeout(() => vignetteEl.classList.remove("pulse"), 1200);
+}
+
+// ---- Sound: synthesized SFX (original — no copyrighted game audio) ----
+let actx: AudioContext | null = null;
+function ac(): AudioContext | null {
+  try {
+    if (!actx) actx = new AudioContext();
+    if (actx.state === "suspended") void actx.resume();
+    return actx;
+  } catch {
+    return null;
+  }
+}
+// A gunshot: filtered noise burst with a fast decay.
+function sfxGunshot() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.16), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(2200, t);
+  lp.frequency.exponentialRampToValueAtTime(180, t + 0.15);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.45, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+  src.connect(lp).connect(g).connect(a.destination);
+  src.start(t);
+  src.stop(t + 0.17);
+}
+// A low sweeping hum for the Devil-Trigger aura.
+function sfxAura() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const o = a.createOscillator();
+  o.type = "sawtooth";
+  o.frequency.setValueAtTime(70, t);
+  o.frequency.exponentialRampToValueAtTime(220, t + 0.5);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.28, t + 0.1);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+  o.connect(g).connect(a.destination);
+  o.start(t);
+  o.stop(t + 1.0);
+}
+// A soft low thud for stumbles / the fall.
+function sfxThud() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const o = a.createOscillator();
+  o.type = "sine";
+  o.frequency.setValueAtTime(160, t);
+  o.frequency.exponentialRampToValueAtTime(50, t + 0.18);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+  o.connect(g).connect(a.destination);
+  o.start(t);
+  o.stop(t + 0.21);
+}
+// ---- Voice ----
+// Two layers: (1) if you drop your own clips in ~/.echo/voice/<name>.wav|mp3
+// they play as-is; (2) otherwise a synthesized deep TTS voice speaks the line.
+// No copyrighted game/anime audio ships with ECHO — bring your own if you want it.
+// Stylized game-style voice blips instead of text-to-speech: TTS reading words
+// always sounds robotic, so each "line" is a short run of vocal-ish syllables
+// (low sawtooth through a formant-ish bandpass, with vibrato + pitch glide).
+// One syllable: `f0` Hz, `dur` seconds, gliding by `bend`.
+function syllable(at: number, f0: number, dur: number, bend = 0.9, gain = 0.22) {
+  const a = ac();
+  if (!a) return;
+  const o = a.createOscillator();
+  o.type = "sawtooth";
+  o.frequency.setValueAtTime(f0, at);
+  o.frequency.exponentialRampToValueAtTime(Math.max(40, f0 * bend), at + dur);
+  // vibrato so it sounds voiced, not like a beep
+  const lfo = a.createOscillator();
+  lfo.frequency.value = 22;
+  const lfoGain = a.createGain();
+  lfoGain.gain.value = f0 * 0.03;
+  lfo.connect(lfoGain).connect(o.frequency);
+  // vowel-ish resonance
+  const bp = a.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.setValueAtTime(f0 * 3.2, at);
+  bp.Q.value = 6;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 1800;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(gain, at + 0.03);
+  g.gain.setValueAtTime(gain, at + dur * 0.7);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  o.connect(bp).connect(lp).connect(g).connect(a.destination);
+  o.start(at);
+  o.stop(at + dur + 0.02);
+  lfo.start(at);
+  lfo.stop(at + dur + 0.02);
+}
+// A closed-mouth pondering hum: "hmmm…"
+function voiceHmm() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  syllable(t, 128, 0.5, 0.82, 0.2);
+}
+// Two punchy syllables with an up-kick — the "Jackpot!" cadence.
+function voiceJackpot() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  syllable(t, 165, 0.14, 0.9, 0.26);
+  syllable(t + 0.17, 140, 0.3, 1.25, 0.26);
+}
+// Voice ANY line he says: one syllable per vowel-group (capped), so the length
+// and rhythm track the actual text. Questions lift at the end, "!" hits harder.
+let lastLineAt = 0;
+function voiceLine(text: string) {
+  const a = ac();
+  if (!a) return;
+  const now = Date.now();
+  if (now - lastLineAt < 350) return; // don't stack overlapping bubbles
+  lastLineAt = now;
+  const groups = (text.toLowerCase().match(/[aeiouyаеёиоуыэюя]+/g) || []).length;
+  const n = Math.max(1, Math.min(6, groups));
+  const excited = /[!?]/.test(text);
+  const asks = /\?/.test(text);
+  const base = excited ? 150 : 132;
+  const t = a.currentTime;
+  let at = t;
+  for (let i = 0; i < n; i++) {
+    const last = i === n - 1;
+    const f0 = base + (Math.random() * 16 - 8) + (last && asks ? 22 : 0);
+    const dur = last ? 0.24 : 0.11 + Math.random() * 0.04;
+    const bend = last ? (asks ? 1.22 : 0.82) : 0.96;
+    syllable(at, f0, dur, bend, excited ? 0.24 : 0.19);
+    at += dur + 0.045;
+  }
+}
+// Play ~/.echo/voice/<name>.(wav|mp3|ogg) if the user supplied one; returns
+// true when a custom clip was used, so the caller can skip TTS.
+function playVoiceFile(name: string): boolean {
+  if (!voiceFiles.has(name)) return false;
+  try {
+    const a = new Audio(voiceFiles.get(name)!);
+    a.volume = 0.95;
+    void a.play().catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+const voiceFiles = new Map<string, string>();
+// Ask the backend which custom voice clips exist and cache their asset URLs.
+async function initVoiceFiles() {
+  if (!isTauri) return;
+  try {
+    const list = await invoke<Array<[string, string]>>("voice_clips");
+    for (const [name, url] of list) voiceFiles.set(name, url);
+    dbg(`voice clips: ${list.map((l) => l[0]).join(",") || "(none)"}`);
+  } catch (e) {
+    dbg(`voice_clips failed: ${e}`);
+  }
+}
+// Call sites use this: your own clip from ~/.echo/voice/ if present, else the
+// stylized blip for that line.
+function say(name: "hmm" | "jackpot") {
+  if (playVoiceFile(name)) return;
+  if (name === "hmm") voiceHmm();
+  else voiceJackpot();
+}
+
+// Line text -> clip filename (must match scripts/gen_voice.py's slug()).
+function slugOf(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "line";
+}
+// Speak a bubble: real recorded line if we have one, else the stylized blip.
+// Per-line cooldown so the SAME line never repeats close together (planner).
+function voiceSay(text: string) {
+  if (!voiceLineOk(text)) return;
+  markVoiceLine(text);
+  if (playVoiceFile(slugOf(text))) return;
+  voiceLine(text);
+}
+
+// A short bright blip for a light win.
+function sfxDing() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const o = a.createOscillator();
+  o.type = "triangle";
+  o.frequency.setValueAtTime(880, t);
+  o.frequency.exponentialRampToValueAtTime(1320, t + 0.09);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  o.connect(g).connect(a.destination);
+  o.start(t);
+  o.stop(t + 0.19);
+}
 
 // Real PixelLab frame animations (same Dante every frame). Each state maps to
 // a clip: a folder of 9 frames, a speed, and whether it loops.
@@ -63,10 +304,10 @@ const clip = (name: string, ms: number, loop: boolean, settle = 0, count = 9): C
 const ANIMS: Record<State, Clip> = {
   idle: clip("sitswing", 150, true, 0), // seated, swinging his dangling legs (loops)
   thinking: clip("sitthink", 220, true, 8), // seated, chin on hand, thinking
-  // work states: stands, arms crossed, "on the job" (the old front-walk clip was removed)
-  coding: clip("sit", 200, true, 8),
-  searching: clip("sit", 220, true, 8),
-  speaking: clip("sit", 240, true, 8),
+  // work states are DISTINCT + lively so the common case isn't a static stand:
+  coding: clip("gunspin", 90, true, 0), // spins his gun while I code (loops)
+  searching: clip("sit", 220, true, 8), // arms crossed, considering
+  speaking: clip("taunt", 130, true, 8), // gestures / talks
   success: clip("cheer", 90, false), // once -> idle
   error: clip("stagger", 80, false), // once -> idle
 };
@@ -86,28 +327,50 @@ const STAND_CROSS = clip("sit", 200, false); // standing, arms crossed
 const LAUGH = clip("laugh", 130, false);
 // Star-milestone celebration: a standing dance (loops for the scene's duration).
 const DANCE = clip("dance", 110, true, 0);
-// Idle = a calm seated rotation. Each pose does its little motion, then FREEZES
-// and rests a while, then shifts to the next. Only the leg-swing actually loops.
-interface IdleStep {
-  clip: Clip;
-  plays: number; // how many times to play the motion before resting
-  hold: [number, number]; // then hold the final frame still for a random ms in range
+// Signature beats: Devil-Trigger power pose (level up), gun-spin + taunt
+// (Jackpot follow-through). Check-watch joins the idle rotation below.
+const DEVIL = clip("devil", 90, true, 8);
+const GUNSPIN = clip("gunspin", 85, true, 8);
+const TAUNT = clip("taunt", 100, true, 8);
+// Light win/error reactions (every event) — a quick visible pose.
+const CHEER = clip("cheer", 90, true, 8);
+const STAGGER = clip("stagger", 85, true, 8);
+// Idle = a WEIGHTED, never-repeat rotation of seated poses (planner.pickIdle),
+// with weights bent by his mood — bored → checks watch, low energy → yawns/naps,
+// confident → leans back. Each pose plays, he rests still, then a DIFFERENT pose.
+const IDLE_MS: Record<string, number> = {
+  sitswing: 150,
+  sitcross: 200,
+  sitthink: 240,
+  checkwatch: 200,
+  yawn: 220,
+  leanback: 200,
+  nap: 260,
+};
+const idleClipCache: Record<string, Clip> = {};
+function idleClip(name: string): Clip {
+  return (idleClipCache[name] ??= clip(name, IDLE_MS[name] ?? 200, false));
 }
-const IDLE_SEQ: IdleStep[] = [
-  { clip: clip("sitswing", 150, false), plays: 3, hold: [700, 1800] }, // swing legs a few times
-  { clip: clip("sitcross", 200, false), plays: 1, hold: [7000, 12000] }, // arms crossed, rest
-  { clip: clip("sitthink", 240, false), plays: 1, hold: [5000, 9000] }, // ponder, rest
-];
-const IDLE_CYCLE = IDLE_SEQ.map((s) => s.clip); // for preload + showcase demos
-let idleIdx = 0;
-let idlePlaysLeft = 0;
+const IDLE_CYCLE = ["sitswing", "sitcross", "sitthink"].map(idleClip); // showcase demos
 // When a one-shot clip ends, run this instead of the default idle fallback.
 let afterClip: (() => void) | null = null;
 
 // preload every frame
-[...Object.values(ANIMS), ...IDLE_CYCLE, WALK, FALLING, CLIMB, SHOOT, SITDOWN, STAND_CROSS, LAUGH, DANCE].forEach(
-  (c) => c.frames.forEach((s) => (new Image().src = s)),
-);
+[
+  ...Object.values(ANIMS),
+  ...Object.keys(IDLE_MS).map(idleClip),
+  WALK,
+  FALLING,
+  CLIMB,
+  SHOOT,
+  SITDOWN,
+  STAND_CROSS,
+  LAUGH,
+  DANCE,
+  DEVIL,
+  GUNSPIN,
+  TAUNT,
+].forEach((c) => c.frames.forEach((s) => (new Image().src = s)));
 
 // Freeze on the last frame of `c` for `ms`, then run `next` (if still idle).
 function holdStill(c: Clip, ms: number, next: () => void) {
@@ -120,30 +383,33 @@ function holdStill(c: Clip, ms: number, next: () => void) {
   }, ms);
 }
 
+let curUrge: IdleUrge | null = null;
+let idlePlaysLeft = 0;
+let lastIdleClip: string | null = null;
+
 function playIdleCycle() {
-  const step = IDLE_SEQ[idleIdx];
-  idlePlaysLeft = step.plays;
-  curClip = step.clip;
+  curUrge = pickIdle(life, lastIdleClip);
+  lastIdleClip = curUrge.clip;
+  idlePlaysLeft = curUrge.plays;
+  curClip = idleClip(curUrge.clip);
   frameIdx = 0;
   afterClip = idleStepDone;
 }
 
 function idleStepDone() {
+  if (!curUrge) {
+    playIdleCycle();
+    return;
+  }
   idlePlaysLeft -= 1;
   if (idlePlaysLeft > 0) {
-    // repeat the motion (e.g. keep swinging)
-    curClip = IDLE_SEQ[idleIdx].clip;
+    curClip = idleClip(curUrge.clip);
     frameIdx = 0;
     afterClip = idleStepDone;
     return;
   }
-  // done moving -> rest still, then shift to the next pose
-  const step = IDLE_SEQ[idleIdx];
-  const holdMs = step.hold[0] + Math.random() * (step.hold[1] - step.hold[0]);
-  holdStill(step.clip, holdMs, () => {
-    idleIdx = (idleIdx + 1) % IDLE_SEQ.length;
-    playIdleCycle();
-  });
+  const [lo, hi] = curUrge.hold;
+  holdStill(idleClip(curUrge.clip), lo + Math.random() * (hi - lo), playIdleCycle);
 }
 
 function playWalk() {
@@ -177,7 +443,12 @@ function frameLoop() {
 let idleTimer: number | undefined;
 let bubbleTimer: number | undefined;
 
+// Work poses rotate so a long coding run isn't one clip looping forever.
+const WORK_POSES = ["gunspin", "sit", "taunt"];
+let workIdx = 0;
+
 function setState(state: State) {
+  const prev = stage.dataset.state;
   stage.dataset.state = state;
   document.documentElement.style.setProperty("--accent", ACCENT[state]);
   afterClip = null;
@@ -186,19 +457,75 @@ function setState(state: State) {
     playIdleCycle(); // rotate seated poses: swing -> arms crossed -> thinking
     return;
   }
-  curClip = ANIMS[state] ?? ANIMS.idle;
+  // Entering thinking: a low "Hmm." — but only when he's been quiet a while and
+  // I'm not mid-burst, so it reads as a thought, not a tic.
+  if (
+    state === "thinking" &&
+    prev !== "thinking" &&
+    !busyBurst() &&
+    Date.now() - lastVoiceAt > VOICE_MIN_GAP
+  ) {
+    lastVoiceAt = Date.now();
+    say("hmm"); // ~/.echo/voice/hmm.mp3 if present
+  }
+  // Working states cycle through several poses instead of repeating one.
+  if (state === "coding" || state === "searching" || state === "speaking") {
+    if (prev !== state) workIdx = (workIdx + 1) % WORK_POSES.length;
+    const name = WORK_POSES[workIdx];
+    curClip = clip(name, name === "gunspin" ? 90 : 200, true, name === "gunspin" ? 0 : 8);
+  } else {
+    curClip = ANIMS[state] ?? ANIMS.idle;
+  }
   frameIdx = 0;
   posture(state); // sit on the panel for thinking, stand for the rest
 }
 
-function showBubble(text: string | null) {
+// ---- Attention budget -------------------------------------------------
+// A companion that interrupts is a companion you close. Every reaction has a
+// cost, and he spends it carefully:
+//   0 AMBIENT  work/idle chatter — bubble sometimes, NEVER voiced
+//   1 NOTABLE  small win/error   — bubble always, voiced only if quiet lately
+//   2 MAJOR    Jackpot / Devil Trigger / leaving — always voiced
+const PRIO = { AMBIENT: 0, NOTABLE: 1, MAJOR: 2 } as const;
+const VOICE_MIN_GAP = 60_000; // ≥1 min between any two spoken lines
+const SCENE_MIN_GAP = 180_000; // ≥3 min between big animated scenes
+const AMBIENT_BUBBLE_CHANCE = 0.18; // most work chatter stays silent
+let lastVoiceAt = 0;
+let lastSceneAt = 0;
+// Recent event timestamps -> "is he hammering tool calls right now?"
+const recentEvents: number[] = [];
+function busyBurst(): boolean {
+  const now = Date.now();
+  while (recentEvents.length && now - recentEvents[0] > 30_000) recentEvents.shift();
+  return recentEvents.length > 12; // heavy activity -> stay out of the way
+}
+// May a big animated scene run now? (rate-limited so they stay special)
+function sceneAllowed(): boolean {
+  return Date.now() - lastSceneAt >= SCENE_MIN_GAP;
+}
+function markScene() {
+  lastSceneAt = Date.now();
+}
+
+function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
   if (bubbleTimer) clearTimeout(bubbleTimer);
   if (!text) {
     bubble.classList.add("hidden");
     return;
   }
+  // Ambient chatter: usually skipped entirely, and always silent.
+  if (prio === PRIO.AMBIENT) {
+    if (busyBurst() || Math.random() > AMBIENT_BUBBLE_CHANCE) return;
+  }
   bubble.textContent = text;
   bubble.classList.remove("hidden");
+  const now = Date.now();
+  const mayVoice =
+    prio === PRIO.MAJOR || (prio === PRIO.NOTABLE && now - lastVoiceAt >= VOICE_MIN_GAP);
+  if (mayVoice) {
+    lastVoiceAt = now;
+    voiceSay(text); // real recorded line if we have one, else a blip
+  }
   bubbleTimer = window.setTimeout(() => bubble.classList.add("hidden"), 4500);
 }
 
@@ -215,6 +542,9 @@ function levelUpFlash() {
   stage.classList.remove("leveling");
   void stage.offsetWidth; // restart the CSS animation
   stage.classList.add("leveling");
+  vignettePulse(); // red Devil-Trigger flash over the whole window
+  shake(500);
+  sfxAura();
   window.setTimeout(() => stage.classList.remove("leveling"), 1300);
 }
 
@@ -223,6 +553,56 @@ let pendingEv: AgentEvent | null = null;
 let pendingTimer: number | undefined;
 let prevStars = -1;
 const STAR_MILESTONE = 25;
+// Emotional continuity: wins/errors build up. Small ones get a light beat; a
+// streak earns the big scene (Jackpot / breakdown), so the payoffs feel earned.
+let winStreak = 0;
+let errStreak = 0;
+const WIN_LINES = ["Easy.", "Next.", "Heh, too easy.", "Small stuff."];
+const SHRUG_LINES = ["It happens.", "Pff, nothing.", "Sure, sure.", "Doesn't count."];
+
+// Light win: stand up, quick arms-up cheer, a smirk. VISIBLE on every win.
+async function lightWin() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  cancelAnimationFrame(winTween);
+  const h = home;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    delete stage.dataset.facing;
+    await new Promise<void>((r) => (moveWindowY(h.y, 200), window.setTimeout(r, 210)));
+    curClip = CHEER;
+    frameIdx = 0;
+    sfxDing();
+    showBubble(pickLine(WIN_LINES), PRIO.NOTABLE);
+    await sleep(950);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+// Light error: stand up, quick stagger recoil. VISIBLE on every error.
+async function lightError() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  cancelAnimationFrame(winTween);
+  const h = home;
+  try {
+    stage.dataset.state = "error";
+    document.documentElement.style.setProperty("--accent", ACCENT.error);
+    delete stage.dataset.facing;
+    await new Promise<void>((r) => (moveWindowY(h.y, 200), window.setTimeout(r, 210)));
+    curClip = STAGGER;
+    frameIdx = 0;
+    sfxThud();
+    shake(220);
+    showBubble(pickLine(SHRUG_LINES), PRIO.NOTABLE);
+    await sleep(850);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
 
 // Presence: after AWAY_AFTER_MS of no AI activity he wanders off; the next real
 // event brings him back. lastActivity is refreshed on every agent-event.
@@ -230,23 +610,28 @@ const AWAY_AFTER_MS = 10 * 60 * 1000; // 10 min of silence -> he leaves
 let lastActivity = Date.now();
 let away = false;
 let returning = false;
-const LEAVE_LINES = ["Тишина… я на перекур.", "Зови, если что.", "Скучно. Пойду разомнусь."];
-const RETURN_LINES = ["Ну, погнали.", "Я вернулся.", "Начнём работать."];
+const LEAVE_LINES = ["Quiet. Taking a break.", "Call me if you need me.", "Bored. Going for a walk."];
+const RETURN_LINES = ["Alright, let's go.", "I'm back.", "Let's get to work."];
 const pickLine = (a: string[]) => a[Math.floor(Math.random() * a.length)];
 
 function applyEvent(e: AgentEvent) {
   lastActivity = Date.now(); // any event means the AI is active
+  recentEvents.push(lastActivity); // feeds busyBurst() — stay quiet when I'm hammering
+  life.onEvent(e.state); // v2 P1: nudge the internal state (doesn't drive behaviour yet)
   // HUD + bubble are always live, even while a state is being held.
   starsEl.textContent = `★ ${e.stars}`;
   levelEl.textContent = `Lv.${e.level}`;
-  if (e.level > lastLevel) levelUpFlash();
+  const leveledUp = e.level > lastLevel; // handled as a Devil-Trigger scene below
   lastLevel = e.level;
   // Crossed a 25-star mark this event? (first event just seeds prevStars.)
   const crossedMilestone =
     prevStars >= 0 &&
     Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
   prevStars = e.stars;
-  showBubble(e.phrase);
+  showBubble(e.phrase, PRIO.AMBIENT);
+  dbg(
+    `event=${e.state} lvlUp=${leveledUp} milestone=${crossedMilestone} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
+  );
   if (gagActive || showcasing || returning) return; // a scene owns the sprite + window
   if (away) {
     returnScene(); // he's off-screen -> walk back in first; next events drive state
@@ -276,14 +661,48 @@ function applyEvent(e: AgentEvent) {
   }
 
   stateShownAt = performance.now();
+  // Big scenes are rate-limited (SCENE_MIN_GAP): if one just ran, the moment
+  // degrades to a light beat instead of stacking spectacle on spectacle.
+  // Big scenes need BOTH the time gap (sceneAllowed) AND the daily budget
+  // (sceneBudgetOk) — so they stay rare and memorable, not just spaced out.
   if (e.state === "error" && home) {
-    diveGag();
+    errStreak += 1;
+    winStreak = 0;
+    // Frustration comes from the Life vector now: low patience -> he snaps sooner.
+    const snap = life.v.patience < 0.35 ? 2 : 3;
+    if (errStreak >= snap && sceneAllowed() && sceneBudgetOk("breakdown")) {
+      errStreak = 0;
+      markScene();
+      budgetScene("breakdown");
+      showBubble("Come on, seriously?", PRIO.MAJOR);
+      diveGag(); // patience gone -> full breakdown
+    } else {
+      lightError(); // shrug it off
+    }
     scheduleIdle();
     return;
   }
   if (e.state === "success" && home) {
-    if (crossedMilestone) danceScene();
-    else shootScene(); // Jackpot
+    winStreak += 1;
+    errStreak = 0;
+    if (leveledUp && sceneBudgetOk("devil")) {
+      winStreak = 0;
+      markScene();
+      budgetScene("devil");
+      devilTriggerScene();
+    } else if (crossedMilestone && sceneAllowed() && sceneBudgetOk("dance")) {
+      winStreak = 0;
+      markScene();
+      budgetScene("dance");
+      danceScene(); // 25★ milestone -> dance
+    } else if (winStreak >= 3 && sceneAllowed() && sceneBudgetOk("jackpot")) {
+      winStreak = 0;
+      markScene();
+      budgetScene("jackpot");
+      shootScene(); // on a roll -> Jackpot
+    } else {
+      lightWin(); // small win -> light beat
+    }
     scheduleIdle();
     return;
   }
@@ -378,9 +797,18 @@ async function runIntro() {
     const sh = mon.size.height;
     const { width: winW, height: winH } = await win.outerSize();
 
-    const taskbar = Math.round(48 * sf);
-    // feet are flush at the sprite bottom -> lift so they land on the panel top
-    const y = oy + sh - winH - Math.round(taskbar * 0.52);
+    // Measure the REAL taskbar height (full screen minus the work area) so he
+    // aligns to THIS taskbar instead of a hardcoded guess.
+    const availH = window.screen.availHeight; // logical px, excludes the taskbar
+    const scrH = window.screen.height; // logical px, full screen
+    let taskbar = Math.round((scrH - availH) * sf);
+    if (!(taskbar > 4 && taskbar < sh * 0.25)) taskbar = Math.round(48 * sf); // sanity fallback
+    dbg(`taskbar measured=${taskbar} availH=${availH} scrH=${scrH} sf=${sf} sh=${sh}`);
+    // Sit his feet right ON the taskbar's top edge (small sink so he rests on it,
+    // not buried in it). FOOT_SINK 0 = exactly on the edge; raise it to sink more.
+    const panelTop = oy + sh - taskbar;
+    const FOOT_SINK = 0.18;
+    const y = panelTop - winH + Math.round(taskbar * FOOT_SINK);
     const startX = ox - winW - 8; // fully off-screen left
     const cornerX = ox + sw - winW - Math.round(12 * sf); // by the clock
 
@@ -391,6 +819,7 @@ async function runIntro() {
     // falling + climb animations are unmissable (no dropping off the bottom).
     const belowY = y + Math.round(winH * 0.3);
     home = { win, ox, winW, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
+    dbg(`intro home set mon=${sw}x${sh} y=${y} sitY=${sitY} corner=${cornerX}`);
     await win.setPosition(new PhysicalPosition(startX, y));
     stage.dataset.facing = "right";
     playWalk(); // side-view walk cycle while moving
@@ -406,8 +835,17 @@ async function runIntro() {
     posture("idle"); // drop the window to the seated height
     await sleep(SITDOWN.frames.length * SITDOWN.ms);
     setState("idle"); // seated leg-swing loop
-    showcase(); // play every beat once so they're all visible on launch
+    // Reel plays ONCE ever (discovery > a demo shouting "look at my animations").
+    // Set localStorage "echo.forceReel"=1 to replay it for debugging.
+    if (!localStorage.getItem("echo.seenReel") || localStorage.getItem("echo.forceReel")) {
+      localStorage.setItem("echo.seenReel", "1");
+      dbg("intro done -> showcase (first run)");
+      showcase();
+    } else {
+      dbg("intro done -> natural (reel already seen)");
+    }
   } catch (err) {
+    dbg(`intro ERROR: ${err}`);
     console.error("intro failed", err);
   }
 }
@@ -425,7 +863,7 @@ async function leaveScene() {
     await new Promise<void>((res) => (moveWindowY(h.y, 300), window.setTimeout(res, 320)));
     curClip = STAND_CROSS; // stand tall, arms crossed
     frameIdx = 0;
-    showBubble(pickLine(LEAVE_LINES));
+    showBubble(pickLine(LEAVE_LINES), PRIO.MAJOR);
     await sleep(2400);
     const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
@@ -456,7 +894,7 @@ async function returnScene() {
     posture("idle");
     await sleep(SITDOWN.frames.length * SITDOWN.ms);
     setState("idle");
-    showBubble(pickLine(RETURN_LINES));
+    showBubble(pickLine(RETURN_LINES), PRIO.MAJOR);
   } finally {
     returning = false;
   }
@@ -485,19 +923,21 @@ async function diveGag() {
     await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
     curClip = FALLING;
     frameIdx = 0;
-    showBubble("Опа, падаю!");
+    showBubble("Whoa, falling!", PRIO.MAJOR);
     await sleep(700); // flail, fully visible
     await new Promise<void>((res) => (moveWindowY(h.belowY, 700), window.setTimeout(res, 720)));
+    sfxThud();
+    shake(320); // he hits the bottom
     await sleep(500);
     // 2) climb back up (facing left), rises back to standing — fully visible
     stage.dataset.facing = "left";
     curClip = CLIMB;
     frameIdx = 0;
-    showBubble("…лезу обратно.");
+    showBubble("...climbing back up.", PRIO.NOTABLE);
     await sleep(600); // grab + start pulling, visible
     await new Promise<void>((res) => (moveWindowY(h.y, 1200), window.setTimeout(res, 1220)));
     delete stage.dataset.facing;
-    showBubble("…я ничего не видел.");
+    showBubble("...saw nothing.", PRIO.MAJOR);
   } finally {
     gagActive = false;
     setState("idle"); // sits sheepishly back on the panel
@@ -516,13 +956,32 @@ async function shootScene() {
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     delete stage.dataset.facing;
     await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
+    // anticipation — draw and hold a beat (the calm before)
     curClip = SHOOT;
     frameIdx = 0;
-    showBubble("Jackpot!");
-    const dur = SHOOT.frames.length * SHOOT.ms;
-    window.setTimeout(() => stage.classList.add("shooting"), Math.round(dur * 0.4));
-    window.setTimeout(() => stage.classList.remove("shooting"), Math.round(dur * 0.85));
-    await sleep(dur);
+    await sleep(420);
+    // FIRE — muzzle flash held (slow-mo), gunshot + screen-shake, "Jackpot!"
+    showBubble("Jackpot!", PRIO.AMBIENT); // shown quietly; its own voice fires below
+    say("jackpot"); // ~/.echo/voice/jackpot.wav overrides the blip
+    stage.classList.add("shooting");
+    sfxGunshot();
+    shake(380);
+    await sleep(280); // hold the flash
+    sfxGunshot(); // Ebony & Ivory — double tap
+    shake(300);
+    await sleep(520);
+    stage.classList.remove("shooting");
+    // follow-through: spin the gun, or turn and taunt the user (4th wall)
+    if (Math.random() < 0.5) {
+      curClip = GUNSPIN;
+      frameIdx = 0;
+      await sleep(GUNSPIN.frames.length * GUNSPIN.ms);
+    } else {
+      curClip = TAUNT;
+      frameIdx = 0;
+      showBubble("Come on!", PRIO.MAJOR);
+      await sleep(TAUNT.frames.length * TAUNT.ms);
+    }
   } finally {
     stage.classList.remove("shooting");
     gagActive = false;
@@ -536,13 +995,17 @@ async function shootScene() {
 // them all (thinking, laugh, Jackpot, dive+climb, dance) without waiting for the
 // exact session conditions. Real events are ignored until it finishes.
 async function showcase() {
-  if (!home) return;
+  if (!home) {
+    dbg("showcase SKIPPED (home null)");
+    return;
+  }
   showcasing = true;
+  dbg("showcase START");
   if (idleTimer) clearTimeout(idleTimer); // no idle fallback mid-reel
   const h = home;
   // Hold one clip on a loop for `ms`, with a caption, so frameLoop can't hijack it.
   const demo = async (c: Clip, label: string, ms: number, seated: boolean) => {
-    showBubble(label);
+    showBubble(label, PRIO.AMBIENT);
     moveWindowY(seated ? h.sitY : h.y, 300);
     const rearm = () => {
       curClip = c;
@@ -555,17 +1018,21 @@ async function showcase() {
   try {
     await sleep(700);
     // seated idle rotation
-    await demo(IDLE_CYCLE[0], "сижу", 1700, true); // legs swinging
-    await demo(IDLE_CYCLE[1], "руки крест", 1900, true); // arms crossed
-    await demo(IDLE_CYCLE[2], "думаю", 2300, true); // thinking
-    await demo(LAUGH, "ха-ха", 1500, true); // laugh
+    await demo(IDLE_CYCLE[0], "sitting", 1700, true); // legs swinging
+    await demo(IDLE_CYCLE[1], "arms crossed", 1900, true); // arms crossed
+    await demo(IDLE_CYCLE[2], "thinking", 2300, true); // thinking
+    await demo(clip("checkwatch", 200, false), "checking the time", 1900, true); // impatient
+    await demo(LAUGH, "laughing", 1500, true); // laugh
     // standing work
-    await demo(ANIMS.coding, "кодинг", 2000, false); // front work loop
-    await demo(WALK, "иду", 1600, false); // side walk cycle
+    await demo(ANIMS.coding, "coding", 2000, false); // front work loop
+    await demo(WALK, "walking", 1600, false); // side walk cycle
     afterClip = null;
+    dbg("showcase SCENES begin");
     // scenes — kept INSIDE the showcasing guard so a live event can't grab
     // gagActive and make a scene early-return (that was skipping the fall/climb).
-    await shootScene(); // Jackpot
+    await shootScene(); // Jackpot (+ gun-spin / taunt follow-through)
+    await sleep(300);
+    await devilTriggerScene(); // Devil Trigger power pose
     await sleep(300);
     await diveGag(); // fall → climb up
     await sleep(300);
@@ -589,8 +1056,34 @@ async function danceScene() {
     await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
     curClip = DANCE;
     frameIdx = 0;
-    showBubble("Too easy.");
-    await sleep(DANCE.frames.length * DANCE.ms * 3); // three full dance loops
+    showBubble("Too easy.", PRIO.MAJOR);
+    const loop = DANCE.frames.length * DANCE.ms;
+    shake(300);
+    window.setTimeout(() => shake(300), loop); // beat on each loop
+    window.setTimeout(() => shake(300), loop * 2);
+    await sleep(loop * 3); // three full dance loops
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// Level up -> Devil Trigger: stand, strike the power pose, red aura + vignette.
+async function devilTriggerScene() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  cancelAnimationFrame(winTween);
+  const h = home;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.error);
+    delete stage.dataset.facing;
+    await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
+    curClip = DEVIL;
+    frameIdx = 0;
+    levelUpFlash(); // red sprite glow + vignette + aura + shake
+    showBubble(`Lv.${lastLevel} — Devil Trigger!`, PRIO.MAJOR);
+    await sleep(1900);
   } finally {
     gagActive = false;
     setState("idle");
@@ -604,6 +1097,8 @@ async function main() {
       .setIgnoreCursorEvents(true)
       .catch((e) => console.error("ignoreCursorEvents failed", e));
   }
+
+  void initVoiceFiles(); // pick up any ~/.echo/voice/*.wav the user dropped in
 
   try {
     applyEvent(await invoke<AgentEvent>("get_state"));
@@ -620,6 +1115,18 @@ async function main() {
     if (stage.dataset.state !== "idle") return;
     if (Date.now() - lastActivity > AWAY_AFTER_MS) leaveScene();
   }, 30000);
+
+  // v2 P1: the Life Model heartbeat — decay the vector, accumulate idle boredom,
+  // and log the state so its evolution is auditable in ~/.echo/echo.log.
+  let lifeLoggedAt = 0;
+  window.setInterval(() => {
+    life.tick();
+    if (stage.dataset.state === "idle" && !gagActive && !showcasing) life.idleFor(5000);
+    if (Date.now() - lifeLoggedAt > 20000) {
+      lifeLoggedAt = Date.now();
+      dbg(`life ${life.summary()}`);
+    }
+  }, 5000);
   frameLoop();
   runIntro();
   scheduleIdle();

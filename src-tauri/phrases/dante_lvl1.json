@@ -1,9 +1,9 @@
 {
-  "thinking": ["Хм, дай подумать...", "Так-так...", "Секунду", "Дай прикину"],
-  "coding": ["Пишу код, не мешай", "Клавиши горят", "Щас будет красиво"],
-  "searching": ["Ищу-ищу", "Где-то тут было", "Копаю"],
-  "speaking": ["Вот, держи", "Готово", "Слушай сюда"],
-  "success": ["Есть!", "Как всегда", "Легко", "Ну а ты сомневался?"],
-  "error": ["Опа, накосячили", "Бывает и хуже", "Ну ты и накосячил", "Це не я, це компилятор"],
-  "idle": ["...", "Скучно", "Ну давай уже", "Я жду", "Опять залип?", "Кофе бы"]
+  "thinking": ["Let me think.", "Hold on.", "One second.", "Working it out."],
+  "coding": ["Writing code.", "Don't distract me.", "This will be clean."],
+  "searching": ["Digging around.", "It was here somewhere.", "Searching."],
+  "speaking": ["Here you go.", "Done.", "Listen up."],
+  "success": ["Got it.", "As always.", "Easy.", "You doubted me?"],
+  "error": ["Well, that broke.", "It happens.", "Not my fault.", "Blame the compiler."],
+  "idle": ["Quiet in here.", "Bored.", "Come on, give me something.", "Still waiting."]
 }

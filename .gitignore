@@ -28,3 +28,6 @@ public/model/
 # Scratch/build docs kept local
 *.zip
 assets-src/
+
+# secrets
+.env

@@ -1,0 +1,57 @@
+{
+  "//": "ECHO config. Copy to ~/.echo/config.json and edit. Reloaded on launch.",
+  "//preset": "Start here: 'chill' | 'lively' | 'silent' | 'off'. Presets set the",
+  "//preset2": "values below; anything you set explicitly overrides the preset.",
+  "preset": "chill",
+
+  "sound": {
+    "enabled": true,
+    "volume": 0.8,
+    "//muteWhenFullscreen": "Producer's rule #1: never make noise over a game,",
+    "//muteWhenFullscreen2": "video, or a shared screen. Goes fully silent then.",
+    "muteWhenFullscreen": true
+  },
+
+  "voice": {
+    "enabled": true,
+    "//onlyBigMoments": "true = he only SPEAKS on Jackpot / Devil Trigger / leaving.",
+    "//onlyBigMoments2": "Small stuff stays silent. The calmest setting.",
+    "onlyBigMoments": false,
+    "minGapSec": 90
+  },
+
+  "chatter": {
+    "//ambientChance": "How often a work/idle line even appears (0-1). Low = texture.",
+    "ambientChance": 0.12,
+    "quietDuringBursts": true
+  },
+
+  "scenes": {
+    "//": "The big animated moments. Rarer = more special.",
+    "enabled": true,
+    "minGapSec": 240,
+    "winStreakForJackpot": 3,
+    "errStreakForBreakdown": 3,
+    "starMilestone": 25
+  },
+
+  "presence": {
+    "//awayAfterMin": "No AI activity this long -> he takes a break and walks off.",
+    "awayAfterMin": 12,
+    "wander": true
+  },
+
+  "life": {
+    "//idleHoldScale": "Multiplier on how long he rests between idle poses. >1 = calmer.",
+    "idleHoldScale": 1.0,
+    "//quietHours": "[startHour, endHour] local — silent + sleepy in this window.",
+    "quietHours": [1, 6]
+  },
+
+  "position": {
+    "//corner": "'right' (by the clock) or 'left'.",
+    "corner": "right",
+    "//footSink": "How deep his feet rest into the taskbar. 0 = on the edge.",
+    "footSink": 0.18
+  }
+}
