@@ -553,9 +553,9 @@ function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
 
 function scheduleIdle() {
   if (idleTimer) clearTimeout(idleTimer);
-  // Don't let the idle fallback clobber a running scene (showcase / gag).
+  // Don't let the idle fallback clobber a running scene (showcase / gag / intro).
   idleTimer = window.setTimeout(() => {
-    if (!showcasing && !gagActive) setState("idle");
+    if (!showcasing && !gagActive && !introActive) setState("idle");
   }, IDLE_AFTER_MS);
 }
 
@@ -659,7 +659,7 @@ function applyEvent(e: AgentEvent) {
   dbg(
     `event=${e.state} lvlUp=${leveledUp} milestone=${crossedMilestone} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
   );
-  if (gagActive || showcasing || returning) return; // a scene owns the sprite + window
+  if (gagActive || showcasing || returning || introActive) return; // a scene owns the sprite + window
   if (away) {
     returnScene(); // he's off-screen -> walk back in first; next events drive state
     return;
@@ -762,6 +762,7 @@ let home: {
 let wandering = false;
 let gagActive = false;
 let showcasing = false;
+let introActive = false; // true while the walk-in is running — blocks idle/events
 let winTween = 0;
 
 // States where he sits on the taskbar edge (legs dangling); others stand.
@@ -820,6 +821,7 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
 // Entrance: walk in from off-screen left to the corner, then rest.
 async function runIntro() {
   if (!isTauri) return;
+  introActive = true;
   try {
     const win = getCurrentWindow();
     const mon = (await currentMonitor()) ?? (await primaryMonitor());
@@ -877,6 +879,9 @@ async function runIntro() {
   } catch (err) {
     dbg(`intro ERROR: ${err}`);
     console.error("intro failed", err);
+  } finally {
+    introActive = false;
+    scheduleIdle();
   }
 }
 
@@ -1152,8 +1157,7 @@ async function main() {
     }
   }, 5000);
   frameLoop();
-  runIntro();
-  scheduleIdle();
+  runIntro(); // intro sets introActive=true, calls scheduleIdle() when done
 }
 
 main();
