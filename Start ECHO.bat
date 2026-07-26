@@ -15,21 +15,19 @@ echo          ECHO - Desktop Companion
 echo ==========================================
 echo.
 
-rem ---- 1. Launch prebuilt ECHO binary if present ----
-if exist "ECHO.exe" (
-    echo [+] Found ECHO.exe in launcher folder. Starting ECHO...
-    start "" "ECHO.exe"
-    exit /b 0
-)
-if exist "src-tauri\target\release\ECHO.exe" (
-    echo [+] Found release build. Launching ECHO...
-    start "" "src-tauri\target\release\ECHO.exe"
-    exit /b 0
-)
-if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
-    echo [+] Found cached standalone ECHO. Launching...
-    start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
-    exit /b 0
+rem ---- 1. If running as standalone dist (no source code), launch prebuilt ECHO.exe ----
+if not exist "package.json" (
+    if exist "ECHO.exe" (
+        echo [+] Found ECHO.exe. Launching ECHO...
+        start "" "ECHO.exe"
+        exit /b 0
+    )
+    if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
+        echo [+] Found cached ECHO.exe. Launching...
+        start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
+        exit /b 0
+    )
+    goto FallbackDownload
 )
 
 rem ---- 2. Reload PATH for current session ----
