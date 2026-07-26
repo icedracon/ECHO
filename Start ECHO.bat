@@ -67,10 +67,10 @@ if errorlevel 1 (
     echo [+] Rust ^(cargo^) found.
 )
 
-rem ---- 5. Check for MSVC Build Tools (via vswhere) - required by Tauri's Rust build ----
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
-    echo [!] Visual Studio Build Tools not found - needed to compile the Rust/Tauri backend.
+rem ---- 5. Check for MSVC linker (link.exe) - required by Tauri's Rust build ----
+where link.exe >nul 2>nul
+if errorlevel 1 (
+    echo [!] MSVC linker ^(link.exe^) not found - needed to compile the Rust/Tauri backend.
     echo [*] Installing Visual Studio Build Tools ^(C++ workload^) - progress below:
     echo ----------------------------------------------
     where winget >nul 2>nul
@@ -85,7 +85,7 @@ if not exist "%VSWHERE%" (
     echo [*] NOTE: if this was just installed, you may need to close this
     echo     window and re-run the launcher so the new PATH takes effect.
 ) else (
-    echo [+] Visual Studio Build Tools found.
+    echo [+] MSVC linker found.
 )
 
 rem ---- 6. Re-check dependencies after installation attempt ----
@@ -95,7 +95,8 @@ if errorlevel 1 goto FallbackDownload
 where cargo >nul 2>nul
 if errorlevel 1 goto FallbackDownload
 
-if not exist "%VSWHERE%" goto FallbackDownload
+where link.exe >nul 2>nul
+if errorlevel 1 goto FallbackDownload
 
 rem ---- 7. Install node packages if missing ----
 if not exist "node_modules\" (
