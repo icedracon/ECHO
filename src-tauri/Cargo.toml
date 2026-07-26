@@ -31,3 +31,9 @@ dirs = "5"
 rand = "0.8"
 base64 = "0.22"
 
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
