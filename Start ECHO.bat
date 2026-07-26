@@ -2,7 +2,13 @@
 title ECHO launcher
 cd /d "%~dp0"
 
-rem If a release build exists, launch the standalone exe (no console, instant).
+rem 1. If standalone ECHO.exe is in the root folder
+if exist "ECHO.exe" (
+    start "" "ECHO.exe"
+    exit /b
+)
+
+rem 2. If built release binary exists in src-tauri
 if exist "src-tauri\target\release\ECHO.exe" (
     start "" "src-tauri\target\release\ECHO.exe"
     exit /b
