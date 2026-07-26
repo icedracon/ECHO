@@ -343,6 +343,7 @@ const IDLE_MS: Record<string, number> = {
   sitcross: 200,
   sitthink: 240,
   checkwatch: 200,
+  laugh: 130,
   yawn: 220,
   leanback: 200,
   nap: 260,
