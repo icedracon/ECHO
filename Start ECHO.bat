@@ -14,7 +14,12 @@ if exist "src-tauri\target\release\ECHO.exe" (
     exit /b
 )
 
-rem Otherwise run in dev mode (needs Node + Rust installed).
+rem 3. Dev mode fallback (runs npm install if node_modules missing)
+if not exist "node_modules\" (
+    echo Installing dependencies...
+    call npm install
+)
+
 echo Starting ECHO in dev mode... (first run compiles, ~30s)
 start "" /min cmd /c "npm run tauri dev"
 exit /b
