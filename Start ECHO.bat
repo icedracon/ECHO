@@ -15,10 +15,20 @@ echo          ECHO - Desktop Companion
 echo ==========================================
 echo.
 
-rem ---- 1. Launch prebuilt release binary if present ----
+rem ---- 1. Launch prebuilt ECHO binary if present ----
+if exist "ECHO.exe" (
+    echo [+] Found ECHO.exe in launcher folder. Starting ECHO...
+    start "" "ECHO.exe"
+    exit /b 0
+)
 if exist "src-tauri\target\release\ECHO.exe" (
     echo [+] Found release build. Launching ECHO...
     start "" "src-tauri\target\release\ECHO.exe"
+    exit /b 0
+)
+if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
+    echo [+] Found cached standalone ECHO. Launching...
+    start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
     exit /b 0
 )
 
@@ -67,11 +77,11 @@ if errorlevel 1 (
     echo [+] Rust ^(cargo^) found.
 )
 
-rem ---- 5. Check for MSVC linker (link.exe) - required by Tauri's Rust build ----
-where link.exe >nul 2>nul
-if errorlevel 1 (
-    echo [!] MSVC linker ^(link.exe^) not found - needed to compile the Rust/Tauri backend.
-    echo [*] Installing Visual Studio Build Tools ^(C++ workload^) - progress below:
+rem ---- 5. Check for MSVC Build Tools (via vswhere) ----
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" (
+    echo [!] Visual Studio Build Tools not found - needed to compile Tauri.
+    echo [*] Installing Visual Studio Build Tools ^(C++ workload^)...
     echo ----------------------------------------------
     where winget >nul 2>nul
     if not errorlevel 1 (
@@ -82,21 +92,21 @@ if errorlevel 1 (
         echo     ^(select the "Desktop development with C++" workload^)
     )
     echo ----------------------------------------------
-    echo [*] NOTE: if this was just installed, you may need to close this
-    echo     window and re-run the launcher so the new PATH takes effect.
 ) else (
-    echo [+] MSVC linker found.
+    echo [+] Visual Studio Build Tools found.
 )
 
-rem ---- 6. Re-check dependencies after installation attempt ----
+rem ---- 6. Re-check Node and Cargo (minimum required) ----
 where node >nul 2>nul
-if errorlevel 1 goto FallbackDownload
-
+if errorlevel 1 (
+    echo [!] Node.js still not available after install attempt.
+    goto FallbackDownload
+)
 where cargo >nul 2>nul
-if errorlevel 1 goto FallbackDownload
-
-where link.exe >nul 2>nul
-if errorlevel 1 goto FallbackDownload
+if errorlevel 1 (
+    echo [!] Rust/Cargo still not available after install attempt.
+    goto FallbackDownload
+)
 
 rem ---- 7. Install node packages if missing ----
 if not exist "node_modules\" (
@@ -112,6 +122,8 @@ echo [+] All dependencies ready. Starting ECHO dev server...
 echo [*] Keep this window open while ECHO is running.
 echo.
 call npm run tauri dev
+echo.
+echo [*] ECHO closed.
 exit /b 0
 
 :FallbackDownload
