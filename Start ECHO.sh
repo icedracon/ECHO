@@ -12,22 +12,7 @@ echo "=========================================="
 echo "         ECHO — Desktop Companion         "
 echo "=========================================="
 
-# 1. Run compiled binary directly if available
-if [ -f "./ECHO" ]; then
-    echo "[+] Launching standalone ECHO binary..."
-    chmod +x ./ECHO
-    ./ECHO &
-    exit 0
-fi
-
-if [ -f "./src-tauri/target/release/ECHO" ]; then
-    echo "[+] Launching built release binary..."
-    chmod +x ./src-tauri/target/release/ECHO
-    ./src-tauri/target/release/ECHO &
-    exit 0
-fi
-
-# 2. Check and install system dependencies if building from source
+# 1. Check and install system dependencies if building from source
 echo "[*] Checking system dependencies for Linux..."
 
 install_ubuntu_debian() {
