@@ -33,6 +33,7 @@ body {
   image-rendering: pixelated; /* crisp pixels, no blur */
   filter: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.45));
   transform-origin: bottom center;
+  transition: opacity 0.15s ease;
 }
 
 /* Cinematic camera: screen-shake on big hits. */

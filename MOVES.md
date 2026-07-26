@@ -40,10 +40,10 @@ One event per AI action. `ANIMS`, line ~160. Held ≥ `MIN_HOLD` so it doesn't f
 
 | Your AI is… | Clip | Position | Min on-screen |
 |---|---|---|---|
-| thinking | `sitthink` | seated | 1100 ms + a rare "Hmm." |
+| thinking | `sitthink` | seated | 2200 ms + a rare "Hmm." |
 | coding | `gunspin` (twirls gun) | standing | — |
 | searching | `sit` (arms crossed) | standing | — |
-| speaking | `taunt` (gestures) | standing | 750 ms |
+| speaking | `taunt` (gestures) | standing | 1200 ms |
 
 Work poses also rotate on each change: `WORK_POSES = ["gunspin","sit","taunt"]` (line 416).
 Change clips/speeds in `ANIMS`. "Hmm" gate: `state==="thinking"` block ~line 430.
@@ -63,7 +63,7 @@ Change: `lightWin()` / `lightError()` (~line 535). Lines: `WIN_LINES`, `SHRUG_LI
 ## E. Big scenes (rare, rate-limited — ≥3 min apart, `SCENE_MIN_GAP`)
 | Trigger | Scene | Clip | FX + Voice | ~Length |
 |---|---|---|---|---|
-| **3 wins in a row** | Jackpot | `shoot` → `gunspin`/`taunt` | double gunshot, muzzle slow-mo, shake, "Jackpot!" | ~3.5 s |
+| **3 wins in a row** | Jackpot | `shoot` → `gunspin`/`taunt` | single gunshot, muzzle slow-mo, shake, "Jackpot!" | ~3 s |
 | **25★ milestone** | Dance | `dance` ×3 | beat shakes, "Too easy." | ~3 s |
 | **3 errors in a row** | Breakdown | `falling` → `climb` | thud, shake, "falling!" → "...saw nothing." | ~4 s |
 | **Level up** | Devil Trigger | `devil` | red vignette, aura hum, shake, "Devil Trigger!" | ~2 s |
@@ -87,9 +87,9 @@ Change: `AWAY_AFTER_MS = 10*60*1000` (line 578). Lines: `LEAVE_LINES`, `RETURN_L
 ## G. Voice & noise governance (the "not always" rules)
 | Rule | Value | Line |
 |---|---|---|
-| Min gap between any two spoken lines | `VOICE_MIN_GAP` = 60 s | 459 |
+| Min gap between any two spoken lines | `VOICE_MIN_GAP` = 240 s (4 min) | 459 |
 | Min gap between big scenes | `SCENE_MIN_GAP` = 180 s | 460 |
-| Chance an ambient work line even shows | `AMBIENT_BUBBLE_CHANCE` = 0.18 | 461 |
+| Chance an ambient work line even shows | `AMBIENT_BUBBLE_CHANCE` = 0.10 | 461 |
 | "You're busy" cutoff (stay silent) | `> 12` events / 30 s | 469 |
 
 Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.

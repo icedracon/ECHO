@@ -45,7 +45,7 @@ const IDLE_AFTER_MS = 6000;
 // Minimum time a fast/transient state stays on screen before a newer event can
 // replace it — otherwise thinking/speaking get clobbered within milliseconds
 // (each JSONL block is its own line) and you never see them.
-const MIN_HOLD: Record<string, number> = { thinking: 1100, speaking: 750 };
+const MIN_HOLD: Record<string, number> = { thinking: 2200, speaking: 1200 };
 const isTauri = "__TAURI_INTERNALS__" in window;
 
 // Diagnostics -> ~/.echo/echo-fe.log (his overlay can't be screenshotted).
@@ -75,7 +75,11 @@ function vignettePulse() {
 }
 
 // ---- Sound: synthesized SFX (original — no copyrighted game audio) ----
+// Everything routes through a master gain kept low so ECHO never competes with
+// music, meetings, or a video. Good desktop sound is almost subconscious.
 let actx: AudioContext | null = null;
+let masterGain: GainNode | null = null;
+const SFX_VOLUME = 0.62; // desktop apps should be almost subconscious
 function ac(): AudioContext | null {
   try {
     if (!actx) actx = new AudioContext();
@@ -84,6 +88,16 @@ function ac(): AudioContext | null {
   } catch {
     return null;
   }
+}
+// Shared output node — connect SFX here instead of a.destination.
+function dest(): AudioNode {
+  const a = actx as AudioContext;
+  if (!masterGain) {
+    masterGain = a.createGain();
+    masterGain.gain.value = SFX_VOLUME;
+    masterGain.connect(a.destination);
+  }
+  return masterGain;
 }
 // A gunshot: filtered noise burst with a fast decay.
 function sfxGunshot() {
@@ -100,9 +114,9 @@ function sfxGunshot() {
   lp.frequency.setValueAtTime(2200, t);
   lp.frequency.exponentialRampToValueAtTime(180, t + 0.15);
   const g = a.createGain();
-  g.gain.setValueAtTime(0.45, t);
+  g.gain.setValueAtTime(0.34, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
-  src.connect(lp).connect(g).connect(a.destination);
+  src.connect(lp).connect(g).connect(dest());
   src.start(t);
   src.stop(t + 0.17);
 }
@@ -117,9 +131,9 @@ function sfxAura() {
   o.frequency.exponentialRampToValueAtTime(220, t + 0.5);
   const g = a.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.28, t + 0.1);
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.1);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
-  o.connect(g).connect(a.destination);
+  o.connect(g).connect(dest());
   o.start(t);
   o.stop(t + 1.0);
 }
@@ -133,9 +147,9 @@ function sfxThud() {
   o.frequency.setValueAtTime(160, t);
   o.frequency.exponentialRampToValueAtTime(50, t + 0.18);
   const g = a.createGain();
-  g.gain.setValueAtTime(0.35, t);
+  g.gain.setValueAtTime(0.26, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-  o.connect(g).connect(a.destination);
+  o.connect(g).connect(dest());
   o.start(t);
   o.stop(t + 0.21);
 }
@@ -173,7 +187,7 @@ function syllable(at: number, f0: number, dur: number, bend = 0.9, gain = 0.22) 
   g.gain.exponentialRampToValueAtTime(gain, at + 0.03);
   g.gain.setValueAtTime(gain, at + dur * 0.7);
   g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-  o.connect(bp).connect(lp).connect(g).connect(a.destination);
+  o.connect(bp).connect(lp).connect(g).connect(dest());
   o.start(at);
   o.stop(at + dur + 0.02);
   lfo.start(at);
@@ -215,7 +229,7 @@ function voiceLine(text: string) {
     const f0 = base + (Math.random() * 16 - 8) + (last && asks ? 22 : 0);
     const dur = last ? 0.24 : 0.11 + Math.random() * 0.04;
     const bend = last ? (asks ? 1.22 : 0.82) : 0.96;
-    syllable(at, f0, dur, bend, excited ? 0.24 : 0.19);
+    syllable(at, f0, dur, bend, excited ? 0.18 : 0.14);
     at += dur + 0.045;
   }
 }
@@ -225,7 +239,7 @@ function playVoiceFile(name: string): boolean {
   if (!voiceFiles.has(name)) return false;
   try {
     const a = new Audio(voiceFiles.get(name)!);
-    a.volume = 0.95;
+    a.volume = 0.55;
     void a.play().catch(() => {});
     return true;
   } catch {
@@ -276,9 +290,9 @@ function sfxDing() {
   o.frequency.exponentialRampToValueAtTime(1320, t + 0.09);
   const g = a.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.17, t + 0.02);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
-  o.connect(g).connect(a.destination);
+  o.connect(g).connect(dest());
   o.start(t);
   o.stop(t + 0.19);
 }
@@ -488,9 +502,9 @@ function setState(state: State) {
 //   1 NOTABLE  small win/error   — bubble always, voiced only if quiet lately
 //   2 MAJOR    Jackpot / Devil Trigger / leaving — always voiced
 const PRIO = { AMBIENT: 0, NOTABLE: 1, MAJOR: 2 } as const;
-const VOICE_MIN_GAP = 60_000; // ≥1 min between any two spoken lines
+const VOICE_MIN_GAP = 240_000; // ≥4 min between spoken lines — rare = memorable
 const SCENE_MIN_GAP = 180_000; // ≥3 min between big animated scenes
-const AMBIENT_BUBBLE_CHANCE = 0.18; // most work chatter stays silent
+const AMBIENT_BUBBLE_CHANCE = 0.10; // most work chatter stays silent
 let lastVoiceAt = 0;
 let lastSceneAt = 0;
 // Recent event timestamps -> "is he hammering tool calls right now?"
@@ -499,6 +513,13 @@ function busyBurst(): boolean {
   const now = Date.now();
   while (recentEvents.length && now - recentEvents[0] > 30_000) recentEvents.shift();
   return recentEvents.length > 12; // heavy activity -> stay out of the way
+}
+// Is the AI mid-flow (rapid state changes)? Defer flashy reactions so he
+// stays focused while you work — celebrations land when the dust settles.
+function aiMidFlow(): boolean {
+  const now = Date.now();
+  const recent = recentEvents.filter(t => now - t < 15_000);
+  return recent.length >= 3;
 }
 // May a big animated scene run now? (rate-limited so they stay special)
 function sceneAllowed(): boolean {
@@ -558,20 +579,28 @@ const STAR_MILESTONE = 25;
 // streak earns the big scene (Jackpot / breakdown), so the payoffs feel earned.
 let winStreak = 0;
 let errStreak = 0;
-const WIN_LINES = ["Easy.", "Next.", "Heh, too easy.", "Small stuff."];
-const SHRUG_LINES = ["It happens.", "Pff, nothing.", "Sure, sure.", "Doesn't count."];
+const WIN_LINES = ["Easy.", "Heh."];
+const SHRUG_LINES = ["Pff.", "Doesn't count."];
+
+// Bridge: smoothly rise to standing, hold a beat, then the scene runs.
+// Every scene that starts from idle goes through this — no instant jumps.
+async function standUp(): Promise<void> {
+  if (!home) return;
+  cancelAnimationFrame(winTween);
+  delete stage.dataset.facing;
+  afterClip = null;
+  moveWindowY(home.y, 350);
+  await sleep(380);
+}
 
 // Light win: stand up, quick arms-up cheer, a smirk. VISIBLE on every win.
 async function lightWin() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
-  const h = home;
   try {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
-    delete stage.dataset.facing;
-    await new Promise<void>((r) => (moveWindowY(h.y, 200), window.setTimeout(r, 210)));
+    await standUp();
     curClip = CHEER;
     frameIdx = 0;
     sfxDing();
@@ -586,13 +615,10 @@ async function lightWin() {
 async function lightError() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
-  const h = home;
   try {
     stage.dataset.state = "error";
     document.documentElement.style.setProperty("--accent", ACCENT.error);
-    delete stage.dataset.facing;
-    await new Promise<void>((r) => (moveWindowY(h.y, 200), window.setTimeout(r, 210)));
+    await standUp();
     curClip = STAGGER;
     frameIdx = 0;
     sfxThud();
@@ -686,6 +712,13 @@ function applyEvent(e: AgentEvent) {
   if (e.state === "success" && home) {
     winStreak += 1;
     errStreak = 0;
+    // If the AI is still processing rapidly, bank the win — don't celebrate
+    // mid-flow. The streak accumulates so he might Jackpot when dust settles.
+    if (aiMidFlow()) {
+      setState(e.state);
+      scheduleIdle();
+      return;
+    }
     if (leveledUp && sceneBudgetOk("devil")) {
       winStreak = 0;
       markScene();
@@ -826,25 +859,21 @@ async function runIntro() {
     playWalk(); // side-view walk cycle while moving
     await slideWindow(cornerX, 150); // realistic walking pace (px/sec)
     delete stage.dataset.facing;
-    // arrival beat: stand tall, arms crossed, size up the room
+    // deceleration beat — he's stopped walking, takes a breath
+    await sleep(400);
+    // arrival beat: stand tall, arms crossed, size up the room (2.5s)
     curClip = STAND_CROSS;
     frameIdx = 0;
-    await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms);
+    await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms + 700);
     // then sit DOWN onto the panel (stand->sit) while the window lowers
     curClip = SITDOWN;
     frameIdx = 0;
     posture("idle"); // drop the window to the seated height
     await sleep(SITDOWN.frames.length * SITDOWN.ms);
     setState("idle"); // seated leg-swing loop
-    // Reel plays ONCE ever (discovery > a demo shouting "look at my animations").
-    // Set localStorage "echo.forceReel"=1 to replay it for debugging.
-    if (!localStorage.getItem("echo.seenReel") || localStorage.getItem("echo.forceReel")) {
-      localStorage.setItem("echo.seenReel", "1");
-      dbg("intro done -> showcase (first run)");
-      showcase();
-    } else {
-      dbg("intro done -> natural (reel already seen)");
-    }
+    // Discovery > demonstration. No auto-showcase — let users find everything
+    // naturally. Set localStorage "echo.forceReel"=1 + reload for debug.
+    dbg("intro done -> natural (discovery > demonstration)");
   } catch (err) {
     dbg(`intro ERROR: ${err}`);
     console.error("intro failed", err);
@@ -890,6 +919,10 @@ async function returnScene() {
     playWalk();
     await slideWindow(h.cornerX, 150); // walk back to the corner
     delete stage.dataset.facing;
+    // stand and look around before sitting — same arrival beat as the intro
+    curClip = STAND_CROSS;
+    frameIdx = 0;
+    await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms + 500);
     curClip = SITDOWN; // sit down onto the panel
     frameIdx = 0;
     posture("idle");
@@ -914,14 +947,13 @@ function laughBeat() {
 async function diveGag() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
   const h = home;
   try {
     stage.dataset.state = "error";
     document.documentElement.style.setProperty("--accent", ACCENT.error);
-    delete stage.dataset.facing;
+    // smooth bridge: stand up first, then the gag starts
+    await standUp();
     // 1) fall — flails in place, dips down a little (stays FULLY on-screen)
-    await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
     curClip = FALLING;
     frameIdx = 0;
     showBubble("Whoa, falling!", PRIO.MAJOR);
@@ -950,13 +982,11 @@ async function diveGag() {
 async function shootScene() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
-  const h = home;
   try {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
-    delete stage.dataset.facing;
-    await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
+    // smooth bridge: stand up, then draw
+    await standUp();
     // anticipation — draw and hold a beat (the calm before)
     curClip = SHOOT;
     frameIdx = 0;
@@ -967,10 +997,7 @@ async function shootScene() {
     stage.classList.add("shooting");
     sfxGunshot();
     shake(380);
-    await sleep(280); // hold the flash
-    sfxGunshot(); // Ebony & Ivory — double tap
-    shake(300);
-    await sleep(520);
+    await sleep(800); // hold the moment — let the single shot land
     stage.classList.remove("shooting");
     // follow-through: spin the gun, or turn and taunt the user (4th wall)
     if (Math.random() < 0.5) {
@@ -981,7 +1008,7 @@ async function shootScene() {
       curClip = TAUNT;
       frameIdx = 0;
       showBubble("Come on!", PRIO.MAJOR);
-      await sleep(TAUNT.frames.length * TAUNT.ms);
+      await sleep(TAUNT.frames.length * TAUNT.ms + 350);
     }
   } finally {
     stage.classList.remove("shooting");
@@ -992,9 +1019,10 @@ async function shootScene() {
   }
 }
 
-// One-time reel right after he walks in: play every beat once so you can see
-// them all (thinking, laugh, Jackpot, dive+climb, dance) without waiting for the
-// exact session conditions. Real events are ignored until it finishes.
+// Debug-only: replay the full reel from the browser console with
+// `window.__echoShowcase()`. Never auto-fires — discovery > demonstration.
+// @ts-ignore – attached to window for console access
+window.__echoShowcase = showcase;
 async function showcase() {
   if (!home) {
     dbg("showcase SKIPPED (home null)");
@@ -1048,20 +1076,17 @@ async function showcase() {
 async function danceScene() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
-  const h = home;
   try {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
-    delete stage.dataset.facing;
-    await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
+    // smooth bridge: stand up, then dance
+    await standUp();
     curClip = DANCE;
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
     const loop = DANCE.frames.length * DANCE.ms;
-    shake(300);
-    window.setTimeout(() => shake(300), loop); // beat on each loop
-    window.setTimeout(() => shake(300), loop * 2);
+    // one beat-shake at the start, then let the dance speak for itself
+    shake(250);
     await sleep(loop * 3); // three full dance loops
   } finally {
     gagActive = false;
@@ -1073,13 +1098,11 @@ async function danceScene() {
 async function devilTriggerScene() {
   if (!home || gagActive) return;
   gagActive = true;
-  cancelAnimationFrame(winTween);
-  const h = home;
   try {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.error);
-    delete stage.dataset.facing;
-    await new Promise<void>((res) => (moveWindowY(h.y, 200), window.setTimeout(res, 210)));
+    // smooth bridge: stand up, then transform
+    await standUp();
     curClip = DEVIL;
     frameIdx = 0;
     levelUpFlash(); // red sprite glow + vignette + aura + shake

@@ -19,19 +19,19 @@ interface UrgeDef extends IdleUrge {
 
 const URGES: UrgeDef[] = [
   // Calm poses settle in for a real while (up to ~60 s) instead of shifting fast.
-  { clip: "sitswing", plays: 4, hold: [15000, 45000], weight: () => 30 }, // shake legs, then rest
-  { clip: "sitcross", plays: 1, hold: [30000, 60000], weight: (l) => 14 + l.v.focus * 10 }, // arms crossed
+  { clip: "sitswing", plays: 3, hold: [18000, 50000], weight: () => 28 }, // shake legs, then rest
+  { clip: "sitcross", plays: 1, hold: [35000, 75000], weight: (l) => 18 + l.v.focus * 10 }, // arms crossed
   { clip: "sitthink", plays: 1, hold: [15000, 40000], weight: (l) => 10 + l.v.focus * 8 },
-  { clip: "leanback", plays: 1, hold: [30000, 60000], weight: (l) => 8 + l.v.confidence * 10 },
+  { clip: "leanback", plays: 1, hold: [35000, 70000], weight: (l) => 10 + l.v.confidence * 10 },
   // Livelier, shorter beats:
-  { clip: "laugh", plays: 1, hold: [6000, 15000], weight: (l) => 5 + l.v.cockiness * 12 }, // chuckles to himself
+  { clip: "laugh", plays: 1, hold: [8000, 18000], weight: (l) => 3 + l.v.cockiness * 10 }, // chuckles to himself
   {
     clip: "checkwatch",
     plays: 1,
-    hold: [5000, 12000],
+    hold: [8000, 15000],
     weight: (l) => 6 + l.v.boredom * 16 + (1 - l.v.patience) * 10,
   },
-  { clip: "yawn", plays: 1, hold: [8000, 20000], weight: (l) => 3 + (1 - l.v.energy) * 22 },
+  { clip: "yawn", plays: 1, hold: [10000, 22000], weight: (l) => 3 + (1 - l.v.energy) * 22 },
   { clip: "nap", plays: 1, hold: [40000, 90000], weight: (l) => (1 - l.v.energy) * 26 * napGate(l) },
 ];
 
