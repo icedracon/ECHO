@@ -67,14 +67,38 @@ if errorlevel 1 (
     echo [+] Rust ^(cargo^) found.
 )
 
-rem ---- 5. Re-check dependencies after installation attempt ----
+rem ---- 5. Check for MSVC linker (link.exe) - required by Tauri's Rust build ----
+where link.exe >nul 2>nul
+if errorlevel 1 (
+    echo [!] MSVC linker ^(link.exe^) not found - needed to compile the Rust/Tauri backend.
+    echo [*] Installing Visual Studio Build Tools ^(C++ workload^) - progress below:
+    echo ----------------------------------------------
+    where winget >nul 2>nul
+    if not errorlevel 1 (
+        winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" --accept-source-agreements --accept-package-agreements
+    ) else (
+        echo [!] winget not available. Please install manually from:
+        echo     https://visualstudio.microsoft.com/visual-cpp-build-tools/
+        echo     ^(select the "Desktop development with C++" workload^)
+    )
+    echo ----------------------------------------------
+    echo [*] NOTE: if this was just installed, you may need to close this
+    echo     window and re-run the launcher so the new PATH takes effect.
+) else (
+    echo [+] MSVC linker found.
+)
+
+rem ---- 6. Re-check dependencies after installation attempt ----
 where node >nul 2>nul
 if errorlevel 1 goto FallbackDownload
 
 where cargo >nul 2>nul
 if errorlevel 1 goto FallbackDownload
 
-rem ---- 6. Install node packages if missing ----
+where link.exe >nul 2>nul
+if errorlevel 1 goto FallbackDownload
+
+rem ---- 7. Install node packages if missing ----
 if not exist "node_modules\" (
     echo.
     echo [*] Installing node dependencies ^(npm install^) - progress below:
@@ -94,7 +118,7 @@ if not errorlevel 1 exit /b 0
 echo.
 echo [!] Dev environment incomplete. Downloading standalone ECHO.exe instead...
 echo ----------------------------------------------
-powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = \"$env:LOCALAPPDATA\ECHO\"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO.exe' -OutFile \"$dir\ECHO.exe\" -UseBasicParsing; Write-Host '[+] Download complete!' } catch { Write-Host '[!] Could not download ECHO.exe' }"
+powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = ""$env:LOCALAPPDATA\ECHO""; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO.exe' -OutFile ""$dir\ECHO.exe"" -UseBasicParsing; Write-Host '[+] Download complete!' } catch { Write-Host '[!] Could not download ECHO.exe' }"
 echo ----------------------------------------------
 
 if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
