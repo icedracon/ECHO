@@ -112,7 +112,7 @@ echo [+] All dependencies ready. Starting ECHO dev server...
 echo [*] Keep this window open while ECHO is running.
 echo.
 call npm run tauri dev
-if not errorlevel 1 exit /b 0
+exit /b 0
 
 :FallbackDownload
 echo.
