@@ -549,6 +549,19 @@ function onContext(kind: string) {
     }
     return;
   }
+  // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing off.
+  if (kind === "demo_devil") {
+    devilTriggerScene();
+    return;
+  }
+  if (kind === "demo_sword") {
+    demoSword();
+    return;
+  }
+  if (kind === "demo_poster") {
+    posterScene(15000);
+    return;
+  }
   if (kind === "gaming_active") {
     // Short tail: heartbeats arrive every ~10 s while the game/fullscreen is
     // real, and typing should recover FAST once it ends (a 3-min tail read as
@@ -658,6 +671,33 @@ let swordReady = false;
   probe.src = SWORD.frames[0];
 }
 
+// The full sword move with its soundtrack timed to the msSeq: fire ignites at
+// the summon flash, a whoosh per strike, embers at the vanish.
+async function playSwordMove() {
+  curClip = SWORD;
+  frameIdx = 0;
+  window.setTimeout(sfxIgnite, 550); // embers gather
+  window.setTimeout(sfxSlashWhoosh, 1990); // strike 1
+  window.setTimeout(sfxSlashWhoosh, 2580); // strike 2
+  window.setTimeout(sfxEmberFizz, 3450); // the sword burns away
+  await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0));
+}
+
+// Demo path: the sword move outside the gaming mood (guards itself).
+async function demoSword() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+    await playSwordMove();
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
 async function gamingAmbience() {
   if (!beatReady() || stage.dataset.state !== "idle") return;
   const loops = 2 + Math.floor(Math.random() * 2); // 2–3 loops
@@ -665,16 +705,7 @@ async function gamingAmbience() {
   try {
     await standUp();
     if (swordReady && Math.random() < 0.5) {
-      // One full sword move per beat, with its soundtrack timed to the msSeq:
-      // fire ignites at the summon flash, a whoosh per strike, embers at the
-      // vanish. Offsets are cumulative frame times (see SWORD.msSeq).
-      curClip = SWORD;
-      frameIdx = 0;
-      window.setTimeout(sfxIgnite, 550); // embers gather
-      window.setTimeout(sfxSlashWhoosh, 1990); // strike 1
-      window.setTimeout(sfxSlashWhoosh, 2580); // strike 2
-      window.setTimeout(sfxEmberFizz, 3450); // the sword burns away
-      await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0));
+      await playSwordMove();
     } else {
       curClip = GUNSPIN;
       frameIdx = 0;

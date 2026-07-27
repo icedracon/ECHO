@@ -147,6 +147,26 @@ fn spawn_typing(app: AppHandle) {
                     idle_ms()
                 ));
             }
+            // Demo hook: `echo sword > ~/.echo/demo` (or devil / poster) plays
+            // that scene on demand — for demos and visual QA.
+            if ticks % 8 == 0 {
+                if let Some(home) = dirs::home_dir() {
+                    let p = home.join(".echo").join("demo");
+                    if let Ok(s) = std::fs::read_to_string(&p) {
+                        let _ = std::fs::remove_file(&p);
+                        let kind = match s.trim() {
+                            "devil" => "demo_devil",
+                            "sword" => "demo_sword",
+                            "poster" => "demo_poster",
+                            _ => "",
+                        };
+                        if !kind.is_empty() {
+                            clog(&format!("demo trigger: {kind}"));
+                            let _ = app.emit("context-event", ContextEvent { kind });
+                        }
+                    }
+                }
+            }
         }
     });
 }
