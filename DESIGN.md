@@ -273,65 +273,129 @@ Also adopt from review #2: Devil Trigger rarity should trend toward once per
 
 ---
 
-## 9. Master plan — v2 milestones (planned 2026-07-27, build in this order)
+## 9. Master plan — v2 milestones with implementation nuances
+(planned 2026-07-27 · build in this order · every item logs to echo.log or it
+didn't happen)
 
 ### M1 — Breathe: the no-new-moves update (0 gens, pure code)
-The 22 clips are a vocabulary; write better sentences with it.
-1. **Timing pass**: msSeq for every clip (gunspin accelerates, cheer dips
-   before the jump, stagger holds the impact); window-motion weight (sit =
-   drop→bounce→settle, stand = lean→rise); 200-400 ms anticipation holds
-   before every scene.
-2. **Reaction pools**: success -> {cheer | gunspin flourish | laugh | line
-   only | NOTHING ~20%}; error -> {stagger | cold arms-crossed silence |
-   annoyed watch-check | nothing}. Predictability is the enemy.
-3. **Clip grammar**: composed sequences read as new moves — checkwatch →
-   pause → leanback ("forever..."), gunspin → laugh (showing off), stagger →
-   sitthink (embarrassed). Author ~a dozen sentences.
-4. **Visible mood**: low energy -> all playback ~12% slower; cocky evenings ->
-   more taunts; low patience -> errors get the cold treatment. The vector
-   finally SHOWS.
-5. **Micro-motion**: 1px breathing oscillation, sub-pixel idle sway, facing
-   flip toward the cursor when it passes near.
-6. **Sound floor**: near-inaudible synth layers — boot scuffs on walk frames,
-   chair creak on sit, cloth rustle on stand, holster click after gunspin.
-7. **Rarity retune**: Devil Trigger -> once per 10-20 h; 4th-wall taunt 50%
-   -> 5%; 1% double-length dance.
 
-### M2 — Сюжет: memory + relationship + payoffs (0 gens, writing + story.ts)
-`story.ts` persisted beside the life vector: tenure hours, chapter, a
-`firsts` set, yesterday's session summary.
-1. **Demon-hunt framing**: bugs are demons — error streak "This one bites.",
-   breakdown = losing the fight, the fixing win "Demon's dead." The workday
-   becomes an episode through lines alone.
-2. **Relationship arc**: Stranger (week 1, reserved, no 4th-wall) ->
-   Colleague (jokes) -> Partner (month+, 4th-wall glances, "We'll fix it.").
-   Words and odds shift with tenure.
-3. **Daily memory**: first launch references yesterday's real stats; sign-off
-   line late at night; once-in-a-lifetime lines for firsts (first Jackpot,
-   100★, 100 h together).
-4. **Serialized gags**: pizza mentioned weekly for a month BEFORE the Phase-3
-   pizza animation pays it off.
-5. **Level chapters**: levels unlock existing content (Lv5 sword outside
-   gaming, Lv8 new idle in rotation, Lv10 unique line).
-Original writing only — his vibe, never copied game dialogue.
+**1. Timing pass (msSeq everywhere).** Only typing/dance/sword have curves.
+Give the other clips theirs: gunspin accelerates into a snap-stop, cheer dips
+(anticipation) before the jump, stagger holds the impact frame, falling eases
+in. *Nuances:* frameLoop already supports msSeq; for settle-clips (settle=8)
+indices still align because msSeq[frameIdx]. A global `paceMul` (see M1.4)
+multiplies shownMs — the sword's SOUND setTimeout offsets must scale by the
+same paceMul or audio desyncs.
 
-### M3 — Small art batch (~5-6 gens of the 8 trial gens left)
-stretch (2), shrug (2), head-tilt (1-2); blink eye-variants of the top 4
-poses are hand-pixel edits (0 gens).
+**2. Window weight.** Sit = drop past target ~6px then rise (chained
+moveWindowY tweens); stand = 80 ms lean beat then rise. *Nuances:* chain must
+cancel cleanly — winTween races are the posture-desync class of bug; scenes
+that force posture skip the bounce (force flag path). Anticipation: 250-400 ms
+hold AFTER standUp, BEFORE the action clip, in every scene — but not twice in
+demo paths.
 
-### M4 — Live with him a week
-Tune M1-M3 from echo.log + feel. No new features during this week.
+**3. Reaction pools.** applyEvent success -> weighted pick {cheer .30,
+gunspin flourish .15, laugh .15, line-only .20, nothing .20}; error ->
+{stagger .35, cold arms-crossed silence .25, annoyed watch-check .20,
+nothing .20}. Weights bend with the vector (cocky -> flourish up; focus high
+-> nothing up). *Nuances:* streak counters and star logic are untouched (they
+live upstream); voice/bubble gaps still apply; log `react=<pick>` every time;
+"nothing" must still refresh lastActivity.
+
+**4. Visible mood.** `paceMul = clamp(0.88, 1.12)` from energy (tired = slow,
+morning = snappy); WORK_POSES ordering biased by cockiness; line tables gain
+mood/time tags and pickLine filters by them (slugs stay stable — voice files
+match slugOf); patience < 0.3 -> error reactions force the cold silent
+variant and suppress the shake. *Nuance:* paceMul applies in frameLoop only —
+window tweens keep real time or walks look drunk.
+
+**5. Micro-motion.** Breathing: rAF sine on the sprite, 1px amplitude, ~3.2 s
+period scaled by energy. *Nuances:* #sprite transform is already used by
+facing (scaleX) and shooting/leveling keyframes — wrap the img in a breather
+div so transforms never fight, and PAUSE breathing while gagActive/showcasing.
+Sway only when seated-idle. Cursor-look: frontend can't see the global mouse
+(click-through window) — context.rs polls GetCursorPos in the 120 ms typing
+loop and emits zone-crossing events only (near-left / near-right / far,
+hysteresis ~40 px, throttled); frontend flips facing toward the cursor when
+within ~300 px and idle, clears after ~2 s. Never during scenes/walks.
+
+**6. Sound floor.** All gains <= 0.12 — felt, not heard. Boot scuffs: two per
+walk cycle timed to sidewalk footfall frames (schedule during slideWindow,
+stop on arrival). Chair creak in posture()->seated; cloth rustle in standUp();
+holster click at gunspin end. *Nuance:* one shared "floor" gain node so a
+future config mute kills the whole layer with one dial.
+
+**7. Rarity retune.** Idle-hours Devil Trigger: hourly -> once per 12-20 h
+(persisted clock exists). The GAMING 10-min DT cadence stays — that one is an
+explicit user order. 4th-wall taunt after Jackpot: 0.5 -> 0.05 (it becomes a
+legend). 1% of dances run double length. Log every rare roll.
+
+### M2 — Сюжет: memory, relationship, payoffs (0 gens, story.ts + writing)
+
+**State.** `~/.echo/story.json` via new lib.rs commands story_load/story_save
+(file over localStorage: user-visible, survives reinstalls, greppable):
+`{installedAt, totalHours, chapter, firsts:[], days:{date:{wins,errors,
+jackpots,stars}}, lastSeenDate, gags:{pizzaMentions,lastPizzaAt}}`.
+*Nuances:* no clean shutdown hook exists — accumulate totalHours and today's
+counters incrementally (write every ~5 min and after each scene); midnight
+rollover on first event of a new date.
+
+**1. Demon-hunt framing.** New line pools keyed to existing beats: streak
+errors ("This one bites."), breakdown = losing the fight, streak-ending win
+("Demon's dead."). Pure writing; wired through the M1 pools' line-only picks.
+
+**2. Relationship arc.** totalHours < 20 = Stranger (reserved lines, ambient
+bubble chance halved, NO 4th-wall), < 80 = Colleague (jokes, taunts), else
+Partner (4th-wall glances unlocked, protective lines on bad days: "We'll fix
+it."). *Nuance:* arc gates ODDS and POOLS, never mechanics — he works the
+same, he talks different.
+
+**3. Daily memory.** First launch of a day (lastSeenDate < today): greeting
+from yesterday's numbers ("Three Jackpots yesterday. Show-off." / "Yesterday
+was rough. Today we win."). Late-night sign-off line when he walks off after
+23:00. Firsts fire once ever, at MAJOR priority, persisted immediately:
+first Jackpot, first breakdown survived, 100★, 500★, 100 h together.
+
+**4. Serialized gags.** Pizza line max once/week (lastPizzaAt), counter
+grows; the M5 pizza animation checks pizzaMentions >= 3 before it may ever
+play — the payoff must be EARNED or it's just another clip.
+
+**5. Level chapters.** lvlUp switch: Lv5 unlocks the sword move outside
+gaming (rare idle flourish), Lv8 adds an idle to rotation, Lv10 a unique
+line. Unlock flags live in story.json; planner reads them.
+
+**Writing rule:** original lines in his vibe — never copied game dialogue
+(same law as the art).
+
+### M3 — Small art batch (~5-6 of the 8 trial gens)
+stretch (8f, 2 gens), shrug (8f, 2), head-tilt (4f, 1-2) via gen_anim.py,
+idle-anchored first/last frames, MOCK GIF BEFORE EVERY SPEND (standing rule).
+Blink: 0 gens — closed-eye variants of sitswing/sitcross/sitthink/typetap
+settle frames, eyes are a ~6px region, PIL edit like the typetap taps; played
+by frameLoop URL-swap (variant map per clip/frame) for ~120 ms every 3-7 s
+when idle. *Nuance:* blink pauses during scenes and speaking.
+
+### M4 — Live with him a week (no new features)
+Watch echo.log distributions: reaction-pool spread, mood ranges over days,
+scene frequency, blink/breath feel. Fix only what the log or the eye flags.
 
 ### M5 — Living behaviors (~12-15 gens, needs top-up)
-pizza payoff, coin flip, clean sword, sword spin, wake-up,
-look-outside-screen — wired through the M1 pools and M2 story.
+pizza payoff (gated by the gag counter), coin flip, clean sword, sword spin,
+wake-up stretch, look-outside-screen. All enter through M1 pools + M2 gates,
+never as bare timers.
 
 ### M6 — Later infra + rare events (~30-45 gens + code)
-config.json presets/quiet hours; Windows media-session API (background-tab
-music); Linux context layer (friend); rain/birthday/discovery events;
-Christmas re-skin only if gens are abundant (15-30 alone).
+config.json presets + quietHours (kills the sound floor + voice with one
+dial); Windows media-session API for background-tab music (replaces title
+heuristic, titles stay as fallback); Linux context layer (evdev typing needs
+input-group perms, MPRIS/D-Bus media, Steam registry.vdf) — unlocks the
+friend; rain/birthday/discovery events; Christmas re-skin ONLY with abundant
+gens (15-30 alone).
 
-**Order is the point: M1-M2 are free and transform him; art comes after.**
+**Invariants across all milestones:** attention budget rules hold (gaps,
+budgets, busy-burst silence); every decision logs; no timer-driven spectacle
+without an earned/contextual gate; mocks before generations; the user's
+machine is ground truth — capture-verify anything visual.**
 
 **Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
 chair creak, holster click) instead of adding louder effects.
