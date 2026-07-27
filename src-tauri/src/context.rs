@@ -215,6 +215,82 @@ extern "system" {
     fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
     fn GetWindowTextW(hwnd: isize, buf: *mut u16, max: i32) -> i32;
     fn IsWindowVisible(hwnd: isize) -> i32;
+    fn GetForegroundWindow() -> isize;
+    fn GetWindowRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
+    fn MonitorFromWindow(hwnd: isize, flags: u32) -> isize;
+    fn GetMonitorInfoW(mon: isize, info: *mut MonitorInfo) -> i32;
+    fn GetClassNameW(hwnd: isize, buf: *mut u16, max: i32) -> i32;
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct MonitorInfo {
+    cb_size: u32,
+    monitor: [i32; 4],
+    work: [i32; 4],
+    flags: u32,
+}
+
+/// Is the FOREGROUND window fullscreen? That's the strongest "user is playing a
+/// game / watching a movie" signal — the Steam client title only proves the
+/// launcher is open, never that a game is actually running.
+#[cfg(windows)]
+fn foreground_fullscreen() -> bool {
+    unsafe {
+        let h = GetForegroundWindow();
+        if h == 0 {
+            return false;
+        }
+        // The desktop shell itself is screen-sized; ignore it.
+        let mut cls = [0u16; 64];
+        let n = GetClassNameW(h, cls.as_mut_ptr(), cls.len() as i32);
+        let class = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+        if class == "Progman" || class == "WorkerW" {
+            return false;
+        }
+        let mut r = [0i32; 4];
+        if GetWindowRect(h, &mut r) == 0 {
+            return false;
+        }
+        let mon = MonitorFromWindow(h, 2); // MONITOR_DEFAULTTONEAREST
+        let mut mi = MonitorInfo { cb_size: std::mem::size_of::<MonitorInfo>() as u32, monitor: [0; 4], work: [0; 4], flags: 0 };
+        if GetMonitorInfoW(mon, &mut mi) == 0 {
+            return false;
+        }
+        r[0] <= mi.monitor[0] && r[1] <= mi.monitor[1] && r[2] >= mi.monitor[2] && r[3] >= mi.monitor[3]
+    }
+}
+
+#[cfg(not(windows))]
+fn foreground_fullscreen() -> bool {
+    false
+}
+
+/// Steam writes the running game's AppID to the registry — the ONE signal that
+/// works for windowed games too (titles and fullscreen checks both miss those).
+#[cfg(windows)]
+fn steam_running_app() -> bool {
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", r"HKCU\Software\Valve\Steam", "/v", "RunningAppID"]);
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let Ok(out) = cmd.output() else { return false };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if line.trim_start().starts_with("RunningAppID") {
+            if let Some(v) = line.split_whitespace().last() {
+                return v != "0x0" && v != "0";
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn steam_running_app() -> bool {
+    false
 }
 
 #[cfg(windows)]
@@ -259,6 +335,8 @@ fn spawn_dns(app: AppHandle) {
         let mut seen = read_dns();
         let mut had_media = false;
         let mut had_game = false;
+        let mut had_fullscreen = false;
+        let mut had_steam_game = false;
         let mut last_media = Instant::now() - Duration::from_secs(600);
         let mut last_game = Instant::now() - Duration::from_secs(600);
         {
@@ -306,6 +384,22 @@ fn spawn_dns(app: AppHandle) {
             had_media = media_now;
             had_game = game_now;
 
+            // A fullscreen foreground window that isn't media = a running game
+            // (the game's own title matches nothing, the Steam client may be in
+            // the tray). Steam's RunningAppID additionally catches WINDOWED
+            // games; its 0->N edge is a real game launch -> shoot burst.
+            let fullscreen_game = foreground_fullscreen() && !media_now;
+            if fullscreen_game && !had_fullscreen {
+                clog("fullscreen foreground -> gaming mood");
+            }
+            had_fullscreen = fullscreen_game;
+            let steam_game = steam_running_app();
+            if steam_game && !had_steam_game {
+                clog("steam RunningAppID set -> game session");
+                fire_game = true;
+            }
+            had_steam_game = steam_game;
+
             if fire_game && last_game.elapsed() > Duration::from_secs(120) {
                 last_game = Instant::now();
                 let _ = app.emit("context-event", ContextEvent { kind: "gaming" });
@@ -314,9 +408,8 @@ fn spawn_dns(app: AppHandle) {
                 let _ = app.emit("context-event", ContextEvent { kind: "media" });
             }
 
-            // Heartbeats: Steam / a video still open -> he stays in that mood
-            // (the frontend keeps a session window alive from these).
-            if game_now {
+            // Heartbeats: game / video still active -> he stays in that mood.
+            if game_now || fullscreen_game || steam_game {
                 let _ = app.emit("context-event", ContextEvent { kind: "gaming_active" });
             }
             if media_now {

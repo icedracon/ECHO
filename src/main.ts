@@ -424,7 +424,10 @@ function onContext(kind: string) {
     if (introActive) return;
     // Mid-game your keys are GAMEPLAY, not typing — keep the gaming mood
     // (spins, shots, watch-checks) instead of pulling the laptop out.
-    if (gamingActive()) return;
+    if (gamingActive()) {
+      dbg("typing suppressed (gaming mood)");
+      return;
+    }
     if (Math.abs(home.lastX - home.cornerX) > 4) return; // not settled yet
     // YOU typing outranks ambient AI poses — he sits down and works with you.
     typingUntil = Date.now() + 9000; // each keystroke extends the session
@@ -444,7 +447,10 @@ function onContext(kind: string) {
     return;
   }
   if (kind === "gaming_active") {
-    gamingUntil = Date.now() + 3 * 60 * 1000; // keep the mood alive between beats
+    // Short tail: heartbeats arrive every ~10 s while the game/fullscreen is
+    // real, and typing should recover FAST once it ends (a 3-min tail read as
+    // "typing randomly broken" after closing a game).
+    gamingUntil = Date.now() + 60 * 1000;
     return;
   }
   if (kind === "media_active") {
@@ -529,11 +535,19 @@ function beatReady(): boolean {
 // Sword combo joins the gaming rotation the moment its art exists
 // (public/pixel/sword/frame_0..7 — see scripts/gen_anim.py). Probed at boot;
 // while the art is missing it's guns only.
-// Sword beat: the greatsword flashes into his hands, ONE hard slash with a
-// blur arc, then it dissolves into sparks and he's back to standing — the
-// blade never lingers. Anticipation slow, slash fast, dissolve eases out.
-const SWORD = clip("swordflash", 100, true, 0, 11);
-SWORD.msSeq = [150, 140, 120, 80, 70, 60, 60, 90, 120, 140, 160];
+// Sword beat (the full DMC move, user-directed): fire summon -> turns left ->
+// two raise-and-strike slashes, each launching a red energy wave -> settle ->
+// turns back -> the fire swallows the sword. Ends front-standing.
+const SWORD = clip("swordmove", 100, true, 0, 39);
+SWORD.msSeq = [
+  110, 110, 110, 110, 110, 110, 110, 110, 110, 140, 140, 140, 140, // summon
+  140, 180, // turn
+  120, 70, 60, 85, 85, 85, // strike 1 + wave 1
+  90, 110, 65, 60, 85, 85, 85, // strike 2 + wave 2
+  110, 110, 110, // settle
+  140, // turn back
+  90, 90, 90, 90, 90, 90, 90, // fire swallows the sword
+];
 let swordReady = false;
 {
   const probe = new Image();
