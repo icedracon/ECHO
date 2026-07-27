@@ -22,9 +22,14 @@ on the machine. ~30 MB RAM, click-through, always-on-top.
 
 These cost hours. Don't rediscover them.
 
-1. **You CANNOT screenshot his window.** It's transparent + click-through +
-   always-on-top; computer-use screenshots never contain him. **Never** claim a
-   visual is verified. Use the logs, and ask the user what they see.
+1. **You CAN screenshot his window — but only via BitBlt + CAPTUREBLT.**
+   Normal/computer-use screenshots never contain him, but a PowerShell
+   Add-Type with `BitBlt(SRCCOPY | CAPTUREBLT)` captures layered windows.
+   Burst-capture (~200 ms/frame) + a decoy window (`cmd /k title youtube`)
+   lets you trigger and SEE any scene yourself. Kill decoys by Win32 title
+   (EnumWindows), NOT .NET MainWindowTitle — minimized cmd reports "" there
+   and lingering decoys block the next media edge. Verify visually this way;
+   the user is no longer the only ground truth.
 2. **Debug via logs:**
    - `~/.echo/echo.log` — backend (watcher, `ctx` context lines)
    - `~/.echo/echo-fe.log` — frontend (`dbg()` → `fe_log` command)
@@ -43,6 +48,15 @@ These cost hours. Don't rediscover them.
 8. **Each JSONL block is its own line** → states get clobbered in ms. That's why
    `MIN_HOLD` exists.
 9. Build takes ~1-3 min (Rust). Always kill `ECHO.exe` first — it locks the exe.
+10. **Never pipe builds through `| tail`** — the pipeline exit code is tail's,
+    so `&&` proceeds after a FAILED build and relaunches the stale exe. Use
+    `if npm run tauri build > log; then ... else tail log; fi`.
+11. `commit.gpgsign=true` + `pinentry-mode loopback` = commits fail in
+    non-interactive sessions. User caches passphrase (`echo test | gpg
+    --clearsign`) or explicitly asks for `-c commit.gpgsign=false`.
+12. PixelLab REST caps animate at 64x64 (sprites are 84x107) and the balance
+    is **$0.00** — no art generation until topped up. The v3/larger-size
+    endpoint knowledge died with an old chat; document it when rediscovered.
 
 ---
 
@@ -102,6 +116,27 @@ All are in the old chat history and **must be rotated**:
 - Never commit `.env`, `public/model/`, `assets-src/`, `target/`.
 
 ---
+
+## 5b. Added 2026-07-27 (uncommitted on top of v0.0.2)
+
+- **Typing v3**: laptop-out one-shot → 4-frame hands-only tap loop (`typetap`,
+  bursty msSeq rhythm) → reversed put-away. Mouse input no longer counts as
+  typing (idle_ms is anchored to real typing keys). Gaming suppresses typing.
+- **msSeq engine**: per-frame durations on any clip; eased take-out, accelerating
+  close, beat-accented dance; 200-400 ms "noticing" delay before win/error.
+- **Поster scene**: media open → stands, arms up (dance frame 5), a second
+  frameless window (`index.html?poster=1`) shows a gif above his hands, song
+  plays, ±3 px bob, 15 s. Bundled defaults `public/media/poster.gif|song.mp3`
+  (song is gitignored — no copyrighted audio in repo); `~/.echo/media/*`
+  overrides both. Window shapes itself to the gif aspect, clamped on-screen.
+- **Scene budget unified**: media/gaming scenes markScene() + sceneAllowed();
+  no ambient bubbles over scenes; relaunch no longer insta-dances.
+- **Single-instance plugin** (two Dantes impossible); context log names the
+  matching window title; `ipconfig` spawn uses CREATE_NO_WINDOW (console
+  flash fixed); Linux monitor-null fallback (Wayland still can't position).
+- **Start ECHO.bat rewritten**: prebuilt-first for normal users, one-time
+  release build otherwise, console closes after launch; `dev` arg = old flow.
+  NOTE: download URL needs a PUBLIC release to actually work.
 
 ## 6. State & immediate next steps
 

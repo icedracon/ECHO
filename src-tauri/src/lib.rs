@@ -117,6 +117,39 @@ fn voice_clips() -> Vec<(String, String)> {
     out
 }
 
+/// Poster-scene media from ~/.echo/media (user's own files, never committed):
+/// poster.gif|png|webp + song.mp3|wav|ogg -> data URLs. Empty if none.
+#[tauri::command]
+fn poster_media() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(home) = dirs::home_dir() else {
+        return out;
+    };
+    let dir = home.join(".echo").join("media");
+    let want: [(&str, &[(&str, &str)]); 2] = [
+        ("poster", &[("gif", "image/gif"), ("png", "image/png"), ("webp", "image/webp")]),
+        ("song", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+    ];
+    for (stem, exts) in want {
+        for (ext, mime) in exts {
+            let p = dir.join(format!("{stem}.{ext}"));
+            if !p.is_file() {
+                continue;
+            }
+            if p.metadata().map(|m| m.len() > 12 * 1024 * 1024).unwrap_or(true) {
+                continue; // sane cap: it's a 15s poster beat, not a movie
+            }
+            if let Ok(bytes) = fs::read(&p) {
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                out.push((stem.to_string(), format!("data:{mime};base64,{b64}")));
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Frontend diagnostics -> ~/.echo/echo-fe.log (so overlay behaviour is auditable).
 #[tauri::command]
 fn fe_log(line: String) {
@@ -141,6 +174,9 @@ fn fe_log(line: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch exits immediately instead of
+        // putting two Dantes on the taskbar.
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app
@@ -165,7 +201,8 @@ pub fn run() {
             get_state,
             idle_phrase,
             fe_log,
-            voice_clips
+            voice_clips,
+            poster_media
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

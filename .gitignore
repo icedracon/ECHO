@@ -34,3 +34,9 @@ assets-src/
 
 # mitmproxy MCP artifact
 mitm_mcp_traffic.db
+
+# bundled into the build, but audio never goes in the repo
+public/media/song.mp3
+
+# local Claude Code config
+.claude/

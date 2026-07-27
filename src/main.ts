@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow, currentMonitor, primaryMonitor } from "@tauri-apps/api/window";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
 import {
   pickIdle,
@@ -343,7 +344,10 @@ const SITDOWN = clip("sitpanel", 190, false);
 const STAND_CROSS = clip("sit", 200, false); // standing, arms crossed
 const LAUGH = clip("laugh", 130, false);
 // Star-milestone celebration: a standing dance (loops for the scene's duration).
-const DANCE = clip("dance", 110, true, 0);
+// Beat-accented: the choreography hits (arms-up frame 5, wave frame 8) hold a
+// touch longer, like dancing on a beat instead of fast-forward.
+const DANCE = clip("dance", 125, true, 0);
+DANCE.msSeq = [125, 125, 125, 125, 135, 175, 135, 135, 185];
 // Signature beats: Devil-Trigger power pose (level up), gun-spin + taunt
 // (Jackpot follow-through). Check-watch joins the idle rotation below.
 const DEVIL = clip("devil", 90, true, 8);
@@ -415,6 +419,9 @@ function onContext(kind: string) {
   if (kind === "typing") {
     // Never mid-walk-in, and only once he's home in his corner.
     if (introActive) return;
+    // Mid-game your keys are GAMEPLAY, not typing — keep the gaming mood
+    // (spins, shots, watch-checks) instead of pulling the laptop out.
+    if (gamingActive()) return;
     if (Math.abs(home.lastX - home.cornerX) > 4) return; // not settled yet
     // YOU typing outranks ambient AI poses — he sits down and works with you.
     typingUntil = Date.now() + 9000; // each keystroke extends the session
@@ -439,19 +446,33 @@ function onContext(kind: string) {
   }
   if (kind === "media_active") {
     mediaUntil = Date.now() + 3 * 60 * 1000; // video/music still playing
-    // While it's on, he breaks into a 15 s dance every ~10 min.
-    if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY && beatReady()) {
-      lastMediaDance = Date.now();
-      dbg("media session dance (15s)");
-      danceScene(15000);
+    // While it's on, he breaks into a 15 s dance every ~10 min — but it shares
+    // the one scene budget, so it can't stack against Jackpot & co.
+    if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY) {
+      if (beatReady() && sceneAllowed()) {
+        lastMediaDance = Date.now();
+        markScene();
+        dbg("media session poster (15s)");
+        posterScene(15000); // the плакат every time, not just on open
+      } else {
+        // Name the guard that vetoed it — silent skips are undebuggable.
+        dbg(
+          `media poster blocked: gag=${gagActive} show=${showcasing} away=${away} ` +
+            `ret=${returning} wand=${wandering} com=${committed()} sceneOk=${sceneAllowed()}`,
+        );
+      }
     }
     return;
   }
   if (kind === "media") {
+    // You opened music/video — that's deliberate: he holds up his плакат
+    // (poster gif + song from ~/.echo/media) and dances beside it.
     lastMediaDance = Date.now();
-    danceScene(15000); // opened video/music -> a proper 15 s dance
+    markScene();
+    posterScene(15000);
   } else if (kind === "gaming") {
     gamingUntil = Date.now() + 3 * 60 * 1000;
+    markScene();
     shootScene(3); // launched a game -> a longer 3-shot burst
   }
 }
@@ -491,8 +512,10 @@ let gamingUntil = 0;
 let lastGamingSpecial = 0;
 // Media session: while a video/music window is open he dances periodically.
 let mediaUntil = 0;
-let lastMediaDance = 0;
 const MEDIA_DANCE_EVERY = 10 * 60 * 1000; // every ~10 min
+// If music/video is already open when he boots, the first poster beat comes
+// ~90 s in (not instantly, not never); after that the normal 10-min rhythm.
+let lastMediaDance = Date.now() - MEDIA_DANCE_EVERY + 90_000;
 void mediaUntil; // session window (kept for future mood weighting)
 const gamingActive = () => Date.now() < gamingUntil;
 
@@ -828,7 +851,8 @@ function applyEvent(e: AgentEvent) {
     prevStars >= 0 &&
     Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
   prevStars = e.stars;
-  showBubble(e.phrase, PRIO.AMBIENT);
+  // No ambient chatter over a running scene — the scene owns the screen.
+  if (!gagActive && !showcasing) showBubble(e.phrase, PRIO.AMBIENT);
   dbg(
     `event=${e.state} lvlUp=${leveledUp} milestone=${crossedMilestone} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
   );
@@ -924,6 +948,7 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
 let home: {
   win: ReturnType<typeof getCurrentWindow>;
   ox: number;
+  scrRight: number; // monitor's right edge (physical) — clamp popups on-screen
   winW: number;
   y: number;
   sitY: number;
@@ -967,15 +992,35 @@ function moveWindowY(targetY: number, dur = 480) {
 const POSTURE_DWELL_MS = 6000;
 let seatedNow = true;
 let postureChangedAt = 0;
+let postureRetry = 0;
 function posture(state: string, force = false) {
   if (!home) return;
   const seated = SEATED.has(state);
-  if (seated === seatedNow) return; // already there
-  if (!force && Date.now() - postureChangedAt < POSTURE_DWELL_MS) return; // too soon
+  const targetY = seated ? home.sitY : home.y;
+  window.clearTimeout(postureRetry);
+  if (seated === seatedNow) {
+    // Self-heal: an interrupted tween can strand the window between heights
+    // while the flag already agrees — he'd sit floating or stand sunk forever.
+    if (Math.abs(home.lastY - targetY) > 4) moveWindowY(targetY, 300);
+    return;
+  }
+  if (!force && Date.now() - postureChangedAt < POSTURE_DWELL_MS) {
+    // The dwell blocks the move but the CLIP already changed — a standing pose
+    // at seated height reads as "sunk under the taskbar" (and vice versa).
+    // Re-apply once the dwell expires instead of leaving the mismatch.
+    postureRetry = window.setTimeout(
+      () => {
+        if (gagActive || showcasing || wandering || away || returning) return;
+        posture(stage.dataset.state || "idle");
+      },
+      POSTURE_DWELL_MS - (Date.now() - postureChangedAt) + 30,
+    );
+    return;
+  }
   seatedNow = seated;
   postureChangedAt = Date.now();
   // Lower slowly while the sit-down clip plays; stand up snappily.
-  moveWindowY(seated ? home.sitY : home.y, seated ? 900 : 400);
+  moveWindowY(targetY, seated ? 900 : 400);
 }
 
 // Slide the OS window from its current X to toX at a walking pace (px/sec),
@@ -1010,12 +1055,25 @@ async function runIntro() {
   try {
     const win = getCurrentWindow();
     const mon = (await currentMonitor()) ?? (await primaryMonitor());
-    if (!mon) return;
-    const sf = mon.scaleFactor || 1;
-    const ox = mon.position.x;
-    const oy = mon.position.y;
-    const sw = mon.size.width;
-    const sh = mon.size.height;
+    // Linux (esp. Wayland) can answer null here. Bailing out used to leave him
+    // parked wherever the compositor dropped the window — mid-desktop. Fall
+    // back to the webview's own screen numbers so home is always computed.
+    // (On pure Wayland setPosition may still be ignored; X11 sessions behave.)
+    let sf: number, ox: number, oy: number, sw: number, sh: number;
+    if (mon) {
+      sf = mon.scaleFactor || 1;
+      ox = mon.position.x;
+      oy = mon.position.y;
+      sw = mon.size.width;
+      sh = mon.size.height;
+    } else {
+      sf = window.devicePixelRatio || 1;
+      ox = 0;
+      oy = 0;
+      sw = Math.round(window.screen.width * sf);
+      sh = Math.round(window.screen.height * sf);
+      dbg("monitor query returned null — using window.screen fallback");
+    }
     const { width: winW, height: winH } = await win.outerSize();
 
     // Measure the REAL taskbar height (full screen minus the work area) so he
@@ -1039,7 +1097,7 @@ async function runIntro() {
     // A small visible dip for the error fall — he stays fully on-screen so the
     // falling + climb animations are unmissable (no dropping off the bottom).
     const belowY = y + Math.round(winH * 0.3);
-    home = { win, ox, winW, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
+    home = { win, ox, scrRight: ox + sw, winW, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
     dbg(`intro home set mon=${sw}x${sh} y=${y} sitY=${sitY} corner=${cornerX}`);
     await win.setPosition(new PhysicalPosition(startX, y));
     stage.dataset.facing = "right";
@@ -1282,6 +1340,137 @@ async function showcase() {
   }
 }
 
+// Media open -> poster beat: a small always-on-top window pops up beside him
+// showing ~/.echo/media/poster.gif while song.mp3 plays, and he dances along.
+// Both files are the user's own (never committed); without them -> plain dance.
+const posterMedia = new Map<string, string>();
+async function initPosterMedia() {
+  if (!isTauri) return;
+  try {
+    const list = await invoke<Array<[string, string]>>("poster_media");
+    for (const [k, v] of list) posterMedia.set(k, v);
+    dbg(`poster media: ${list.map((l) => l[0]).join(",") || "(none)"}`);
+  } catch (e) {
+    dbg(`poster_media failed: ${e}`);
+  }
+}
+
+// Bundled default song (shipped in the exe); ~/.echo/media/song.mp3 overrides.
+// The poster window resolves its own gif the same way in posterMain().
+const POSTER_SONG_URL = "/media/song.mp3";
+
+// Measure a gif so the poster window can take its shape (landscape gifs get a
+// landscape плакат instead of a letterboxed sliver).
+function gifSize(url: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((res) => {
+    const im = new Image();
+    const to = window.setTimeout(() => res(null), 1500);
+    im.onload = () => {
+      window.clearTimeout(to);
+      res({ w: im.naturalWidth || 84, h: im.naturalHeight || 107 });
+    };
+    im.onerror = () => {
+      window.clearTimeout(to);
+      res(null);
+    };
+    im.src = url;
+  });
+}
+
+async function posterScene(durationMs: number) {
+  if (!home || gagActive) return;
+  gagActive = true;
+  let win: WebviewWindow | null = null;
+  let audio: HTMLAudioElement | null = null;
+  let bob = 0;
+  const h = home;
+  try {
+    // Song is created (preloading) now but PLAYS at the poster reveal below,
+    // so gif and music start in the same second.
+    audio = new Audio(posterMedia.get("song") ?? POSTER_SONG_URL);
+    audio.volume = 0.45;
+    audio.preload = "auto";
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+    // Both arms raised (dance frame 5) — he's holding the плакат overhead.
+    curClip = { frames: [DANCE.frames[5]], ms: 500, loop: true, settle: 0 };
+    frameIdx = 0;
+    showBubble("Too easy.", PRIO.MAJOR);
+    // Poster window shaped to the gif: fit inside 250x170 logical + frame chrome.
+    const sz = (await gifSize(posterMedia.get("poster") ?? "/media/poster.gif")) ?? {
+      w: 84,
+      h: 107,
+    };
+    const chrome = 18;
+    const k = Math.min((250 - chrome) / sz.w, (170 - chrome) / sz.h);
+    const pwL = Math.round(sz.w * k) + chrome;
+    const phL = Math.round(sz.h * k) + chrome;
+    win = new WebviewWindow("poster", {
+      url: "index.html?poster=1",
+      width: pwL,
+      height: phL,
+      visible: false, // built hidden; revealed in sync with the song below
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focus: false,
+      shadow: false,
+    });
+    await new Promise<void>((res) => {
+      win!.once("tauri://created", () => res());
+      win!.once("tauri://error", (e) => {
+        dbg(`poster window error: ${JSON.stringify(e)}`);
+        res();
+      });
+    });
+    // Directly above his raised hands, centered on the sprite window; a slow
+    // ±3px bob so the held poster feels alive.
+    const sf = window.devicePixelRatio || 1;
+    const pw = Math.round(pwL * sf);
+    const ph = Math.round(phL * sf);
+    const winW = Math.round(190 * sf);
+    // Centered over him, but a wide poster must not run off the screen edge.
+    const px = Math.min(Math.round(h.lastX + (winW - pw) / 2), h.scrRight - pw - 6);
+    const py = Math.round(h.y - ph + 26);
+    await win.setPosition(new PhysicalPosition(px, py));
+    // The synchronized beat: reveal the poster, start its gif, start the song —
+    // all in the same tick. Small settle first so the webview is ready.
+    await sleep(250);
+    await win.show().catch(() => {});
+    void emit("poster-show");
+    audio.onerror = () => dbg(`song decode error: code=${audio?.error?.code}`);
+    audio
+      .play()
+      .then(() => dbg("song playing"))
+      .catch((e) => dbg(`song play failed: ${e}`));
+    let t = 0;
+    bob = window.setInterval(() => {
+      t += 1;
+      void win?.setPosition(new PhysicalPosition(px, py + Math.round(Math.sin(t) * 3)));
+    }, 420);
+    dbg("poster scene (media open)");
+    await sleep(durationMs);
+  } finally {
+    window.clearInterval(bob);
+    if (win) void win.close().catch(() => {});
+    if (audio) {
+      const a = audio;
+      const fade = window.setInterval(() => {
+        a.volume = Math.max(0, a.volume - 0.06);
+        if (a.volume <= 0.01) {
+          a.pause();
+          window.clearInterval(fade);
+        }
+      }, 80);
+    }
+    gagActive = false;
+    setState("idle");
+  }
+}
+
 // Milestone celebration: stand up and dance a couple of loops, then sit.
 async function danceScene(durationMs?: number) {
   if (!home || gagActive) return;
@@ -1333,6 +1522,7 @@ async function main() {
   }
 
   void initVoiceFiles(); // pick up any ~/.echo/voice/*.wav the user dropped in
+  void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
 
   try {
     applyEvent(await invoke<AgentEvent>("get_state"));
@@ -1359,14 +1549,24 @@ async function main() {
 
   scheduleGamingBeat(); // playful beats while a game is open
 
-  // Signature hourly moment: he powers up once an hour (Devil Trigger), as long
-  // as he's settled and not mid-beat.
+  // Signature hourly moment: Devil Trigger once an hour. Checked every 2 min so
+  // a busy/away moment only DELAYS it instead of skipping the whole hour, and
+  // the clock persists across relaunches (rebuilds used to reset it forever).
+  const DEVIL_EVERY = 60 * 60 * 1000;
+  let lastDevil = Number(localStorage.getItem("echo.lastDevil") || 0);
+  if (!lastDevil || lastDevil > Date.now()) {
+    lastDevil = Date.now();
+    localStorage.setItem("echo.lastDevil", String(lastDevil));
+  }
   window.setInterval(() => {
+    if (Date.now() - lastDevil < DEVIL_EVERY) return;
     if (gagActive || showcasing || wandering || away || returning || committed()) return;
     if (stage.dataset.state !== "idle") return;
+    lastDevil = Date.now();
+    localStorage.setItem("echo.lastDevil", String(lastDevil));
     dbg("hourly devil trigger");
     devilTriggerScene();
-  }, 60 * 60 * 1000);
+  }, 120_000);
 
   // v2 P1: the Life Model heartbeat — decay the vector, accumulate idle boredom,
   // and log the state so its evolution is auditable in ~/.echo/echo.log.
@@ -1383,4 +1583,39 @@ async function main() {
   runIntro(); // intro sets introActive=true, calls scheduleIdle() when done
 }
 
-main();
+// ?poster=1 -> this window IS the poster: just the framed gif, nothing else.
+async function posterMain() {
+  document.body.innerHTML = "";
+  document.body.style.cssText = "margin:0;background:transparent;overflow:hidden";
+  const frame = document.createElement("div");
+  frame.style.cssText =
+    "box-sizing:border-box;width:100vw;height:100vh;padding:6px;" +
+    "background:#17171a;border:3px solid #b3122a;border-radius:4px;" +
+    "box-shadow:0 4px 14px rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center";
+  const img = document.createElement("img");
+  img.style.cssText = "max-width:100%;max-height:100%;image-rendering:pixelated";
+  frame.appendChild(img);
+  document.body.appendChild(frame);
+  // The gif starts on the "poster-show" signal so it begins in the same second
+  // as the song (the window is built hidden, then revealed). Fallback timer in
+  // case the signal raced past us before our listener was up.
+  let gifUrl = "/media/poster.gif"; // bundled default, always present
+  try {
+    const list = await invoke<Array<[string, string]>>("poster_media");
+    const gif = list.find(([k]) => k === "poster");
+    if (gif) gifUrl = gif[1]; // a ~/.echo/media/poster.gif overrides it
+  } catch {
+    /* bundled gif it is */
+  }
+  let shown = false;
+  const reveal = () => {
+    if (shown) return;
+    shown = true;
+    img.src = gifUrl;
+  };
+  void listen("poster-show", reveal);
+  window.setTimeout(reveal, 1200);
+}
+
+if (new URLSearchParams(location.search).has("poster")) posterMain();
+else main();

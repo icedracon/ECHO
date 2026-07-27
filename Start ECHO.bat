@@ -3,49 +3,78 @@ setlocal EnableDelayedExpansion
 title ECHO Companion Launcher
 cd /d "%~dp0"
 
-rem ---- 0. Windows-only guard ----
+rem ---- Windows-only guard ----
 if not "%OS%"=="Windows_NT" (
     echo [!] This launcher only works on Windows.
     pause
     exit /b 1
 )
 
+rem ---- "Start ECHO.bat dev" = developer mode: dev server, console stays open ----
+if /i "%~1"=="dev" goto DevServer
+
 echo ==========================================
 echo          ECHO - Desktop Companion
 echo ==========================================
 echo.
 
-rem ---- 1. If running as standalone dist (no source code), launch prebuilt ECHO.exe ----
-if not exist "package.json" (
-    if exist "ECHO.exe" (
-        echo [+] Found ECHO.exe. Launching ECHO...
-        start "" "ECHO.exe"
-        exit /b 0
-    )
-    if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
-        echo [+] Found cached ECHO.exe. Launching...
-        start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
-        exit /b 0
-    )
-    goto FallbackDownload
+rem ---- Prebuilt first. A normal user never compiles anything. ----
+if exist "ECHO.exe" (
+    echo [+] Launching ECHO...
+    start "" "ECHO.exe"
+    goto Done
+)
+if exist "src-tauri\target\release\ECHO.exe" (
+    echo [+] Launching ECHO...
+    start "" "src-tauri\target\release\ECHO.exe"
+    goto Done
+)
+if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
+    echo [+] Launching ECHO...
+    start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
+    goto Done
 )
 
-rem ---- 2. Reload PATH for current session ----
+rem ---- No exe anywhere: try the release download ----
+echo [*] First run - downloading ECHO...
+powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = ""$env:LOCALAPPDATA\ECHO""; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO.exe' -OutFile ""$dir\ECHO.exe"" -UseBasicParsing; Unblock-File ""$dir\ECHO.exe""; exit 0 } catch { exit 1 }"
+if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
+    echo [+] Download complete. Launching ECHO...
+    start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
+    goto Done
+)
+
+rem ---- Download unavailable: build from source if the source is here ----
+if exist "package.json" goto BuildFromSource
+
+echo [!] Could not get ECHO.exe automatically.
+echo     Ask for a release build, or clone the source repo and run this again.
+pause
+exit /b 1
+
+rem =====================================================================
+rem  Source build: installs what is missing, builds ONCE (release),
+rem  launches the exe, and the console closes. Next runs skip all of it.
+rem =====================================================================
+:BuildFromSource
+echo.
+echo [*] No prebuilt ECHO found - building it from source.
+echo [*] This is a one-time setup and can take a while on first run.
+echo.
+
+rem ---- Reload PATH for tools installed in this session ----
 set "PATH=C:\Program Files\nodejs;%USERPROFILE%\.cargo\bin;%PATH%"
 
-rem ---- 3. Check for Node.js ----
+rem ---- Node.js ----
 where node >nul 2>nul
 if errorlevel 1 (
-    echo [!] Node.js not found.
-    echo [*] Installing Node.js LTS - progress below:
+    echo [*] Installing Node.js LTS...
     echo ----------------------------------------------
     where winget >nul 2>nul
     if not errorlevel 1 (
         winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
     ) else (
-        echo [*] winget not available, downloading installer manually...
         powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_setup.msi'"
-        echo [*] Running Node.js installer, please wait...
         msiexec /i "%TEMP%\node_setup.msi" /passive /norestart
     )
     echo ----------------------------------------------
@@ -54,89 +83,106 @@ if errorlevel 1 (
     echo [+] Node.js found.
 )
 
-rem ---- 4. Check for Rust / Cargo ----
+rem ---- Rust ----
 where cargo >nul 2>nul
 if errorlevel 1 (
-    echo [!] Rust ^(cargo^) not found.
-    echo [*] Installing Rust - progress below:
+    echo [*] Installing Rust...
     echo ----------------------------------------------
     where winget >nul 2>nul
     if not errorlevel 1 (
         winget install --id Rustlang.Rustup --accept-source-agreements --accept-package-agreements
     ) else (
-        echo [*] winget not available, downloading installer manually...
         powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile '%TEMP%\rustup-init.exe'"
-        echo [*] Running Rust installer, please wait...
         "%TEMP%\rustup-init.exe" -y
     )
     echo ----------------------------------------------
     set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 ) else (
-    echo [+] Rust ^(cargo^) found.
+    echo [+] Rust found.
 )
 
-rem ---- 5. Check for MSVC Build Tools (via vswhere) ----
+rem ---- MSVC Build Tools (check the C++ workload, not just vswhere) ----
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
-    echo [!] Visual Studio Build Tools not found - needed to compile Tauri.
-    echo [*] Installing Visual Studio Build Tools ^(C++ workload^)...
+set "HAVE_MSVC="
+if exist "%VSWHERE%" (
+    for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`) do set "HAVE_MSVC=1"
+)
+if not defined HAVE_MSVC (
+    echo [*] Installing Visual Studio Build Tools ^(C++ workload, several GB^)...
     echo ----------------------------------------------
     where winget >nul 2>nul
     if not errorlevel 1 (
         winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" --accept-source-agreements --accept-package-agreements
     ) else (
-        echo [!] winget not available. Please install manually from:
+        echo [!] winget not available. Install manually from:
         echo     https://visualstudio.microsoft.com/visual-cpp-build-tools/
-        echo     ^(select the "Desktop development with C++" workload^)
+        echo     ^(select "Desktop development with C++"^), then run this again.
+        pause
+        exit /b 1
     )
     echo ----------------------------------------------
 ) else (
     echo [+] Visual Studio Build Tools found.
 )
 
-rem ---- 6. Re-check Node and Cargo (minimum required) ----
+rem ---- Final tool check ----
 where node >nul 2>nul
 if errorlevel 1 (
-    echo [!] Node.js still not available after install attempt.
-    goto FallbackDownload
+    echo [!] Node.js still not available. Restart this launcher once - a fresh
+    echo     console picks up the new PATH.
+    pause
+    exit /b 1
 )
 where cargo >nul 2>nul
 if errorlevel 1 (
-    echo [!] Rust/Cargo still not available after install attempt.
-    goto FallbackDownload
+    echo [!] Rust still not available. Restart this launcher once.
+    pause
+    exit /b 1
 )
 
-rem ---- 7. Install node packages if missing ----
+rem ---- npm install ----
 if not exist "node_modules\" (
-    echo.
-    echo [*] Installing node dependencies ^(npm install^) - progress below:
+    echo [*] Installing dependencies...
     echo ----------------------------------------------
     call npm install
+    if errorlevel 1 (
+        echo [!] npm install failed - check the log above.
+        pause
+        exit /b 1
+    )
     echo ----------------------------------------------
 )
 
-echo.
-echo [+] All dependencies ready. Starting ECHO dev server...
-echo [*] Keep this window open while ECHO is running.
-echo.
-call npm run tauri dev
-echo.
-echo [*] ECHO closed.
-exit /b 0
-
-:FallbackDownload
-echo.
-echo [!] Dev environment incomplete. Downloading standalone ECHO.exe instead...
+rem ---- Build the release exe (one time) ----
+echo [*] Building ECHO ^(release^) - takes a few minutes the first time...
 echo ----------------------------------------------
-powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = ""$env:LOCALAPPDATA\ECHO""; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO.exe' -OutFile ""$dir\ECHO.exe"" -UseBasicParsing; Write-Host '[+] Download complete!' } catch { Write-Host '[!] Could not download ECHO.exe' }"
-echo ----------------------------------------------
-
-if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
-    echo [+] Launching standalone ECHO...
-    start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
-    exit /b 0
+call npm run tauri build
+if errorlevel 1 (
+    echo [!] Build failed - check the log above.
+    pause
+    exit /b 1
 )
+echo ----------------------------------------------
 
-echo [!] Unable to start ECHO automatically. Please install Node.js ^(https://nodejs.org^) and Rust ^(https://rustup.rs^) manually.
+if exist "src-tauri\target\release\ECHO.exe" (
+    echo [+] Build complete. Launching ECHO...
+    start "" "src-tauri\target\release\ECHO.exe"
+    goto Done
+)
+echo [!] Build finished but ECHO.exe was not found.
 pause
 exit /b 1
+
+rem =====================================================================
+:DevServer
+echo [*] Dev mode: npm run tauri dev ^(console stays open^).
+set "PATH=C:\Program Files\nodejs;%USERPROFILE%\.cargo\bin;%PATH%"
+if not exist "node_modules\" call npm install
+call npm run tauri dev
+exit /b 0
+
+:Done
+echo.
+echo [+] Dante is on your taskbar. This window closes itself.
+timeout /t 3 >nul
+exit /b 0

@@ -114,15 +114,22 @@ fn any_typing_key_down() -> bool {
 fn spawn_typing(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_emit = Instant::now() - Duration::from_secs(60);
+        let mut last_key = Instant::now() - Duration::from_secs(60);
         let mut ticks: u64 = 0;
         let mut seen_any = false;
         clog("typing watcher started (win32)");
         loop {
             std::thread::sleep(Duration::from_millis(120));
             ticks += 1;
-            // Either signal counts: a key held right now, or the OS reporting
-            // input within the last ~700 ms (catches fast typing between polls).
-            let active = any_typing_key_down() || idle_ms() < 700;
+            // idle_ms() counts MOUSE input too, so alone it would put the laptop
+            // out on every scroll. Anchor on a real typing key; idle_ms then only
+            // bridges fast typing between polls.
+            let key_now = any_typing_key_down();
+            if key_now {
+                last_key = Instant::now();
+            }
+            let active =
+                key_now || (last_key.elapsed() < Duration::from_secs(2) && idle_ms() < 700);
             if active {
                 if !seen_any {
                     seen_any = true;
@@ -156,7 +163,15 @@ const GAMES: &[&str] = &[
 
 fn read_dns() -> HashSet<String> {
     let mut set = HashSet::new();
-    let Ok(out) = Command::new("ipconfig").arg("/displaydns").output() else {
+    let mut cmd = Command::new("ipconfig");
+    cmd.arg("/displaydns");
+    // CREATE_NO_WINDOW — without it this 10s poll flashes a console frame.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let Ok(out) = cmd.output() else {
         return set;
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -267,17 +282,26 @@ fn spawn_dns(app: AppHandle) {
             }
             seen = now;
 
-            // 2) Window titles (catches browser tabs — YouTube etc.), edge-triggered
+            // 2) Window titles (catches browser tabs — YouTube etc.), edge-triggered.
+            // Log WHICH title matched — substring matching is trigger-happy (a
+            // folder named "steam stuff" counts), so false positives must be
+            // diagnosable from the log.
             let titles = window_titles();
-            let media_now = titles.iter().any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
-            let game_now = titles.iter().any(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
+            let media_hit = titles
+                .iter()
+                .find(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
+            let game_hit = titles
+                .iter()
+                .find(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
+            let media_now = media_hit.is_some();
+            let game_now = game_hit.is_some();
             if media_now && !had_media {
                 fire_media = true;
-                clog("media window detected");
+                clog(&format!("media window detected: {:?}", media_hit.unwrap()));
             }
             if game_now && !had_game {
                 fire_game = true;
-                clog("game window detected");
+                clog(&format!("game window detected: {:?}", game_hit.unwrap()));
             }
             had_media = media_now;
             had_game = game_now;
