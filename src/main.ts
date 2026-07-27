@@ -348,6 +348,9 @@ const LAUGH = clip("laugh", 130, false);
 // touch longer, like dancing on a beat instead of fast-forward.
 const DANCE = clip("dance", 125, true, 0);
 DANCE.msSeq = [125, 125, 125, 125, 135, 175, 135, 135, 185];
+// Alternate dance: the fist-pump headbang (seamless loop; hit on frame 4).
+const HEADBANG = clip("headbang", 120, true, 0, 9);
+HEADBANG.msSeq = [130, 120, 110, 100, 150, 100, 110, 120, 130];
 // Signature beats: Devil-Trigger power pose (level up), gun-spin + taunt
 // (Jackpot follow-through). Check-watch joins the idle rotation below.
 const DEVIL = clip("devil", 90, true, 8);
@@ -523,15 +526,37 @@ function beatReady(): boolean {
   return !!home && !gagActive && !showcasing && !away && !returning && !wandering && !committed();
 }
 
+// Sword combo joins the gaming rotation the moment its art exists
+// (public/pixel/sword/frame_0..7 — see scripts/gen_anim.py). Probed at boot;
+// while the art is missing it's guns only.
+// Sword beat: the greatsword flashes into his hands, ONE hard slash with a
+// blur arc, then it dissolves into sparks and he's back to standing — the
+// blade never lingers. Anticipation slow, slash fast, dissolve eases out.
+const SWORD = clip("swordflash", 100, true, 0, 11);
+SWORD.msSeq = [150, 140, 120, 80, 70, 60, 60, 90, 120, 140, 160];
+let swordReady = false;
+{
+  const probe = new Image();
+  probe.onload = () => (swordReady = true);
+  probe.src = SWORD.frames[0];
+}
+
 async function gamingAmbience() {
   if (!beatReady() || stage.dataset.state !== "idle") return;
-  const spins = 2 + Math.floor(Math.random() * 2); // 2–3 spins
+  const loops = 2 + Math.floor(Math.random() * 2); // 2–3 loops
   gagActive = true;
   try {
     await standUp();
-    curClip = GUNSPIN;
-    frameIdx = 0;
-    await sleep(GUNSPIN.frames.length * GUNSPIN.ms * spins);
+    if (swordReady && Math.random() < 0.5) {
+      // One flash-slash per beat — rare and punchy beats looping it.
+      curClip = SWORD;
+      frameIdx = 0;
+      await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0));
+    } else {
+      curClip = GUNSPIN;
+      frameIdx = 0;
+      await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
+    }
   } finally {
     gagActive = false;
     setState("idle"); // sits back down, legs swinging
@@ -1478,9 +1503,9 @@ async function danceScene(durationMs?: number) {
   try {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
-    // smooth bridge: stand up, then dance
+    // smooth bridge: stand up, then dance — classic moves or the headbang
     await standUp();
-    curClip = DANCE;
+    curClip = Math.random() < 0.5 ? HEADBANG : DANCE;
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
     const loop = DANCE.frames.length * DANCE.ms;

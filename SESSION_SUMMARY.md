@@ -54,9 +54,11 @@ These cost hours. Don't rediscover them.
 11. `commit.gpgsign=true` + `pinentry-mode loopback` = commits fail in
     non-interactive sessions. User caches passphrase (`echo test | gpg
     --clearsign`) or explicitly asks for `-c commit.gpgsign=false`.
-12. PixelLab REST caps animate at 64x64 (sprites are 84x107) and the balance
-    is **$0.00** — no art generation until topped up. The v3/larger-size
-    endpoint knowledge died with an old chat; document it when rediscovered.
+12. Art generation: `POST https://api.pixellab.ai/v2/animate-with-text-v3`
+    (max 256x256 — our 84x107 fits; 4-16 EVEN frames; ~$0.02/gen; async via
+    `/background-jobs/{id}`). Committed pipeline: `scripts/gen_anim.py`.
+    The old v1 `/animate-with-text` is hard-capped at 64x64 — don't use it.
+    Balance check: `GET /v2/balance` with the Bearer key from `.env`.
 
 ---
 

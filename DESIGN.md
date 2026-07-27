@@ -216,3 +216,39 @@ it in the order that keeps ECHO runnable at every step.
 
 **Rule: P1→P2 is the next build, in that order. P5+ waits until P3 (living with
 it) says he needs it. Everything is explainable via the logged state vector.**
+
+---
+
+## 8. v3 direction — "make him feel alive" (director review, 2026-07-27)
+
+External animation-director review verdict: concept 10/10, execution "a
+collection of animations, not a living character." The one-line brief:
+**stop adding features; make every existing action breathe, hesitate, carry
+weight, and occasionally surprise.** Adopted roadmap:
+
+**Phase 1 — motion quality (next):**
+- Anticipation before EVERY action (bend-pause-act), not just scenes.
+- Weight: no pose teleports — sit = down/bounce/settle, stand = lean/push/rise.
+- Reaction pools with real odds, including "no reaction" (~20%): predictability
+  kills the illusion. Success ≠ always cheer.
+- Idle as the masterpiece: overlapping micro-behaviors (blink, breathing,
+  coat sway, finger tap, sigh) layered, not one clip at a time.
+
+**Phase 2 — mood & memory:** the life vector (§6b) must VISIBLY drive
+reactions — same event, different response depending on mood; frustration and
+boredom arcs users can narrate ("he got bored", not "the timer expired").
+
+**Phase 3 — environment:** time-of-day energy, CPU/compile awareness (long
+build → arms crossed), music awareness beyond titles (Windows media session
+API — sees background-tab playback, fixes tab-switch blindness), battery,
+cursor proximity.
+
+**Phase 4 — discovery & rarity:** hour-20 idle, hour-50 voice line, hour-100
+scene; extremely rare one-offs (coin toss, pizza, fourth-wall stare). Never
+listed anywhere — found, screenshotted, shared.
+
+**Anti-goals (traps):** combat, RPG systems, achievements, settings with 400
+toggles, more one-shot features before Phase 1 lands.
+
+**Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
+chair creak, holster click) instead of adding louder effects.
