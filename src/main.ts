@@ -221,6 +221,95 @@ function sfxIgnite() {
   src.connect(lp).connect(g).connect(dest());
   src.start(t);
 }
+// ---- M1.6 sound floor: near-inaudible layers, felt more than heard --------
+// One shared gain so a future config mute kills the whole floor with one dial.
+let floorGain: GainNode | null = null;
+function floorDest(): AudioNode {
+  const a = actx as AudioContext;
+  if (!floorGain) {
+    floorGain = a.createGain();
+    floorGain.gain.value = 0.45;
+    floorGain.connect(dest());
+  }
+  return floorGain;
+}
+// Boot scuff: one soft footfall.
+function sfxScuff() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.06), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 420;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.14, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+  src.connect(lp).connect(g).connect(floorDest());
+  src.start(t);
+}
+// Chair creak on sitting down.
+function sfxCreak() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const o = a.createOscillator();
+  o.type = "sawtooth";
+  o.frequency.setValueAtTime(176, t);
+  o.frequency.exponentialRampToValueAtTime(118, t + 0.22);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.09, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+  o.connect(g).connect(floorDest());
+  o.start(t);
+  o.stop(t + 0.25);
+}
+// Cloth rustle on standing up.
+function sfxRustle() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.16), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length) * 0.8;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const hp = a.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 1800;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.1, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+  src.connect(hp).connect(g).connect(floorDest());
+  src.start(t);
+}
+// Holster click after a gun spin: two tiny snaps.
+function sfxHolster() {
+  const a = ac();
+  if (!a) return;
+  for (const off of [0, 0.07]) {
+    const t = a.currentTime + off;
+    const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.02), a.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    const src = a.createBufferSource();
+    src.buffer = buf;
+    const bp = a.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 2600;
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.16, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.02);
+    src.connect(bp).connect(g).connect(floorDest());
+    src.start(t);
+  }
+}
+
 // Ember fizz (the sword dissolving): quiet sparse crackle fading out.
 function sfxEmberFizz() {
   const a = ac();
@@ -477,14 +566,24 @@ const WALK = clip("sidewalk", 110, true, 0, 8);
 // every transition — no flicker back to idle mid-sequence.
 // Error gag: falls, then climbs back up. Slower ms so both read clearly.
 const FALLING = clip("falling", 110, true, 8);
+// Physics: a fall accelerates, then the held frame is the crash.
+FALLING.msSeq = [70, 65, 60, 60, 65, 75, 90, 110, 140];
 const CLIMB = clip("climb", 120, true, 8);
+// Climbing is EFFORT — heavy pulls easing only at the top.
+CLIMB.msSeq = [160, 150, 140, 130, 120, 110, 100, 95, 130];
 // Success "Jackpot" gun-shoot.
 const SHOOT = clip("shoot", 95, true, 8);
+// Fast draw, a beat of aim, the shot holds.
+SHOOT.msSeq = [80, 70, 60, 55, 120, 60, 70, 90, 160];
 // Stand -> sit transition (on arrival), the standing "stand tall" arrival beat,
 // and an occasional seated laugh.
 const SITDOWN = clip("sitpanel", 190, false);
+// Weight: sitting decelerates into the settle.
+SITDOWN.msSeq = [140, 150, 160, 175, 190, 205, 220, 240, 260];
 const STAND_CROSS = clip("sit", 200, false); // standing, arms crossed
+STAND_CROSS.msSeq = [150, 160, 170, 185, 200, 215, 230, 245, 260];
 const LAUGH = clip("laugh", 130, false);
+LAUGH.msSeq = [110, 100, 90, 90, 100, 110, 120, 130, 150];
 // Star-milestone celebration: a standing dance (loops for the scene's duration).
 // Beat-accented: the choreography hits (arms-up frame 5, wave frame 8) hold a
 // touch longer, like dancing on a beat instead of fast-forward.
@@ -496,8 +595,13 @@ HEADBANG.msSeq = [130, 120, 110, 100, 150, 100, 110, 120, 130];
 // Signature beats: Devil-Trigger power pose (level up), gun-spin + taunt
 // (Jackpot follow-through). Check-watch joins the idle rotation below.
 const DEVIL = clip("devil", 90, true, 8);
+// The power rises: each frame lands harder, the pose HOLDS.
+DEVIL.msSeq = [130, 110, 90, 75, 65, 60, 60, 70, 140];
 const GUNSPIN = clip("gunspin", 85, true, 8);
+// The spin accelerates into a snap-stop.
+GUNSPIN.msSeq = [120, 105, 90, 75, 65, 58, 54, 50, 60];
 const TAUNT = clip("taunt", 100, true, 8);
+TAUNT.msSeq = [120, 100, 85, 80, 85, 95, 105, 115, 130];
 const TYPING = clip("typing", 110, false, 0); // laptop OUT — a transition, plays once
 // Physics: a reach starts quick and settles slow — ease-out, never linear.
 TYPING.msSeq = [90, 90, 95, 100, 110, 125, 145, 175, 220];
@@ -513,7 +617,11 @@ const TYPETAP: Clip = {
 };
 // Light win/error reactions (every event) — a quick visible pose.
 const CHEER = clip("cheer", 90, true, 8);
+// Anticipation dip before the jump, then quick joy.
+CHEER.msSeq = [140, 150, 70, 60, 60, 70, 80, 90, 110];
 const STAGGER = clip("stagger", 85, true, 8);
+// The IMPACT frame holds — that's where the hit reads.
+STAGGER.msSeq = [60, 55, 170, 80, 80, 90, 100, 110, 120];
 // Idle = a WEIGHTED, never-repeat rotation of seated poses (planner.pickIdle),
 // with weights bent by his mood — bored → checks watch, low energy → yawns/naps,
 // confident → leans back. Each pose plays, he rests still, then a DIFFERENT pose.
@@ -588,6 +696,28 @@ function onContext(kind: string) {
     }
     return;
   }
+  // M1.5: he glances toward your cursor when it wanders near — quiet moments
+  // only, cleared after a beat. Zones come pre-hysteresis'd from context.rs.
+  if (kind === "cursor_left" || kind === "cursor_right") {
+    if (
+      stage.dataset.state === "idle" &&
+      !gagActive &&
+      !showcasing &&
+      !introActive &&
+      Date.now() >= typingUntil
+    ) {
+      stage.dataset.facing = kind === "cursor_left" ? "left" : "right";
+      window.clearTimeout(cursorGlance);
+      cursorGlance = window.setTimeout(() => {
+        if (!gagActive && !showcasing) delete stage.dataset.facing;
+      }, 2400);
+    }
+    return;
+  }
+  if (kind === "cursor_far") {
+    if (!gagActive && !showcasing && !introActive) delete stage.dataset.facing;
+    return;
+  }
   // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing off.
   if (kind === "demo_devil") {
     devilTriggerScene();
@@ -651,6 +781,7 @@ function onContext(kind: string) {
 // a fall+climb.
 // Typing keeps going while you keep typing; each key event pushes this out.
 let typingUntil = 0;
+let cursorGlance = 0;
 function tickTyping() {
   window.setTimeout(() => {
     if (curClip !== TYPING && curClip !== TYPETAP) return; // something else took over
@@ -718,11 +849,13 @@ let swordReady = false;
 async function playSwordMove() {
   curClip = SWORD;
   frameIdx = 0;
-  window.setTimeout(sfxIgnite, 550); // embers gather
-  window.setTimeout(sfxSlashWhoosh, 1990); // strike 1
-  window.setTimeout(sfxSlashWhoosh, 2580); // strike 2
-  window.setTimeout(sfxEmberFizz, 3450); // the sword burns away
-  await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0));
+  // Sound offsets scale with the mood pace or the whooshes drift off-frame.
+  const p = paceMul();
+  window.setTimeout(sfxIgnite, 550 * p); // embers gather
+  window.setTimeout(sfxSlashWhoosh, 1990 * p); // strike 1
+  window.setTimeout(sfxSlashWhoosh, 2580 * p); // strike 2
+  window.setTimeout(sfxEmberFizz, 3450 * p); // the sword burns away
+  await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0) * p);
 }
 
 // Demo path: the sword move outside the gaming mood (guards itself).
@@ -749,6 +882,7 @@ async function gamingAmbience() {
     curClip = GUNSPIN;
     frameIdx = 0;
     await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
+    sfxHolster();
   } finally {
     gagActive = false;
     setState("idle"); // sits back down, legs swinging
@@ -845,11 +979,17 @@ function playWalk() {
   frameIdx = 0;
 }
 
+// M1.4: mood pace — tired Dante plays every clip a touch slower, fresh Dante
+// snappier. CLIP playback only; window tweens keep real time or walks drift.
+function paceMul(): number {
+  return Math.min(1.12, Math.max(0.88, 1.14 - life.v.energy * 0.26));
+}
+
 let curClip: Clip = ANIMS.idle;
 let frameIdx = 0;
 function frameLoop() {
   sprite.src = curClip.frames[frameIdx];
-  const shownMs = curClip.msSeq?.[frameIdx] ?? curClip.ms;
+  const shownMs = (curClip.msSeq?.[frameIdx] ?? curClip.ms) * paceMul();
   frameIdx++;
   if (frameIdx >= curClip.frames.length) {
     if (curClip.loop) {
@@ -906,8 +1046,12 @@ function setState(state: State) {
   // Working states cycle through several poses instead of repeating one.
   if (state === "coding" || state === "searching" || state === "speaking") {
     if (prev !== state) workIdx = (workIdx + 1) % WORK_POSES.length;
-    const name = WORK_POSES[workIdx];
+    // Cocky Dante taunts more (M1.4: the mood shows).
+    const name =
+      life.v.cockiness > 0.65 && Math.random() < 0.3 ? "taunt" : WORK_POSES[workIdx];
     curClip = clip(name, name === "gunspin" ? 90 : 200, true, name === "gunspin" ? 0 : 8);
+    if (name === "gunspin") curClip.msSeq = GUNSPIN.msSeq; // keep the snap-stop curve
+    if (name === "taunt") curClip.msSeq = TAUNT.msSeq;
   } else {
     curClip = ANIMS[state] ?? ANIMS.idle;
   }
@@ -1011,15 +1155,104 @@ const SHRUG_LINES = ["Pff.", "Doesn't count."];
 async function standUp(): Promise<void> {
   if (!home) return;
   cancelAnimationFrame(winTween);
+  window.clearTimeout(postureSettle); // a pending sit-settle must not drop him mid-stand
   delete stage.dataset.facing;
   afterClip = null;
   seatedNow = false; // scenes stand regardless of the dwell
   postureChangedAt = Date.now();
+  sfxRustle();
+  await sleep(70); // a lean beat — bodies don't launch
   moveWindowY(home.y, 350);
   await sleep(380);
 }
 
 // Light win: stand up, quick arms-up cheer, a smirk. VISIBLE on every win.
+// M1.3: reaction pools — the same event doesn't always get the same answer,
+// and ~20% of the time the answer is nothing at all. Every pick is logged.
+function pickWeighted(items: Array<[string, number]>): string {
+  let sum = 0;
+  for (const [, w] of items) sum += w;
+  let r = Math.random() * sum;
+  for (const [k, w] of items) {
+    r -= w;
+    if (r <= 0) return k;
+  }
+  return items[0][0];
+}
+
+function reactWin() {
+  const pick = pickWeighted([
+    ["cheer", 0.3],
+    ["flourish", 0.12 + life.v.cockiness * 0.18],
+    ["laugh", 0.15],
+    ["line", 0.2],
+    ["nothing", 0.15 + life.v.focus * 0.15],
+  ]);
+  dbg(`react=win:${pick}`);
+  if (pick === "cheer") void lightWin();
+  else if (pick === "flourish") void gunFlourish();
+  else if (pick === "laugh") laughBeat();
+  else if (pick === "line") showBubble(pickLine(WIN_LINES), PRIO.NOTABLE);
+  // nothing: the win still counted — he just doesn't perform it
+}
+
+function reactError() {
+  // Low patience forces the cold treatment — anger is quiet.
+  const pick =
+    life.v.patience < 0.3
+      ? "cold"
+      : pickWeighted([
+          ["stagger", 0.35],
+          ["cold", 0.2],
+          ["watch", 0.2],
+          ["nothing", 0.25],
+        ]);
+  dbg(`react=err:${pick}`);
+  if (pick === "stagger") void lightError();
+  else if (pick === "cold") coldError();
+  else if (pick === "watch") annoyedWatch();
+}
+
+// The cold treatment: no stagger, no sound, no shake — arms crossed, silence.
+function coldError() {
+  if (!home || gagActive) return;
+  stage.dataset.state = "error";
+  document.documentElement.style.setProperty("--accent", ACCENT.error);
+  commitFor(1900);
+  curClip = seatedNow ? idleClip("sitcross") : STAND_CROSS;
+  frameIdx = 0;
+}
+
+// Seated annoyed watch-check with a shrug line.
+function annoyedWatch() {
+  if (!home || gagActive || !seatedNow) return void lightError();
+  stage.dataset.state = "error";
+  document.documentElement.style.setProperty("--accent", ACCENT.error);
+  commitFor(1700);
+  curClip = idleClip("checkwatch");
+  frameIdx = 0;
+  showBubble(pickLine(SHRUG_LINES), PRIO.NOTABLE);
+}
+
+// A single show-off gun spin with a holster click — the cocky win reaction.
+async function gunFlourish() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+    curClip = GUNSPIN;
+    frameIdx = 0;
+    await sleep(GUNSPIN.msSeq!.reduce((a, b) => a + b, 0) * paceMul());
+    sfxHolster();
+    await sleep(180);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
 async function lightWin() {
   if (!home || gagActive) return;
   gagActive = true;
@@ -1137,7 +1370,7 @@ function applyEvent(e: AgentEvent) {
       showBubble("Come on, seriously?", PRIO.MAJOR);
       diveGag(); // patience gone -> full breakdown
     } else {
-      lightError(); // shrug it off
+      reactError(); // M1.3: pooled — stagger, cold silence, watch-check, or nothing
     }
     scheduleIdle();
     return;
@@ -1168,7 +1401,7 @@ function applyEvent(e: AgentEvent) {
       budgetScene("jackpot");
       shootScene(); // on a roll -> Jackpot
     } else {
-      lightWin(); // small win -> light beat
+      reactWin(); // M1.3: pooled — cheer, flourish, laugh, a line, or nothing
     }
     scheduleIdle();
     return;
@@ -1255,9 +1488,19 @@ function posture(state: string, force = false) {
   }
   seatedNow = seated;
   postureChangedAt = Date.now();
-  // Lower slowly while the sit-down clip plays; stand up snappily.
-  moveWindowY(targetY, seated ? 900 : 400);
+  window.clearTimeout(postureSettle);
+  if (seated) {
+    // Weight: drop a touch PAST the seat, then settle up — bodies bounce.
+    sfxCreak();
+    moveWindowY(targetY + 5, 760);
+    postureSettle = window.setTimeout(() => {
+      if (seatedNow && home) moveWindowY(home.sitY, 200);
+    }, 800);
+  } else {
+    moveWindowY(targetY, 400);
+  }
 }
+let postureSettle = 0;
 
 // Slide the OS window from its current X to toX at a walking pace (px/sec),
 // so the speed is realistic regardless of distance.
@@ -1267,6 +1510,8 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
   const fromX = h.lastX;
   const dur = Math.max(500, (Math.abs(toX - fromX) / pace) * 1000);
   const t0 = performance.now();
+  // Boot scuffs on the footfall cadence while he walks (sound floor).
+  const scuffs = window.setInterval(sfxScuff, 440);
   return new Promise<void>((resolve) => {
     const step = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
@@ -1278,7 +1523,10 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
       h.lastX = x;
       h.lastY = h.y; // walking happens standing
       if (p < 1) requestAnimationFrame(step);
-      else resolve();
+      else {
+        window.clearInterval(scuffs);
+        resolve();
+      }
     };
     requestAnimationFrame(step);
   });
@@ -1455,6 +1703,7 @@ async function diveGag() {
     document.documentElement.style.setProperty("--accent", ACCENT.error);
     // smooth bridge: stand up first, then the gag starts
     await standUp();
+    await sleep(260 + Math.random() * 140); // anticipation — the beat before
     // 1) fall — flails in place, dips down a little (stays FULLY on-screen)
     curClip = FALLING;
     frameIdx = 0;
@@ -1489,6 +1738,7 @@ async function shootScene(shots = 1) {
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     // smooth bridge: stand up, then draw
     await standUp();
+    await sleep(260 + Math.random() * 140); // the calm before the draw
     // anticipation — draw and hold a beat (the calm before)
     curClip = SHOOT;
     frameIdx = 0;
@@ -1503,11 +1753,13 @@ async function shootScene(shots = 1) {
       await sleep(i === Math.max(1, shots) - 1 ? 800 : 420); // hold the last shot
     }
     stage.classList.remove("shooting");
-    // follow-through: spin the gun, or turn and taunt the user (4th wall)
-    if (Math.random() < 0.5) {
+    // follow-through: spin the gun; the 4th-wall taunt is now RARE (M1.7) —
+    // at 5% it becomes the moment people screenshot, not the expected beat.
+    if (Math.random() < 0.95) {
       curClip = GUNSPIN;
       frameIdx = 0;
       await sleep(GUNSPIN.frames.length * GUNSPIN.ms);
+      sfxHolster();
     } else {
       curClip = TAUNT;
       frameIdx = 0;
@@ -1716,13 +1968,17 @@ async function danceScene(durationMs?: number) {
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     // smooth bridge: stand up, then dance — classic moves or the headbang
     await standUp();
+    await sleep(240 + Math.random() * 120); // a breath before the first move
     curClip = Math.random() < 0.5 ? HEADBANG : DANCE;
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
     const loop = DANCE.frames.length * DANCE.ms;
     // one beat-shake at the start, then let the dance speak for itself
     shake(250);
-    await sleep(durationMs ?? loop * 3); // media sessions dance longer
+    // M1.7: 1% of milestone dances run double length — a discovery, not a habit.
+    const rare = !durationMs && Math.random() < 0.01;
+    if (rare) dbg("rare: double-length dance");
+    await sleep(durationMs ?? loop * (rare ? 6 : 3));
   } finally {
     gagActive = false;
     setState("idle");
@@ -1738,6 +1994,7 @@ async function devilTriggerScene() {
     document.documentElement.style.setProperty("--accent", ACCENT.error);
     // smooth bridge: stand up, then transform
     await standUp();
+    await sleep(300 + Math.random() * 150); // the stillness before the power
     curClip = DEVIL;
     frameIdx = 0;
     levelUpFlash(); // red sprite glow + vignette + aura + shake
@@ -1750,6 +2007,29 @@ async function devilTriggerScene() {
   }
 }
 
+// M1.5: breathing — a 1px sine on a wrapper div so it never fights the
+// sprite's own transforms (facing flip, scene keyframes). Pauses when a scene
+// owns the stage; the period stretches when his energy is low.
+function startBreathing() {
+  const wrap = document.createElement("div");
+  wrap.style.display = "flex";
+  wrap.style.alignItems = "flex-end";
+  wrap.style.justifyContent = "center";
+  sprite.parentElement!.insertBefore(wrap, sprite);
+  wrap.appendChild(sprite);
+  const step = (now: number) => {
+    const busy = gagActive || showcasing || introActive || wandering || away || returning;
+    if (busy) {
+      wrap.style.transform = "";
+    } else {
+      const period = 2600 + (1 - life.v.energy) * 1600;
+      wrap.style.transform = `translateY(${Math.round(Math.sin((now / period) * Math.PI * 2))}px)`;
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 async function main() {
   // Click-through overlay: mouse passes to the desktop, no one can grab Dante.
   if (isTauri) {
@@ -1760,6 +2040,7 @@ async function main() {
 
   void initVoiceFiles(); // pick up any ~/.echo/voice/*.wav the user dropped in
   void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
+  startBreathing(); // M1.5: the constant tier — he's never a statue again
 
   try {
     applyEvent(await invoke<AgentEvent>("get_state"));
@@ -1789,7 +2070,9 @@ async function main() {
   // Signature hourly moment: Devil Trigger once an hour. Checked every 2 min so
   // a busy/away moment only DELAYS it instead of skipping the whole hour, and
   // the clock persists across relaunches (rebuilds used to reset it forever).
-  const DEVIL_EVERY = 60 * 60 * 1000;
+  // M1.7: rare = precious. Once per ~14 h of companionship, not hourly.
+  // (The 10-min GAMING Devil Trigger cadence is separate and stays.)
+  const DEVIL_EVERY = 14 * 60 * 60 * 1000;
   let lastDevil = Number(localStorage.getItem("echo.lastDevil") || 0);
   if (!lastDevil || lastDevil > Date.now()) {
     lastDevil = Date.now();
@@ -1801,7 +2084,7 @@ async function main() {
     if (stage.dataset.state !== "idle") return;
     lastDevil = Date.now();
     localStorage.setItem("echo.lastDevil", String(lastDevil));
-    dbg("hourly devil trigger");
+    dbg("devil trigger (14h clock)");
     devilTriggerScene();
   }, 120_000);
 

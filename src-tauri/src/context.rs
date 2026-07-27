@@ -117,6 +117,7 @@ fn spawn_typing(app: AppHandle) {
         let mut last_key = Instant::now() - Duration::from_secs(60);
         let mut ticks: u64 = 0;
         let mut seen_any = false;
+        let mut last_zone: u8 = 0;
         clog("typing watcher started (win32)");
         loop {
             std::thread::sleep(Duration::from_millis(120));
@@ -146,6 +147,19 @@ fn spawn_typing(app: AppHandle) {
                     "typing watcher alive (seen_any={seen_any} idle_ms={})",
                     idle_ms()
                 ));
+            }
+            // M1.5: cursor proximity -> glance events, zone-crossings only.
+            if ticks % 4 == 0 {
+                let z = cursor_zone(last_zone != 0);
+                if z != last_zone {
+                    last_zone = z;
+                    let kind = match z {
+                        1 => "cursor_left",
+                        2 => "cursor_right",
+                        _ => "cursor_far",
+                    };
+                    let _ = app.emit("context-event", ContextEvent { kind });
+                }
             }
             // Demo hook: `echo sword > ~/.echo/demo` (or devil / poster) plays
             // that scene on demand — for demos and visual QA.
@@ -240,6 +254,41 @@ extern "system" {
     fn MonitorFromWindow(hwnd: isize, flags: u32) -> isize;
     fn GetMonitorInfoW(mon: isize, info: *mut MonitorInfo) -> i32;
     fn GetClassNameW(hwnd: isize, buf: *mut u16, max: i32) -> i32;
+    fn GetCursorPos(pt: *mut [i32; 2]) -> i32;
+    fn GetSystemMetrics(index: i32) -> i32;
+}
+
+/// M1.5 cursor glances: 0 = far, 1 = near & left of him, 2 = near & right.
+/// "Him" is approximated as the bottom-right screen corner (his home spot).
+/// Hysteresis so the boundary never chatters.
+#[cfg(windows)]
+fn cursor_zone(was_near: bool) -> u8 {
+    unsafe {
+        let mut pt = [0i32; 2];
+        if GetCursorPos(&mut pt) == 0 {
+            return 0;
+        }
+        let sw = GetSystemMetrics(0);
+        let sh = GetSystemMetrics(1);
+        let hx = sw - 140; // his sprite's rough centre
+        let hy = sh - 160;
+        let dx = (pt[0] - hx) as f64;
+        let dy = (pt[1] - hy) as f64;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let limit = if was_near { 470.0 } else { 390.0 };
+        if dist > limit {
+            0
+        } else if pt[0] < hx {
+            1
+        } else {
+            2
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn cursor_zone(_was_near: bool) -> u8 {
+    0
 }
 
 #[cfg(windows)]
