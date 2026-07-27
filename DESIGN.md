@@ -397,5 +397,29 @@ budgets, busy-burst silence); every decision logs; no timer-driven spectacle
 without an earned/contextual gate; mocks before generations; the user's
 machine is ground truth — capture-verify anything visual.**
 
+---
+
+## 10. Advisor's cut — what to change in EXISTING animations (post-M4)
+
+Ranked by how often the user sees the flaw:
+1. **sidewalk (walk)** — most-seen transition, uniform timing, feet slide.
+   First candidate for a regen when gens return; until then a contact-frame
+   msSeq pass.
+2. **Canvas mismatch** — typing set is 84x107, everything newer is 97x128:
+   he SHRINKS slightly when the laptop comes out (height-normalized render
+   scales the canvas, not the character). Normalize old sets onto 97x128.
+3. **cheer** — generic arms-up; the least Dante-flavored clip. Replace
+   eventually with a gun-twirl-point (reference: his win poses).
+4. **speaking=taunt overuse** — taunt doubles as work pose and speaking;
+   a dedicated "explaining" gesture would free it to be cocky again.
+5. **classic dance** — now the weaker of the two dances; consider demoting
+   it to rare and letting headbang lead.
+
+**Feature shortlist beyond §9** (post-M4, in this order): Windows
+media-session API (kills tab-blindness, ~a day); rare multi-monitor
+relocation (§6b promise, still unbuilt); battery/CPU awareness feeding the
+life vector (compile -> arms crossed, low battery -> yawns); a single tray
+toggle for quiet mode (NOT a settings page).
+
 **Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
 chair creak, holster click) instead of adding louder effects.
