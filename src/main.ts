@@ -45,7 +45,7 @@ const IDLE_AFTER_MS = 6000;
 // Minimum time a fast/transient state stays on screen before a newer event can
 // replace it — otherwise thinking/speaking get clobbered within milliseconds
 // (each JSONL block is its own line) and you never see them.
-const MIN_HOLD: Record<string, number> = { thinking: 2200, speaking: 1200 };
+const MIN_HOLD: Record<string, number> = { thinking: 2200, speaking: 1200, coding: 1600, searching: 1600 };
 const isTauri = "__TAURI_INTERNALS__" in window;
 
 // Diagnostics -> ~/.echo/echo-fe.log (his overlay can't be screenshotted).
@@ -304,6 +304,9 @@ interface Clip {
   ms: number;
   loop: boolean;
   settle: number; // after the first full pass, loop back to THIS frame (not 0)
+  // Per-frame durations (same length as frames). Nothing organic moves at a
+  // constant rate — reaches ease out, taps come in bursts. Falls back to ms.
+  msSeq?: number[];
 }
 const clip = (name: string, ms: number, loop: boolean, settle = 0, count = 9): Clip => ({
   frames: Array.from({ length: count }, (_, i) => `/pixel/${name}/frame_${i}.png?v=15`),
@@ -346,6 +349,19 @@ const DANCE = clip("dance", 110, true, 0);
 const DEVIL = clip("devil", 90, true, 8);
 const GUNSPIN = clip("gunspin", 85, true, 8);
 const TAUNT = clip("taunt", 100, true, 8);
+const TYPING = clip("typing", 110, false, 0); // laptop OUT — a transition, plays once
+// Physics: a reach starts quick and settles slow — ease-out, never linear.
+TYPING.msSeq = [90, 90, 95, 100, 110, 125, 145, 175, 220];
+// Typing is BURSTY, not a metronome: a run of taps, a beat, another run, then a
+// longer "reading what he wrote" pause. 0=rest, 1=right tap, 3=left tap.
+const tt = (n: number) => `/pixel/typetap/frame_${n}.png?v=15`;
+const TYPETAP: Clip = {
+  frames: [tt(1), tt(3), tt(1), tt(0), tt(3), tt(1), tt(3), tt(0)],
+  ms: 120,
+  msSeq: [110, 110, 120, 350, 110, 110, 120, 700],
+  loop: true,
+  settle: 0,
+};
 // Light win/error reactions (every event) — a quick visible pose.
 const CHEER = clip("cheer", 90, true, 8);
 const STAGGER = clip("stagger", 85, true, 8);
@@ -385,7 +401,145 @@ let afterClip: (() => void) | null = null;
   DEVIL,
   GUNSPIN,
   TAUNT,
+  TYPING,
+  TYPETAP,
 ].forEach((c) => c.frames.forEach((s) => (new Image().src = s)));
+
+// Context awareness (from the Rust context watcher): you typing -> he types;
+// opening video/music -> a dance; launching a game -> he shoots. Rate-limited
+// by the same scene budget so a long session doesn't spam.
+function onContext(kind: string) {
+  dbg(`context ${kind}`);
+  lastActivity = Date.now(); // you're active on the machine, so he stays present
+  if (!home || gagActive || showcasing || returning || wandering || away) return;
+  if (kind === "typing") {
+    // Never mid-walk-in, and only once he's home in his corner.
+    if (introActive) return;
+    if (Math.abs(home.lastX - home.cornerX) > 4) return; // not settled yet
+    // YOU typing outranks ambient AI poses — he sits down and works with you.
+    typingUntil = Date.now() + 9000; // each keystroke extends the session
+    if (curClip !== TYPING && curClip !== TYPETAP) {
+      stage.dataset.state = "idle";
+      posture("idle", true); // laptop needs him seated
+      curClip = TYPING;
+      frameIdx = 0;
+      // take-out is a one-shot; when it finishes, settle into the typing loop
+      afterClip = () => {
+        curClip = TYPETAP;
+        frameIdx = 0;
+      };
+      dbg("typing -> laptop out");
+      tickTyping();
+    }
+    return;
+  }
+  if (kind === "gaming_active") {
+    gamingUntil = Date.now() + 3 * 60 * 1000; // keep the mood alive between beats
+    return;
+  }
+  if (kind === "media_active") {
+    mediaUntil = Date.now() + 3 * 60 * 1000; // video/music still playing
+    // While it's on, he breaks into a 15 s dance every ~10 min.
+    if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY && beatReady()) {
+      lastMediaDance = Date.now();
+      dbg("media session dance (15s)");
+      danceScene(15000);
+    }
+    return;
+  }
+  if (kind === "media") {
+    lastMediaDance = Date.now();
+    danceScene(15000); // opened video/music -> a proper 15 s dance
+  } else if (kind === "gaming") {
+    gamingUntil = Date.now() + 3 * 60 * 1000;
+    shootScene(3); // launched a game -> a longer 3-shot burst
+  }
+}
+
+// ---- Gaming-session mood ----------------------------------------------------
+// While Steam/a game is open he's in a playful mood: at random moments he stands
+// and spins his gun a couple of times, then drops back to the seat, swings his
+// legs and chuckles. Once an hour (random moment) he does a Jackpot and, later,
+// a fall+climb.
+// Typing keeps going while you keep typing; each key event pushes this out.
+let typingUntil = 0;
+function tickTyping() {
+  window.setTimeout(() => {
+    if (curClip !== TYPING && curClip !== TYPETAP) return; // something else took over
+    if (Date.now() < typingUntil) {
+      tickTyping(); // still typing — keep the laptop out
+      return;
+    }
+    // done — put the laptop AWAY (take-out reversed), then back to his own life.
+    // Closing is a shove: starts gentle, speeds up.
+    curClip = {
+      frames: [...TYPING.frames].reverse(),
+      ms: 90,
+      msSeq: [130, 110, 95, 85, 75, 70, 65, 60, 60],
+      loop: false,
+      settle: 0,
+    };
+    frameIdx = 0;
+    afterClip = () => {
+      if (stage.dataset.state === "idle") playIdleCycle();
+      else setState(stage.dataset.state as State);
+    };
+  }, 1000);
+}
+
+let gamingUntil = 0;
+let lastGamingSpecial = 0;
+// Media session: while a video/music window is open he dances periodically.
+let mediaUntil = 0;
+let lastMediaDance = 0;
+const MEDIA_DANCE_EVERY = 10 * 60 * 1000; // every ~10 min
+void mediaUntil; // session window (kept for future mood weighting)
+const gamingActive = () => Date.now() < gamingUntil;
+
+function beatReady(): boolean {
+  return !!home && !gagActive && !showcasing && !away && !returning && !wandering && !committed();
+}
+
+async function gamingAmbience() {
+  if (!beatReady() || stage.dataset.state !== "idle") return;
+  const spins = 2 + Math.floor(Math.random() * 2); // 2–3 spins
+  gagActive = true;
+  try {
+    await standUp();
+    curClip = GUNSPIN;
+    frameIdx = 0;
+    await sleep(GUNSPIN.frames.length * GUNSPIN.ms * spins);
+  } finally {
+    gagActive = false;
+    setState("idle"); // sits back down, legs swinging
+  }
+  window.setTimeout(laughBeat, 1200 + Math.random() * 1500); // ...and a chuckle
+}
+
+async function gamingSpecial() {
+  lastGamingSpecial = Date.now();
+  await shootScene(3); // Jackpot
+  await sleep(20000 + Math.random() * 90000); // some time later...
+  if (beatReady()) await diveGag(); // ...the fall + climb
+}
+
+// Jittered so the beats land at random moments, never on a fixed tick.
+function scheduleGamingBeat() {
+  window.setTimeout(
+    async () => {
+      if (gamingActive() && beatReady()) {
+        if (Date.now() - lastGamingSpecial > 60 * 60 * 1000 && Math.random() < 0.35) {
+          dbg("gaming special (hourly)");
+          await gamingSpecial();
+        } else {
+          await gamingAmbience();
+        }
+      }
+      scheduleGamingBeat();
+    },
+    60_000 + Math.random() * 150_000, // every ~1–3.5 min, randomly
+  );
+}
 
 // Freeze on the last frame of `c` for `ms`, then run `next` (if still idle).
 function holdStill(c: Clip, ms: number, next: () => void) {
@@ -437,6 +591,7 @@ let curClip: Clip = ANIMS.idle;
 let frameIdx = 0;
 function frameLoop() {
   sprite.src = curClip.frames[frameIdx];
+  const shownMs = curClip.msSeq?.[frameIdx] ?? curClip.ms;
   frameIdx++;
   if (frameIdx >= curClip.frames.length) {
     if (curClip.loop) {
@@ -452,7 +607,7 @@ function frameLoop() {
       frameIdx = 0;
     }
   }
-  window.setTimeout(frameLoop, curClip.ms);
+  window.setTimeout(frameLoop, shownMs);
 }
 
 let idleTimer: number | undefined;
@@ -463,6 +618,13 @@ const WORK_POSES = ["gunspin", "sit", "taunt"];
 let workIdx = 0;
 
 function setState(state: State) {
+  // While YOU are typing, the laptop stays out — ambient AI poses don't
+  // interrupt it (scenes still can, they run through their own path).
+  if (Date.now() < typingUntil && state !== "success" && state !== "error") {
+    stage.dataset.state = state;
+    document.documentElement.style.setProperty("--accent", ACCENT[state]);
+    return;
+  }
   const prev = stage.dataset.state;
   stage.dataset.state = state;
   document.documentElement.style.setProperty("--accent", ACCENT[state]);
@@ -555,7 +717,10 @@ function scheduleIdle() {
   if (idleTimer) clearTimeout(idleTimer);
   // Don't let the idle fallback clobber a running scene (showcase / gag / intro).
   idleTimer = window.setTimeout(() => {
-    if (!showcasing && !gagActive && !introActive) setState("idle");
+    // Also skip while he's walking off / away / coming back, or the idle pose
+    // would drop him into a seat mid-walk.
+    if (!showcasing && !gagActive && !introActive && !wandering && !away && !returning)
+      setState("idle");
   }, IDLE_AFTER_MS);
 }
 
@@ -589,6 +754,8 @@ async function standUp(): Promise<void> {
   cancelAnimationFrame(winTween);
   delete stage.dataset.facing;
   afterClip = null;
+  seatedNow = false; // scenes stand regardless of the dwell
+  postureChangedAt = Date.now();
   moveWindowY(home.y, 350);
   await sleep(380);
 }
@@ -598,6 +765,9 @@ async function lightWin() {
   if (!home || gagActive) return;
   gagActive = true;
   try {
+    // Noticing beat: a human takes a moment to register before reacting —
+    // an instant reaction reads scripted.
+    await sleep(200 + Math.random() * 200);
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     await standUp();
@@ -616,6 +786,7 @@ async function lightError() {
   if (!home || gagActive) return;
   gagActive = true;
   try {
+    await sleep(250 + Math.random() * 250); // errors take a beat longer to sink in
     stage.dataset.state = "error";
     document.documentElement.style.setProperty("--accent", ACCENT.error);
     await standUp();
@@ -634,8 +805,10 @@ async function lightError() {
 // Presence: after AWAY_AFTER_MS of no AI activity he wanders off; the next real
 // event brings him back. lastActivity is refreshed on every agent-event.
 const AWAY_AFTER_MS = 10 * 60 * 1000; // 10 min of silence -> he leaves
+const AWAY_RETURN_MS = 10 * 60 * 1000; // then ~10 min later he comes back on his own
 let lastActivity = Date.now();
 let away = false;
+let awayAt = 0; // when he walked off (for the auto-return timer)
 let returning = false;
 const LEAVE_LINES = ["Quiet. Taking a break.", "Call me if you need me.", "Bored. Going for a walk."];
 const RETURN_LINES = ["Alright, let's go.", "I'm back.", "Let's get to work."];
@@ -788,9 +961,19 @@ function moveWindowY(targetY: number, dur = 480) {
   winTween = requestAnimationFrame(step);
 }
 
-function posture(state: string) {
+// Posture hysteresis: rapid AI events used to flip him sit->stand->sit every
+// second. He now only changes posture if he's held the current one a while
+// (scenes bypass this via `force`).
+const POSTURE_DWELL_MS = 6000;
+let seatedNow = true;
+let postureChangedAt = 0;
+function posture(state: string, force = false) {
   if (!home) return;
   const seated = SEATED.has(state);
+  if (seated === seatedNow) return; // already there
+  if (!force && Date.now() - postureChangedAt < POSTURE_DWELL_MS) return; // too soon
+  seatedNow = seated;
+  postureChangedAt = Date.now();
   // Lower slowly while the sit-down clip plays; stand up snappily.
   moveWindowY(seated ? home.sitY : home.y, seated ? 900 : 400);
 }
@@ -806,7 +989,9 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
   return new Promise<void>((resolve) => {
     const step = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
-      const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      // Steady walking pace with only a brief ease-in — a crisp stop at the
+      // corner (no slow decel tail that reads as "walking in place").
+      const e = p < 0.12 ? (p / 0.12) ** 2 * 0.12 : p;
       const x = Math.round(fromX + (toX - fromX) * e);
       h.win.setPosition(new PhysicalPosition(x, h.y));
       h.lastX = x;
@@ -863,14 +1048,20 @@ async function runIntro() {
     delete stage.dataset.facing;
     // deceleration beat — he's stopped walking, takes a breath
     await sleep(400);
-    // arrival beat: stand tall, arms crossed, size up the room (2.5s)
+    // arrival: stand tall, arms crossed, and LOOK around before settling in
     curClip = STAND_CROSS;
     frameIdx = 0;
-    await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms + 700);
+    await sleep(900);
+    stage.dataset.facing = "left"; // glance left
+    await sleep(650);
+    stage.dataset.facing = "right"; // glance right
+    await sleep(650);
+    delete stage.dataset.facing;
+    await sleep(500); // settle
     // then sit DOWN onto the panel (stand->sit) while the window lowers
     curClip = SITDOWN;
     frameIdx = 0;
-    posture("idle"); // drop the window to the seated height
+    posture("idle", true); // drop the window to the seated height
     await sleep(SITDOWN.frames.length * SITDOWN.ms);
     setState("idle"); // seated leg-swing loop
     // Discovery > demonstration. No auto-showcase — let users find everything
@@ -905,6 +1096,7 @@ async function leaveScene() {
     playWalk();
     await slideWindow(offX, 150); // walk off to the left
     away = true;
+    awayAt = Date.now();
   } finally {
     wandering = false;
   }
@@ -930,7 +1122,7 @@ async function returnScene() {
     await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms + 500);
     curClip = SITDOWN; // sit down onto the panel
     frameIdx = 0;
-    posture("idle");
+    posture("idle", true);
     await sleep(SITDOWN.frames.length * SITDOWN.ms);
     setState("idle");
     showBubble(pickLine(RETURN_LINES), PRIO.MAJOR);
@@ -940,11 +1132,22 @@ async function returnScene() {
 }
 
 // Occasional idle micro-beat: while seated he laughs, then back to swinging legs.
+// "Let the animation finish": while a one-shot beat is mid-play, autonomous
+// triggers (laugh, typing, hourly devil, idle churn) wait instead of cutting it.
+let committedUntil = 0;
+function committed(): boolean {
+  return Date.now() < committedUntil;
+}
+function commitFor(ms: number) {
+  committedUntil = Date.now() + ms;
+}
+
 function laughBeat() {
-  if (!home || gagActive || wandering) return;
+  if (!home || gagActive || wandering || committed()) return;
   if (stage.dataset.state !== "idle") return;
   curClip = LAUGH; // one-shot -> frameLoop falls back to idle (leg-swing)
   frameIdx = 0;
+  commitFor(LAUGH.frames.length * LAUGH.ms); // let the chuckle play out
 }
 
 // Error gag: gets hit (stagger) → FALLS down under the taskbar → hides a beat →
@@ -984,7 +1187,7 @@ async function diveGag() {
 
 // Success gag: stand up, whip out the guns and fire (gold muzzle flicker),
 // "Jackpot!", then sit back down.
-async function shootScene() {
+async function shootScene(shots = 1) {
   if (!home || gagActive) return;
   gagActive = true;
   try {
@@ -1000,9 +1203,11 @@ async function shootScene() {
     showBubble("Jackpot!", PRIO.AMBIENT); // shown quietly; its own voice fires below
     say("jackpot"); // ~/.echo/voice/jackpot.wav overrides the blip
     stage.classList.add("shooting");
-    sfxGunshot();
-    shake(380);
-    await sleep(800); // hold the moment — let the single shot land
+    for (let i = 0; i < Math.max(1, shots); i++) {
+      sfxGunshot();
+      shake(380);
+      await sleep(i === Math.max(1, shots) - 1 ? 800 : 420); // hold the last shot
+    }
     stage.classList.remove("shooting");
     // follow-through: spin the gun, or turn and taunt the user (4th wall)
     if (Math.random() < 0.5) {
@@ -1078,7 +1283,7 @@ async function showcase() {
 }
 
 // Milestone celebration: stand up and dance a couple of loops, then sit.
-async function danceScene() {
+async function danceScene(durationMs?: number) {
   if (!home || gagActive) return;
   gagActive = true;
   try {
@@ -1092,7 +1297,7 @@ async function danceScene() {
     const loop = DANCE.frames.length * DANCE.ms;
     // one beat-shake at the start, then let the dance speak for itself
     shake(250);
-    await sleep(loop * 3); // three full dance loops
+    await sleep(durationMs ?? loop * 3); // media sessions dance longer
   } finally {
     gagActive = false;
     setState("idle");
@@ -1136,14 +1341,32 @@ async function main() {
   }
 
   await listen<AgentEvent>("agent-event", (evt) => applyEvent(evt.payload));
+  await listen<{ kind: string }>("context-event", (evt) => onContext(evt.payload.kind));
 
-  // Presence loop: if there's been no AI activity for AWAY_AFTER_MS while he's
-  // idle, he leaves. The next agent-event (applyEvent) walks him back in.
+  // Presence loop. He leaves after AWAY_AFTER_MS of no AI activity; while away he
+  // comes back on his own after AWAY_RETURN_MS (and, if still nothing's happening,
+  // leaves again later — so the desktop breathes). A real AI event brings him
+  // straight back via applyEvent regardless.
   window.setInterval(() => {
-    if (away || returning || wandering || gagActive || showcasing) return;
+    if (returning || wandering || gagActive || showcasing) return;
+    if (away) {
+      if (Date.now() - awayAt > AWAY_RETURN_MS) returnScene();
+      return;
+    }
     if (stage.dataset.state !== "idle") return;
     if (Date.now() - lastActivity > AWAY_AFTER_MS) leaveScene();
   }, 30000);
+
+  scheduleGamingBeat(); // playful beats while a game is open
+
+  // Signature hourly moment: he powers up once an hour (Devil Trigger), as long
+  // as he's settled and not mid-beat.
+  window.setInterval(() => {
+    if (gagActive || showcasing || wandering || away || returning || committed()) return;
+    if (stage.dataset.state !== "idle") return;
+    dbg("hourly devil trigger");
+    devilTriggerScene();
+  }, 60 * 60 * 1000);
 
   // v2 P1: the Life Model heartbeat — decay the vector, accumulate idle boredom,
   // and log the state so its evolution is auditable in ~/.echo/echo.log.

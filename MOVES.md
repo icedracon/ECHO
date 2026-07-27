@@ -96,7 +96,15 @@ Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.
 
 ---
 
-## H. Position on the taskbar
+## H. Context moves (OS awareness — `context.rs` → `onContext()`)
+| Trigger | What | Clips | Knob |
+|---|---|---|---|
+| **You type** (Win32 keys) | laptop OUT once → typing loop while you type → laptop AWAY (reversed) | `typing` (one-shot) → `typetap` (4-frame loop) | session extend 9 s/keystroke, `typingUntil` |
+| **Video/music opens** | 15 s dance | `dance` | `danceScene(15000)` |
+| **…and stays open** | dance repeats | `dance` | `MEDIA_DANCE_EVERY` = 10 min |
+| **Game launches** | 3-shot burst + playful mood | `shoot` | gaming beats every ~1–3.5 min, hourly special |
+
+## I. Position on the taskbar
 | Knob | Value | Effect | Line |
 |---|---|---|---|
 | Taskbar height | measured live | auto-adapts | ~765 |

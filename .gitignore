@@ -31,3 +31,6 @@ assets-src/
 
 # secrets
 .env
+
+# mitmproxy MCP artifact
+mitm_mcp_traffic.db

@@ -1,3 +1,4 @@
+mod context;
 mod events;
 mod phrases;
 mod watcher;
@@ -157,6 +158,7 @@ pub fn run() {
             });
 
             watcher::spawn(app.handle().clone(), store, phrases);
+            context::spawn(app.handle().clone()); // typing / media / gaming awareness
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
