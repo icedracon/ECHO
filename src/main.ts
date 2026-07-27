@@ -138,6 +138,109 @@ function sfxAura() {
   o.start(t);
   o.stop(t + 1.0);
 }
+// Demonic roar for the Devil Trigger: a cluster of detuned saws diving in
+// pitch through a tanh waveshaper, with a breathy noise growl underneath.
+function sfxDemonRoar() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const shaper = a.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) curve[i] = Math.tanh(3.2 * (i / 128 - 1));
+  shaper.curve = curve;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.4, t + 0.09);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
+  shaper.connect(g).connect(dest());
+  for (const det of [0, 7, -9, 13]) {
+    const o = a.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(95 + det, t);
+    o.frequency.exponentialRampToValueAtTime(42 + det / 2, t + 1.1);
+    o.connect(shaper);
+    o.start(t);
+    o.stop(t + 1.25);
+  }
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 1.1), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.5 * (1 - i / d.length);
+  const n = a.createBufferSource();
+  n.buffer = buf;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 300;
+  n.connect(lp).connect(shaper);
+  n.start(t);
+}
+// Blade whoosh: a band-passed noise sweep, fast and airy.
+function sfxSlashWhoosh() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.22), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const bp = a.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 1.6;
+  bp.frequency.setValueAtTime(500, t);
+  bp.frequency.exponentialRampToValueAtTime(2600, t + 0.09);
+  bp.frequency.exponentialRampToValueAtTime(320, t + 0.2);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.3, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+  src.connect(bp).connect(g).connect(dest());
+  src.start(t);
+  src.stop(t + 0.23);
+}
+// Fire ignite (the summon flash): a soft whump with a crackling tail.
+function sfxIgnite() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.6), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) {
+    const p = i / d.length;
+    d[i] = (Math.random() * 2 - 1) * (p < 0.12 ? 1 : Math.random() < 0.06 ? 0.9 : 0.15) * (1 - p);
+  }
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(900, t);
+  lp.frequency.exponentialRampToValueAtTime(2400, t + 0.1);
+  lp.frequency.exponentialRampToValueAtTime(500, t + 0.55);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.28, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+  src.connect(lp).connect(g).connect(dest());
+  src.start(t);
+}
+// Ember fizz (the sword dissolving): quiet sparse crackle fading out.
+function sfxEmberFizz() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.8), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++)
+    d[i] = Math.random() < 0.03 ? (Math.random() * 2 - 1) * (1 - i / d.length) : 0;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const hp = a.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 1400;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.22, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+  src.connect(hp).connect(g).connect(dest());
+  src.start(t);
+}
 // A soft low thud for stumbles / the fall.
 function sfxThud() {
   const a = ac();
@@ -562,9 +665,15 @@ async function gamingAmbience() {
   try {
     await standUp();
     if (swordReady && Math.random() < 0.5) {
-      // One flash-slash per beat — rare and punchy beats looping it.
+      // One full sword move per beat, with its soundtrack timed to the msSeq:
+      // fire ignites at the summon flash, a whoosh per strike, embers at the
+      // vanish. Offsets are cumulative frame times (see SWORD.msSeq).
       curClip = SWORD;
       frameIdx = 0;
+      window.setTimeout(sfxIgnite, 550); // embers gather
+      window.setTimeout(sfxSlashWhoosh, 1990); // strike 1
+      window.setTimeout(sfxSlashWhoosh, 2580); // strike 2
+      window.setTimeout(sfxEmberFizz, 3450); // the sword burns away
       await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0));
     } else {
       curClip = GUNSPIN;
@@ -794,6 +903,7 @@ function levelUpFlash() {
   vignettePulse(); // red Devil-Trigger flash over the whole window
   shake(500);
   sfxAura();
+  sfxDemonRoar(); // the monster under the red glow
   window.setTimeout(() => stage.classList.remove("leveling"), 1300);
 }
 

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/prep_media.js && tsc && vite build",
+    "build": "node scripts/prep_media.cjs && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
