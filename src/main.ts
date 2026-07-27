@@ -4,6 +4,7 @@ import { getCurrentWindow, currentMonitor, primaryMonitor } from "@tauri-apps/ap
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
+import { Story, dateKey } from "./story";
 import {
   pickIdle,
   type IdleUrge,
@@ -15,6 +16,8 @@ import {
 
 // v2: the evolving internal state (life) drives the planner's decisions.
 const life = new Life();
+// M2: the story — tenure, chapters, firsts, day memory. What makes him HIS.
+const story = new Story();
 
 type State =
   | "idle"
@@ -634,6 +637,10 @@ const IDLE_MS: Record<string, number> = {
   yawn: 220,
   leanback: 200,
   nap: 260,
+  // M3 batch — seated micro-behaviours, idle-anchored both ends.
+  stretch: 140,
+  shrug: 150,
+  headtilt: 170,
 };
 const idleClipCache: Record<string, Clip> = {};
 function idleClip(name: string): Clip {
@@ -933,12 +940,36 @@ function scheduleGamingBeat() {
   );
 }
 
+// M3 blink: closed-eye variants of the held idle frames (hand-pixel-edited,
+// public/pixel/blink). He blinks every ~3-6 s while holding still.
+const BLINKS: Record<string, string> = {};
+for (const n of ["sitswing", "sitcross", "sitthink", "checkwatch"])
+  BLINKS[`/pixel/${n}/frame_8.png`] = `/pixel/blink/${n}_8.png?v=15`;
+const urlKeyOf = (url: string) => (url.match(/\/pixel\/[^?]+/) || [url])[0];
+
 // Freeze on the last frame of `c` for `ms`, then run `next` (if still idle).
 function holdStill(c: Clip, ms: number, next: () => void) {
   const last = c.frames[c.frames.length - 1];
   curClip = { frames: [last], ms: 600, loop: true, settle: 0 };
   frameIdx = 0;
   afterClip = null;
+  const variant = BLINKS[urlKeyOf(last)];
+  if (variant) {
+    const held = curClip;
+    const blink = () => {
+      if (curClip !== held) return; // the hold ended — stop blinking
+      held.frames[0] = variant;
+      sprite.src = variant;
+      window.setTimeout(() => {
+        if (curClip === held) {
+          held.frames[0] = last;
+          sprite.src = last;
+        }
+        window.setTimeout(blink, 2600 + Math.random() * 3400);
+      }, 160);
+    };
+    window.setTimeout(blink, 1200 + Math.random() * 2200);
+  }
   window.setTimeout(() => {
     if (stage.dataset.state === "idle" && !gagActive && !showcasing) next();
   }, ms);
@@ -949,6 +980,12 @@ let idlePlaysLeft = 0;
 let lastIdleClip: string | null = null;
 
 function playIdleCycle() {
+  // M2 serialized gag: the pizza he never gets — once a week at most, and the
+  // M5 payoff animation stays locked until he's earned it by asking.
+  if (Math.random() < 0.05) {
+    const l = story.pizzaLine();
+    if (l) showBubble(l, PRIO.NOTABLE);
+  }
   curUrge = pickIdle(life, lastIdleClip);
   lastIdleClip = curUrge.clip;
   idlePlaysLeft = curUrge.plays;
@@ -1101,7 +1138,10 @@ function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
   }
   // Ambient chatter: usually skipped entirely, and always silent.
   if (prio === PRIO.AMBIENT) {
-    if (busyBurst() || Math.random() > AMBIENT_BUBBLE_CHANCE) return;
+    // M2: a Stranger (week one) talks half as much — reserve is earned away.
+    const chance =
+      story.chapter() === "stranger" ? AMBIENT_BUBBLE_CHANCE / 2 : AMBIENT_BUBBLE_CHANCE;
+    if (busyBurst() || Math.random() > chance) return;
   }
   bubble.textContent = text;
   bubble.classList.remove("hidden");
@@ -1149,6 +1189,8 @@ let winStreak = 0;
 let errStreak = 0;
 const WIN_LINES = ["Easy.", "Heh."];
 const SHRUG_LINES = ["Pff.", "Doesn't count."];
+// M2 demon-hunt framing: an error streak is a demon, and demons bite.
+const DEMON_LINES = ["This one bites.", "Big demon.", "It's hunting me."];
 
 // Bridge: smoothly rise to standing, hold a beat, then the scene runs.
 // Every scene that starts from idle goes through this — no instant jumps.
@@ -1187,11 +1229,14 @@ function reactWin() {
     ["laugh", 0.15],
     ["line", 0.2],
     ["nothing", 0.15 + life.v.focus * 0.15],
+    // M2 Lv5 unlock: the sword joins the win pool, rare and earned.
+    ["sword", story.unlocked("sword_win_pool") && swordReady ? 0.06 : 0],
   ]);
   dbg(`react=win:${pick}`);
   if (pick === "cheer") void lightWin();
   else if (pick === "flourish") void gunFlourish();
   else if (pick === "laugh") laughBeat();
+  else if (pick === "sword") void demoSword();
   else if (pick === "line") showBubble(pickLine(WIN_LINES), PRIO.NOTABLE);
   // nothing: the win still counted — he just doesn't perform it
 }
@@ -1361,6 +1406,7 @@ function applyEvent(e: AgentEvent) {
   if (e.state === "error" && home) {
     errStreak += 1;
     winStreak = 0;
+    story.today().errors += 1;
     // Frustration comes from the Life vector now: low patience -> he snaps sooner.
     const snap = life.v.patience < 0.35 ? 2 : 3;
     if (errStreak >= snap && sceneAllowed() && sceneBudgetOk("breakdown")) {
@@ -1369,15 +1415,32 @@ function applyEvent(e: AgentEvent) {
       budgetScene("breakdown");
       showBubble("Come on, seriously?", PRIO.MAJOR);
       diveGag(); // patience gone -> full breakdown
+      // M2: after the climb — a once-ever first, or a partner's word.
+      window.setTimeout(() => {
+        if (story.first("breakdown")) showBubble("First real fight. We got up.", PRIO.NOTABLE);
+        else if (story.chapter() === "partner" && Math.random() < 0.3)
+          showBubble("We'll fix it.", PRIO.NOTABLE);
+      }, 6000);
     } else {
+      // M2 demon-hunt framing: a growing streak is a demon that bites.
+      if (errStreak >= 2 && Math.random() < 0.5)
+        showBubble(pickLine(DEMON_LINES), PRIO.NOTABLE);
       reactError(); // M1.3: pooled — stagger, cold silence, watch-check, or nothing
     }
     scheduleIdle();
     return;
   }
   if (e.state === "success" && home) {
+    const slainDemon = errStreak >= 2; // the streak this win just ended
     winStreak += 1;
     errStreak = 0;
+    story.today().wins += 1;
+    story.today().stars = e.stars;
+    // M2 star firsts — once ever, slightly delayed so scenes finish first.
+    if (e.stars >= 100 && story.first("stars100"))
+      window.setTimeout(() => showBubble("A hundred stars, partner.", PRIO.NOTABLE), 2500);
+    else if (e.stars >= 500 && story.first("stars500"))
+      window.setTimeout(() => showBubble("Five hundred. Legendary.", PRIO.NOTABLE), 2500);
     // If the AI is still processing rapidly, bank the win — don't celebrate
     // mid-flow. The streak accumulates so he might Jackpot when dust settles.
     if (aiMidFlow()) {
@@ -1390,6 +1453,11 @@ function applyEvent(e: AgentEvent) {
       markScene();
       budgetScene("devil");
       devilTriggerScene();
+      // M2 level chapters: levels unlock existing content, told as story.
+      if (lastLevel >= 5 && story.unlock("sword_win_pool"))
+        window.setTimeout(() => showBubble("Level 5. The sword comes out now.", PRIO.NOTABLE), 4000);
+      if (lastLevel >= 10 && story.first("lv10"))
+        window.setTimeout(() => showBubble("Double digits. Just warming up.", PRIO.NOTABLE), 4000);
     } else if (crossedMilestone && sceneAllowed() && sceneBudgetOk("dance")) {
       winStreak = 0;
       markScene();
@@ -1399,7 +1467,14 @@ function applyEvent(e: AgentEvent) {
       winStreak = 0;
       markScene();
       budgetScene("jackpot");
+      story.today().jackpots += 1;
       shootScene(); // on a roll -> Jackpot
+      if (story.first("jackpot"))
+        window.setTimeout(() => showBubble("First Jackpot. Remember this one.", PRIO.NOTABLE), 5000);
+    } else if (slainDemon) {
+      // M2: the win that ends an error streak is a kill, not a cheer.
+      dbg("react=win:demon-slain");
+      showBubble("Demon's dead.", PRIO.NOTABLE);
     } else {
       reactWin(); // M1.3: pooled — cheer, flourish, laugh, a line, or nothing
     }
@@ -1755,7 +1830,8 @@ async function shootScene(shots = 1) {
     stage.classList.remove("shooting");
     // follow-through: spin the gun; the 4th-wall taunt is now RARE (M1.7) —
     // at 5% it becomes the moment people screenshot, not the expected beat.
-    if (Math.random() < 0.95) {
+    // M2: and a Stranger never breaks the wall — that intimacy is earned.
+    if (Math.random() < 0.95 || story.chapter() === "stranger") {
       curClip = GUNSPIN;
       frameIdx = 0;
       await sleep(GUNSPIN.frames.length * GUNSPIN.ms);
@@ -2042,6 +2118,27 @@ async function main() {
   void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
   startBreathing(); // M1.5: the constant tier — he's never a statue again
 
+  // M2: load the story; a new day gets a greeting built from yesterday's REAL
+  // numbers — he remembers, and says so once the walk-in has finished.
+  await story.load();
+  const todayKey = dateKey();
+  const newDay = !!story.s.lastSeenDate && story.s.lastSeenDate !== todayKey;
+  const y = story.yesterday();
+  story.s.lastSeenDate = todayKey;
+  story.save();
+  if (newDay) {
+    window.setTimeout(() => {
+      let line = "Back at it.";
+      if (y) {
+        if (y.jackpots >= 2) line = `${y.jackpots} Jackpots yesterday. Show-off.`;
+        else if (y.errors > y.wins) line = "Yesterday was rough. Today we win.";
+        else if (y.wins > 0) line = "Yesterday went well. Keep it rolling.";
+      }
+      dbg(`story greeting: ${line}`);
+      showBubble(line, PRIO.NOTABLE);
+    }, 18000);
+  }
+
   try {
     applyEvent(await invoke<AgentEvent>("get_state"));
   } catch (err) {
@@ -2091,12 +2188,22 @@ async function main() {
   // v2 P1: the Life Model heartbeat — decay the vector, accumulate idle boredom,
   // and log the state so its evolution is auditable in ~/.echo/echo.log.
   let lifeLoggedAt = 0;
+  let storySavedAt = Date.now();
   window.setInterval(() => {
     life.tick();
     if (stage.dataset.state === "idle" && !gagActive && !showcasing) life.idleFor(5000);
     if (Date.now() - lifeLoggedAt > 20000) {
       lifeLoggedAt = Date.now();
       dbg(`life ${life.summary()}`);
+    }
+    // M2: tenure accumulates while he runs; saved incrementally (no clean
+    // shutdown hook exists). 100 hours together is a once-ever moment.
+    story.s.totalMinutes += 5 / 60;
+    if (story.s.totalMinutes / 60 >= 100 && story.first("hours100"))
+      showBubble("A hundred hours together. Time flies.", PRIO.NOTABLE);
+    if (Date.now() - storySavedAt > 5 * 60 * 1000) {
+      storySavedAt = Date.now();
+      story.save();
     }
   }, 5000);
   frameLoop();

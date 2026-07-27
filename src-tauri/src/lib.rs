@@ -150,6 +150,26 @@ fn poster_media() -> Vec<(String, String)> {
     out
 }
 
+/// M2 сюжет: story state (tenure, firsts, day stats) lives in ~/.echo/story.json —
+/// user-visible, survives reinstalls, greppable. JSON passthrough; the frontend
+/// owns the shape.
+#[tauri::command]
+fn story_load() -> String {
+    let Some(home) = dirs::home_dir() else {
+        return String::new();
+    };
+    std::fs::read_to_string(home.join(".echo").join("story.json")).unwrap_or_default()
+}
+
+#[tauri::command]
+fn story_save(data: String) {
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".echo");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("story.json"), data);
+    }
+}
+
 /// Frontend diagnostics -> ~/.echo/echo-fe.log (so overlay behaviour is auditable).
 #[tauri::command]
 fn fe_log(line: String) {
@@ -202,7 +222,9 @@ pub fn run() {
             idle_phrase,
             fe_log,
             voice_clips,
-            poster_media
+            poster_media,
+            story_load,
+            story_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

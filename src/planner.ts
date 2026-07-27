@@ -33,6 +33,11 @@ const URGES: UrgeDef[] = [
   },
   { clip: "yawn", plays: 1, hold: [10000, 22000], weight: (l) => 3 + (1 - l.v.energy) * 22 },
   { clip: "nap", plays: 1, hold: [40000, 90000], weight: (l) => (1 - l.v.energy) * 26 * napGate(l) },
+  // M3 batch: stretch when stiff (long uptime, low energy), shrug when bored,
+  // a curious head-tilt so subtle it earns "did he just move?".
+  { clip: "stretch", plays: 1, hold: [6000, 14000], weight: (l) => 4 + (1 - l.v.energy) * 9 },
+  { clip: "shrug", plays: 1, hold: [4000, 9000], weight: (l) => 2 + l.v.boredom * 8 },
+  { clip: "headtilt", plays: 1, hold: [4000, 8000], weight: (l) => 2 + l.v.curiosity * 7 },
 ];
 
 // Naps only really happen when he's genuinely low / it's night.
