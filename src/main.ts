@@ -370,6 +370,45 @@ function say(name: "hmm" | "jackpot") {
   else voiceJackpot();
 }
 
+// Devil Trigger: the "Jackpot!" clip through a demon chain — pitched way
+// down, a growling sub-layer, distortion, cavern echo. Decoded live via
+// WebAudio, so ANY jackpot clip (bundled blip aside) turns monstrous.
+async function sayDemonJackpot() {
+  const a = ac();
+  const url = voiceFiles.get("jackpot");
+  if (!a || !url) {
+    sfxDemonRoar();
+    return;
+  }
+  try {
+    const resp = await fetch(url);
+    const buf = await a.decodeAudioData(await resp.arrayBuffer());
+    const shaper = a.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) curve[i] = Math.tanh(2.6 * (i / 128 - 1));
+    shaper.curve = curve;
+    const g = a.createGain();
+    g.gain.value = 0.9;
+    shaper.connect(g).connect(dest());
+    const layers: Array<[number, number, number]> = [
+      [0.62, 1.0, 0], // the demon voice
+      [0.45, 0.55, 0.012], // growling sub-layer
+      [0.62, 0.3, 0.09], // cavern echo
+    ];
+    for (const [rate, gain, delay] of layers) {
+      const s = a.createBufferSource();
+      s.buffer = buf;
+      s.playbackRate.value = rate;
+      const sg = a.createGain();
+      sg.gain.value = gain;
+      s.connect(sg).connect(shaper);
+      s.start(a.currentTime + delay);
+    }
+  } catch {
+    sfxDemonRoar();
+  }
+}
+
 // Line text -> clip filename (must match scripts/gen_voice.py's slug()).
 function slugOf(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "line";
@@ -1685,6 +1724,7 @@ async function devilTriggerScene() {
     curClip = DEVIL;
     frameIdx = 0;
     levelUpFlash(); // red sprite glow + vignette + aura + shake
+    void sayDemonJackpot(); // the monster says JACKPOT
     showBubble(`Lv.${lastLevel} — Devil Trigger!`, PRIO.MAJOR);
     await sleep(1900);
   } finally {
