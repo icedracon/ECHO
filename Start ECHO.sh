@@ -61,6 +61,22 @@ if ! command -v cargo &>/dev/null; then
     source "$HOME/.cargo/env"
 fi
 
+# Seed the user media folder: any real-named gif in public/media becomes the
+# poster (plain rename-copy, no conversion); poster.gif is the fallback.
+mkdir -p "$HOME/.echo/media"
+for f in public/media/*.gif; do
+    [ -e "$f" ] || continue
+    if [ "$(basename "$f")" != "poster.gif" ]; then
+        cp -f "$f" "$HOME/.echo/media/poster.gif"
+    fi
+done
+if [ ! -f "$HOME/.echo/media/poster.gif" ] && [ -f "public/media/poster.gif" ]; then
+    cp "public/media/poster.gif" "$HOME/.echo/media/poster.gif"
+fi
+if [ ! -f "$HOME/.echo/media/song.mp3" ] && [ -f "public/media/song.mp3" ]; then
+    cp "public/media/song.mp3" "$HOME/.echo/media/song.mp3"
+fi
+
 # Check node_modules
 if [ ! -d "node_modules" ]; then
     echo "[*] Installing node dependencies..."
