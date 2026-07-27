@@ -250,5 +250,26 @@ listed anywhere — found, screenshotted, shared.
 **Anti-goals (traps):** combat, RPG systems, achievements, settings with 400
 toggles, more one-shot features before Phase 1 lands.
 
+### v2 concrete plan (reconciled 2026-07-27, animation-lead review #2)
+
+Phase 1-2 of the frame-count plan is ~80% shipped already (walk, sit/stand,
+work poses, sword move, dances, idle pack). The EMPTY tier is the top of the
+frequency table — blink / breathing / micro-glances — and that's v2:
+
+1. **Micro-life layer — 0 gens (code + hand pixel edits):** 1px breathing
+   oscillation; 2-frame closed-eye variants of the 4 most-seen poses (eye
+   region hand-edited like the typetap frames); eye-shift glances; he LOOKS AT
+   THE CURSOR when it comes near (mouse pos via Win32 exists).
+2. **Small gen batch — ~5-6 gens (trial has 8):** stretch (2), shrug (2),
+   head-tilt (1-2). animate-v3 cost model: ~1 gen per 4 frames.
+3. **Live with him a week** before anything else (the P3 rule).
+4. **Phase 3 later — ~12-15 gens:** pizza, coin flip, clean sword, sword spin,
+   wake-up, look-outside-screen. **Phase 4 — ~30-45 gens:** rain, birthday,
+   discoveries; the Christmas re-skin alone is 15-30 gens — park it.
+   Reroll reality: budget ~1.5x list price per clip.
+
+Also adopt from review #2: Devil Trigger rarity should trend toward once per
+10-20 h of use, not hourly — rare = precious.
+
 **Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
 chair creak, holster click) instead of adding louder effects.
