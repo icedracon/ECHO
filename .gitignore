@@ -38,3 +38,6 @@ mitm_mcp_traffic.db
 
 # local Claude Code config
 .claude/
+
+# generated at build from the real-named gif
+public/media/poster.gif
