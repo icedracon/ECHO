@@ -271,5 +271,67 @@ frequency table — blink / breathing / micro-glances — and that's v2:
 Also adopt from review #2: Devil Trigger rarity should trend toward once per
 10-20 h of use, not hourly — rare = precious.
 
+---
+
+## 9. Master plan — v2 milestones (planned 2026-07-27, build in this order)
+
+### M1 — Breathe: the no-new-moves update (0 gens, pure code)
+The 22 clips are a vocabulary; write better sentences with it.
+1. **Timing pass**: msSeq for every clip (gunspin accelerates, cheer dips
+   before the jump, stagger holds the impact); window-motion weight (sit =
+   drop→bounce→settle, stand = lean→rise); 200-400 ms anticipation holds
+   before every scene.
+2. **Reaction pools**: success -> {cheer | gunspin flourish | laugh | line
+   only | NOTHING ~20%}; error -> {stagger | cold arms-crossed silence |
+   annoyed watch-check | nothing}. Predictability is the enemy.
+3. **Clip grammar**: composed sequences read as new moves — checkwatch →
+   pause → leanback ("forever..."), gunspin → laugh (showing off), stagger →
+   sitthink (embarrassed). Author ~a dozen sentences.
+4. **Visible mood**: low energy -> all playback ~12% slower; cocky evenings ->
+   more taunts; low patience -> errors get the cold treatment. The vector
+   finally SHOWS.
+5. **Micro-motion**: 1px breathing oscillation, sub-pixel idle sway, facing
+   flip toward the cursor when it passes near.
+6. **Sound floor**: near-inaudible synth layers — boot scuffs on walk frames,
+   chair creak on sit, cloth rustle on stand, holster click after gunspin.
+7. **Rarity retune**: Devil Trigger -> once per 10-20 h; 4th-wall taunt 50%
+   -> 5%; 1% double-length dance.
+
+### M2 — Сюжет: memory + relationship + payoffs (0 gens, writing + story.ts)
+`story.ts` persisted beside the life vector: tenure hours, chapter, a
+`firsts` set, yesterday's session summary.
+1. **Demon-hunt framing**: bugs are demons — error streak "This one bites.",
+   breakdown = losing the fight, the fixing win "Demon's dead." The workday
+   becomes an episode through lines alone.
+2. **Relationship arc**: Stranger (week 1, reserved, no 4th-wall) ->
+   Colleague (jokes) -> Partner (month+, 4th-wall glances, "We'll fix it.").
+   Words and odds shift with tenure.
+3. **Daily memory**: first launch references yesterday's real stats; sign-off
+   line late at night; once-in-a-lifetime lines for firsts (first Jackpot,
+   100★, 100 h together).
+4. **Serialized gags**: pizza mentioned weekly for a month BEFORE the Phase-3
+   pizza animation pays it off.
+5. **Level chapters**: levels unlock existing content (Lv5 sword outside
+   gaming, Lv8 new idle in rotation, Lv10 unique line).
+Original writing only — his vibe, never copied game dialogue.
+
+### M3 — Small art batch (~5-6 gens of the 8 trial gens left)
+stretch (2), shrug (2), head-tilt (1-2); blink eye-variants of the top 4
+poses are hand-pixel edits (0 gens).
+
+### M4 — Live with him a week
+Tune M1-M3 from echo.log + feel. No new features during this week.
+
+### M5 — Living behaviors (~12-15 gens, needs top-up)
+pizza payoff, coin flip, clean sword, sword spin, wake-up,
+look-outside-screen — wired through the M1 pools and M2 story.
+
+### M6 — Later infra + rare events (~30-45 gens + code)
+config.json presets/quiet hours; Windows media-session API (background-tab
+music); Linux context layer (friend); rain/birthday/discovery events;
+Christmas re-skin only if gens are abundant (15-30 alone).
+
+**Order is the point: M1-M2 are free and transform him; art comes after.**
+
 **Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
 chair creak, holster click) instead of adding louder effects.
