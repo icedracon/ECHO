@@ -636,6 +636,9 @@ function onContext(kind: string) {
     posterScene(15000);
   } else if (kind === "gaming") {
     gamingUntil = Date.now() + 3 * 60 * 1000;
+    // Stagger the big gaming moments: sword ~4 min into the session, devil ~10.
+    lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 4 * 60 * 1000;
+    lastGamingDevil = Date.now();
     markScene();
     shootScene(3); // launched a game -> a longer 3-shot burst
   }
@@ -743,13 +746,9 @@ async function gamingAmbience() {
   gagActive = true;
   try {
     await standUp();
-    if (swordReady && Math.random() < 0.5) {
-      await playSwordMove();
-    } else {
-      curClip = GUNSPIN;
-      frameIdx = 0;
-      await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
-    }
+    curClip = GUNSPIN;
+    frameIdx = 0;
+    await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
   } finally {
     gagActive = false;
     setState("idle"); // sits back down, legs swinging
@@ -764,12 +763,30 @@ async function gamingSpecial() {
   if (beatReady()) await diveGag(); // ...the fall + climb
 }
 
+// Big gaming moments on their own ~10 min cadences (staggered at session
+// start: sword ~4 min in, devil ~10 min in), checked at random beat moments.
+const GAMING_SWORD_EVERY = 10 * 60 * 1000;
+const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
+let lastGamingSword = 0;
+let lastGamingDevil = 0;
+
 // Jittered so the beats land at random moments, never on a fixed tick.
 function scheduleGamingBeat() {
   window.setTimeout(
     async () => {
       if (gamingActive() && beatReady()) {
-        if (Date.now() - lastGamingSpecial > 60 * 60 * 1000 && Math.random() < 0.35) {
+        const now = Date.now();
+        if (swordReady && now - lastGamingSword > GAMING_SWORD_EVERY && sceneAllowed()) {
+          lastGamingSword = now;
+          markScene();
+          dbg("gaming sword move (10min cadence)");
+          await demoSword();
+        } else if (now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
+          lastGamingDevil = now;
+          markScene();
+          dbg("gaming devil trigger (10min cadence)");
+          devilTriggerScene();
+        } else if (now - lastGamingSpecial > 60 * 60 * 1000 && Math.random() < 0.35) {
           dbg("gaming special (hourly)");
           await gamingSpecial();
         } else {
