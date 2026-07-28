@@ -610,8 +610,9 @@ const TAUNT = clip("taunt", 100, true, 8);
 TAUNT.msSeq = [120, 100, 85, 80, 85, 95, 105, 115, 130];
 // M5 living behaviours: the payoffs and flourishes of a life, not reactions.
 const PIZZA = clip("pizza", 160, false, 0, 13); // the gag's earned payoff
-// Eating is SLOW — box appears, opens, long chewing beats, satisfied vanish.
-PIZZA.msSeq = [200, 220, 260, 320, 380, 520, 620, 560, 640, 480, 320, 260, 240];
+// Eating is SLOW — box appears, opens, a full second ADMIRING it (the beat
+// that sells the gag), then long chewing, satisfied vanish.
+PIZZA.msSeq = [200, 220, 260, 320, 1050, 520, 620, 560, 640, 480, 320, 260, 240];
 const COINFLIP = clip("coinflip", 140, true, 8, 9); // standing coin toss
 const SWORDSPIN = clip("swordspin", 110, true, 8, 9); // fiery twirl (gaming beat)
 const WAKEUP = clip("wakeup", 150, false, 0, 9); // chained after every nap
@@ -660,7 +661,19 @@ const IDLE_MS: Record<string, number> = {
 };
 const idleClipCache: Record<string, Clip> = {};
 function idleClip(name: string): Clip {
-  return (idleClipCache[name] ??= clip(name, IDLE_MS[name] ?? 200, false));
+  if (!idleClipCache[name]) {
+    if (name === "cleansword") {
+      // Sword care is SEVERAL passes of the cloth, not one wipe: appear (0-1),
+      // wipe 2-8 three times (repeats reference the same frame urls), vanish.
+      const base = clip("cleansword", 200, false, 0, 11).frames;
+      const wipe = [2, 3, 4, 5, 6, 7, 8];
+      const seq = [0, 1, ...wipe, ...wipe, ...wipe, 9, 10].map((i) => base[i]);
+      idleClipCache[name] = { frames: seq, ms: 200, loop: false, settle: 0 };
+    } else {
+      idleClipCache[name] = clip(name, IDLE_MS[name] ?? 200, false);
+    }
+  }
+  return idleClipCache[name];
 }
 const IDLE_CYCLE = ["sitswing", "sitcross", "sitthink"].map(idleClip); // showcase demos
 // When a one-shot clip ends, run this instead of the default idle fallback.
@@ -1076,9 +1089,19 @@ function playIdleCycle() {
     const l = story.pizzaLine();
     if (l) showBubble(l, PRIO.NOTABLE);
   }
-  // M5: the payoff — ONLY after 3+ earned mentions, then the cycle restarts.
-  if (story.s.gags.pizzaMentions >= 3 && Math.random() < 0.02 && !gagActive && home) {
-    story.s.gags.pizzaMentions = 0;
+  // M5 payoff, user-tuned cadence: pizza roughly once per 4 days.
+  const PIZZA_EVERY = 4 * 86_400_000;
+  if (!story.s.gags.lastPizzaPayoffAt) {
+    story.s.gags.lastPizzaPayoffAt = Date.now(); // clock starts on first run
+    story.save();
+  }
+  if (
+    Date.now() - story.s.gags.lastPizzaPayoffAt > PIZZA_EVERY &&
+    Math.random() < 0.06 &&
+    !gagActive &&
+    home
+  ) {
+    story.s.gags.lastPizzaPayoffAt = Date.now();
     story.save();
     dbg("pizza payoff!");
     commitFor(PIZZA.msSeq!.reduce((a, b) => a + b, 0) * paceMul() + 400);
@@ -1089,9 +1112,18 @@ function playIdleCycle() {
     return;
   }
   curUrge = pickIdle(life, lastIdleClip);
-  // M5 gate: a Stranger doesn't get the intimate sword-care moment yet.
-  if (curUrge.clip === "cleansword" && story.chapter() === "stranger")
-    curUrge = { clip: "sitswing", plays: 2, hold: [8000, 16000] };
+  // M5, user-tuned: sword care roughly once per 2 days — when the cooldown
+  // holds, the urge quietly becomes leg-swinging instead.
+  if (curUrge.clip === "cleansword") {
+    const last = story.s.gags.lastSwordCareAt ?? 0;
+    if (Date.now() - last < 2 * 86_400_000) {
+      curUrge = { clip: "sitswing", plays: 2, hold: [8000, 16000] };
+    } else {
+      story.s.gags.lastSwordCareAt = Date.now();
+      story.save();
+      dbg("sword care (2-day cadence)");
+    }
+  }
   lastIdleClip = curUrge.clip;
   idlePlaysLeft = curUrge.plays;
   curClip = idleClip(curUrge.clip);
@@ -1170,6 +1202,13 @@ function setState(state: State) {
   // While YOU are typing, the laptop stays out — ambient AI poses don't
   // interrupt it (scenes still can, they run through their own path).
   if (Date.now() < typingUntil && state !== "success" && state !== "error") {
+    stage.dataset.state = state;
+    document.documentElement.style.setProperty("--accent", ACCENT[state]);
+    return;
+  }
+  // A committed one-shot (pizza, sword care, laugh) FINISHES: ambient work
+  // chatter updates the accent but must not yank the clip mid-bite.
+  if (committed() && state !== "success" && state !== "error") {
     stage.dataset.state = state;
     document.documentElement.style.setProperty("--accent", ACCENT[state]);
     return;

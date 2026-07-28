@@ -18,7 +18,12 @@ interface StoryState {
   firsts: string[];
   days: Record<string, DayStats>;
   lastSeenDate: string;
-  gags: { pizzaMentions: number; lastPizzaAt: number };
+  gags: {
+    pizzaMentions: number;
+    lastPizzaAt: number;
+    lastPizzaPayoffAt?: number;
+    lastSwordCareAt?: number;
+  };
   unlocks: string[];
 }
 
