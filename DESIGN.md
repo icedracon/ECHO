@@ -598,3 +598,30 @@ about the pass. There is more.") — that's the remembering-feel.
     sharp. Priorities."
 - **Director-AI hook (later):** the LLM retells fragments in his voice and
   weaves in YOUR day ("You fought errors all night. I know that fight.").
+
+### 12d. Corvin — Steam and YouTube behaviours (2026-07-28)
+
+**Gaming (Steam) — your game is HIS HUNT.** He treats the user's match as a
+battle he's overseeing:
+- Launch: stands, draws the greatsword ONCE — slow — and plants it
+  point-down. Taking the watch. ("The hunt begins.")
+- During play: whetstone strokes between beats (a hunter maintains his
+  edge), intent watching-you-work stance, the claw flexing when the game
+  gets loud; ARTSIV SCOUTS — occasional takeoff, one circle, returns
+  (recon, not celebration).
+- The ~10-min big beat: THE CHARGE STANCE — cracks glow brighter and
+  brighter, he holds it, then releases with one slow exhale. He FEELS your
+  battle through the arm.
+- Rare salute: the execution slash into empty air ("One less.").
+- Game ends: sheathes, shoulders drop half an inch. "The hunt is done."
+- Typing/mouse = gameplay, suppressed — same engine rule.
+
+**Media (YouTube/music) — the stoic's concession.** Corvin does not dance.
+- His music beat: eyes closed, and ONE finger tapping the sword hilt in
+  rhythm. That single tapping finger on a greatsword hilt is the entire
+  soul of the character — minimal, dry, alive.
+- The big media moment (плакат-equivalent): ARTSIV PERFORMS — takes off
+  and flies a slow aerial dance carrying a small banner in his talons
+  (the user's gif rides the banner), while Corvin watches with the
+  one-second closed-eyes almost-smile. Celebration, outsourced — as
+  always.
