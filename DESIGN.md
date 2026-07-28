@@ -454,6 +454,9 @@ cold pitches usually meet silence; traction from shipping is what opens doors.
 
 ## 12. The original character — "Corvin & Artsiv" (working names, 2026-07-28)
 
+CANON FACE: the final base sprite (sheetbase_final.png) — LIVING fair skin,
+dark-blue eyes, stern but human. NEVER the chalk-white vampiric face some
+one-off gens produce; reject any frame that drifts white.
 Reference: Downloads/88f6469a…png + 06a0b15e…png — long black hair, torn black
 coat, a DEMONIC RIGHT ARM (black chitin, red glowing cracks), a massive dark
 greatsword with red veins, and a WHITE EAGLE companion. Name candidates:
