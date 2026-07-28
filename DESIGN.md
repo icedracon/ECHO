@@ -405,9 +405,9 @@ Ranked by how often the user sees the flaw:
 1. **sidewalk (walk)** — most-seen transition, uniform timing, feet slide.
    First candidate for a regen when gens return; until then a contact-frame
    msSeq pass.
-2. **Canvas mismatch** — typing set is 84x107, everything newer is 97x128:
-   he SHRINKS slightly when the laptop comes out (height-normalized render
-   scales the canvas, not the character). Normalize old sets onto 97x128.
+2. ~~Canvas mismatch~~ — MEASURED FALSE (2026-07-28): seated typing renders
+   165px vs seated sitswing 166px — within 1%. The perceived difference was
+   standing-vs-seated character height, which is correct anatomy. No action.
 3. **cheer** — generic arms-up; the least Dante-flavored clip. Replace
    eventually with a gun-twirl-point (reference: his win poses).
 4. **speaking=taunt overuse** — taunt doubles as work pose and speaking;

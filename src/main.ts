@@ -565,6 +565,9 @@ const ANIMS: Record<State, Clip> = {
 };
 // Walk = the legs-visible side walk (regenerated upright-posture version).
 const WALK = clip("sidewalk", 110, true, 0, 8);
+// Contact frames (footfalls) hold a beat longer — ground stops feet, feet
+// don't slide over ground.
+WALK.msSeq = [105, 95, 128, 98, 105, 95, 128, 98];
 // Scene clips hold their final pose (settle=8) so the gag orchestrator controls
 // every transition — no flicker back to idle mid-sequence.
 // Error gag: falls, then climbs back up. Slower ms so both read clearly.
@@ -723,6 +726,13 @@ function onContext(kind: string) {
   }
   if (kind === "cursor_far") {
     if (!gagActive && !showcasing && !introActive) delete stage.dataset.facing;
+    return;
+  }
+  // Battery low: he runs on fumes with you — energy caps, one dry line.
+  if (kind === "battery_low") {
+    life.v.energy = Math.min(life.v.energy, 0.3);
+    showBubble("Running on fumes.", PRIO.NOTABLE);
+    dbg("battery low -> energy capped");
     return;
   }
   // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing off.
@@ -2045,7 +2055,8 @@ async function danceScene(durationMs?: number) {
     // smooth bridge: stand up, then dance — classic moves or the headbang
     await standUp();
     await sleep(240 + Math.random() * 120); // a breath before the first move
-    curClip = Math.random() < 0.5 ? HEADBANG : DANCE;
+    // §10: headbang leads; the classic moves become the rarer treat.
+    curClip = Math.random() < 0.8 ? HEADBANG : DANCE;
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
     const loop = DANCE.frames.length * DANCE.ms;

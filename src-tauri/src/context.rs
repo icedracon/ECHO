@@ -362,6 +362,66 @@ fn steam_running_app() -> bool {
     false
 }
 
+/// §10 flagship: the system media session (SMTC). Browsers register here, so
+/// music playing in a BACKGROUND tab is finally visible — window titles only
+/// ever saw the foreground tab.
+#[cfg(windows)]
+fn media_session_playing() -> bool {
+    use windows::Media::Control::{
+        GlobalSystemMediaTransportControlsSessionManager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    };
+    (|| -> windows::core::Result<bool> {
+        let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.join()?;
+        let sessions = mgr.GetSessions()?;
+        for i in 0..sessions.Size()? {
+            let s = sessions.GetAt(i)?;
+            if let Ok(info) = s.GetPlaybackInfo() {
+                if info.PlaybackStatus()? == Status::Playing {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    })()
+    .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn media_session_playing() -> bool {
+    false
+}
+
+/// Battery: low + discharging feeds the life vector (he runs on fumes too).
+#[cfg(windows)]
+fn battery_low() -> bool {
+    #[repr(C)]
+    struct PowerStatus {
+        ac_line: u8,
+        flag: u8,
+        percent: u8,
+        _reserved: u8,
+        _lifetime: u32,
+        _full_lifetime: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetSystemPowerStatus(s: *mut PowerStatus) -> i32;
+    }
+    unsafe {
+        let mut s = PowerStatus { ac_line: 255, flag: 255, percent: 255, _reserved: 0, _lifetime: 0, _full_lifetime: 0 };
+        if GetSystemPowerStatus(&mut s) == 0 {
+            return false;
+        }
+        s.ac_line == 0 && s.percent <= 25
+    }
+}
+
+#[cfg(not(windows))]
+fn battery_low() -> bool {
+    false
+}
+
 #[cfg(windows)]
 thread_local! {
     static TITLES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -406,6 +466,7 @@ fn spawn_dns(app: AppHandle) {
         let mut had_game = false;
         let mut had_fullscreen = false;
         let mut had_steam_game = false;
+        let mut had_battery = false;
         let mut last_media = Instant::now() - Duration::from_secs(600);
         let mut last_game = Instant::now() - Duration::from_secs(600);
         {
@@ -440,11 +501,16 @@ fn spawn_dns(app: AppHandle) {
             let game_hit = titles
                 .iter()
                 .find(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
-            let media_now = media_hit.is_some();
+            let media_titles = media_hit.is_some();
+            // SMTC sees background-tab / minimized players that titles never can.
+            let media_now = media_titles || media_session_playing();
             let game_now = game_hit.is_some();
             if media_now && !had_media {
                 fire_media = true;
-                clog(&format!("media window detected: {:?}", media_hit.unwrap()));
+                match media_hit {
+                    Some(t) => clog(&format!("media window detected: {t:?}")),
+                    None => clog("media session playing (SMTC)"),
+                }
             }
             if game_now && !had_game {
                 fire_game = true;
@@ -457,7 +523,9 @@ fn spawn_dns(app: AppHandle) {
             // (the game's own title matches nothing, the Steam client may be in
             // the tray). Steam's RunningAppID additionally catches WINDOWED
             // games; its 0->N edge is a real game launch -> shoot burst.
-            let fullscreen_game = foreground_fullscreen() && !media_now;
+            // Fullscreen counts as gaming judged by TITLES only — background
+            // music via SMTC must not cancel the gaming mood mid-match.
+            let fullscreen_game = foreground_fullscreen() && !media_titles;
             if fullscreen_game && !had_fullscreen {
                 clog("fullscreen foreground -> gaming mood");
             }
@@ -484,6 +552,13 @@ fn spawn_dns(app: AppHandle) {
             if media_now {
                 let _ = app.emit("context-event", ContextEvent { kind: "media_active" });
             }
+            // Battery: one edge when he starts running on fumes.
+            let batt = battery_low();
+            if batt && !had_battery {
+                clog("battery low + discharging");
+                let _ = app.emit("context-event", ContextEvent { kind: "battery_low" });
+            }
+            had_battery = batt;
         }
     });
 }
