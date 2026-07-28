@@ -610,9 +610,13 @@ const TAUNT = clip("taunt", 100, true, 8);
 TAUNT.msSeq = [120, 100, 85, 80, 85, 95, 105, 115, 130];
 // M5 living behaviours: the payoffs and flourishes of a life, not reactions.
 const PIZZA = clip("pizza", 160, false, 0, 13); // the gag's earned payoff
+// Eating is SLOW — box appears, opens, long chewing beats, satisfied vanish.
+PIZZA.msSeq = [200, 220, 260, 320, 380, 520, 620, 560, 640, 480, 320, 260, 240];
 const COINFLIP = clip("coinflip", 140, true, 8, 9); // standing coin toss
 const SWORDSPIN = clip("swordspin", 110, true, 8, 9); // fiery twirl (gaming beat)
 const WAKEUP = clip("wakeup", 150, false, 0, 9); // chained after every nap
+// Waking is groggy: slow stir, then gradually back to alert.
+WAKEUP.msSeq = [420, 340, 290, 250, 220, 200, 180, 170, 210];
 
 const TYPING = clip("typing", 110, false, 0); // laptop OUT — a transition, plays once
 // Physics: a reach starts quick and settles slow — ease-out, never linear.
@@ -745,6 +749,15 @@ function onContext(kind: string) {
     return;
   }
   // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing off.
+  // ONE gate for all demos: never during the walk-in, walks, or another scene —
+  // a seated payoff mid-stride breaks the walk (learned the hard way).
+  if (
+    kind.startsWith("demo_") &&
+    (introActive || wandering || away || returning || showcasing || gagActive)
+  ) {
+    dbg(`demo ignored (busy): ${kind}`);
+    return;
+  }
   if (kind === "demo_devil") {
     devilTriggerScene();
     return;
@@ -908,7 +921,9 @@ async function playSwordMove() {
 function demoSeated(c: Clip, line?: string) {
   if (!home || gagActive) return;
   stage.dataset.state = "idle";
-  commitFor(c.frames.length * c.ms * paceMul() + 400);
+  posture("idle", true); // seated payoffs need the seat, wherever he was
+  const total = (c.msSeq?.reduce((a, b) => a + b, 0) ?? c.frames.length * c.ms) * paceMul();
+  commitFor(total + 400);
   curClip = c;
   frameIdx = 0;
   if (line) showBubble(line, PRIO.NOTABLE);
@@ -1066,7 +1081,7 @@ function playIdleCycle() {
     story.s.gags.pizzaMentions = 0;
     story.save();
     dbg("pizza payoff!");
-    commitFor(PIZZA.frames.length * 170);
+    commitFor(PIZZA.msSeq!.reduce((a, b) => a + b, 0) * paceMul() + 400);
     curClip = PIZZA;
     frameIdx = 0;
     showBubble("Finally.", PRIO.NOTABLE);
