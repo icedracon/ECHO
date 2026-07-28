@@ -544,3 +544,57 @@ him — the eagle does the looking around) · boredom grows slowly.
 
 **What he NEVER does:** dance, taunt the user, sleep on post (his nap = a
 seated meditation, eyes closed, hand resting on the hilt).
+
+### 12c. Corvin — the first 10 moves + the storyteller memory (2026-07-28)
+
+**The first 10 (ordered by what makes people UNDERSTAND him fastest):**
+1. **idle-sentinel** — the 95% clip: still stance, slow breath, and the
+   TELL: the demon claw slowly flexes... and stills. One look = character.
+2. **walk** — heavy, unhurried, coat dragging; he arrives like a shift
+   starting, not a run.
+3. **post-rest (sit)** — sits on the taskbar edge, THE SWORD ACROSS HIS
+   KNEES. His sit is a guard's rest, not lounging.
+4. **meditation-think** — head bowed, eyes closed, hand on hilt. Thinking
+   state AND his "nap": he never sleeps on post.
+5. **watching-you-work** — arms crossed, occasional slow glance toward the
+   screen: a guard reviewing the field. (Work state.)
+6. **nod + claw-flex** — the win: a single slow nod, the claw closes once.
+   MUST read at 32px — it's the most common reaction.
+7. **arm-flare (restrained)** — error: cracks glow bright, the human hand
+   clamps the demon wrist, he looks at it, it dims. Stakes in one second.
+8. **the execution slash** — streak win: slow two-hand raise, a long hold,
+   ONE devastating cut, silence. His Jackpot.
+9. **kneel + Artsiv lands** — the breakdown: arm rebels, knee drops,
+   the eagle lands on the demon arm and it goes still. The signature.
+10. **the storyteller** — seated, whetstone strokes on the blade OR gazing
+    at the horizon, speaking. The pose that carries the tales system below.
+    (Artsiv's own mini-sheet — perch/head-tilt/takeoff/circle/land — is the
+    parallel track; moves 9-10 need him.)
+
+**The storyteller memory ("он помнит, что говорил"):**
+He tells his life in FRAGMENTS across weeks and NEVER repeats himself —
+story.json gains `told: {arcId: fragmentIndex}`; each telling advances the
+pointer, and CONTINUITY openers reference the last fragment ("I told you
+about the pass. There is more.") — that's the remembering-feel.
+
+- **tales.ts corpus — ordered arcs, fragments of 2-3 bubbles each:**
+  · THE ARM — how he lost the battle that lives in his sleeve
+  · ARTSIV — the frozen cliff where a white eagle chose him
+  · THE CASTLE — what he guards, and why the gates stay shut
+  · THE LAST HUNT — the one that ended his old life
+  · HARDSHIPS — winters, hunger, a betrayal he speaks of only once
+- **Cadence:** at most 1-2 tale-moments per day, only in quiet idle, never
+  during work. Small talk for Strangers; THE ARM and HARDSHIPS unlock at
+  Partner tier — intimacy is earned.
+- **Delivery:** storyteller pose + a chain of 2-3 bubbles (6-8s each),
+  Artsiv head-tilts between them. Ends dry: "Enough. Back to post."
+- **Sample fragments (his voice):**
+  · ARM/1: "You wonder about the arm. Everyone does. It was a door I
+    should not have opened." · ARM/2: "The thing behind that door is not
+    gone. It is HERE. We have an arrangement."
+  · ARTSIV/1: "I did not choose the bird. On the ridge, half-dead, I woke
+    — and he was standing on the sword. Judging me."
+  · HARD/1: "Three winters I ate what the snow left. The blade stayed
+    sharp. Priorities."
+- **Director-AI hook (later):** the LLM retells fragments in his voice and
+  weaves in YOUR day ("You fought errors all night. I know that fight.").
