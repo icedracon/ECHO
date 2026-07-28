@@ -172,6 +172,11 @@ fn spawn_typing(app: AppHandle) {
                             "devil" => "demo_devil",
                             "sword" => "demo_sword",
                             "poster" => "demo_poster",
+                            "pizza" => "demo_pizza",
+                            "coin" => "demo_coin",
+                            "spin" => "demo_spin",
+                            "clean" => "demo_clean",
+                            "wake" => "demo_wake",
                             _ => "",
                         };
                         if !kind.is_empty() {

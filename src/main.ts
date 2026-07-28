@@ -757,6 +757,26 @@ function onContext(kind: string) {
     posterScene(15000);
     return;
   }
+  if (kind === "demo_pizza") {
+    demoSeated(PIZZA, "Finally.");
+    return;
+  }
+  if (kind === "demo_clean") {
+    demoSeated(idleClip("cleansword"));
+    return;
+  }
+  if (kind === "demo_wake") {
+    demoSeated(WAKEUP);
+    return;
+  }
+  if (kind === "demo_coin") {
+    void coinFlourish();
+    return;
+  }
+  if (kind === "demo_spin") {
+    void demoSpin();
+    return;
+  }
   if (kind === "gaming_active") {
     // Short tail: heartbeats arrive every ~10 s while the game/fullscreen is
     // real, and typing should recover FAST once it ends (a 3-min tail read as
@@ -882,6 +902,34 @@ async function playSwordMove() {
   window.setTimeout(sfxSlashWhoosh, 2580 * p); // strike 2
   window.setTimeout(sfxEmberFizz, 3450 * p); // the sword burns away
   await sleep(SWORD.msSeq!.reduce((a, b) => a + b, 0) * p);
+}
+
+// Demo helpers: play a seated one-shot in place, or the standing fiery twirl.
+function demoSeated(c: Clip, line?: string) {
+  if (!home || gagActive) return;
+  stage.dataset.state = "idle";
+  commitFor(c.frames.length * c.ms * paceMul() + 400);
+  curClip = c;
+  frameIdx = 0;
+  if (line) showBubble(line, PRIO.NOTABLE);
+  afterClip = () => playIdleCycle();
+}
+
+async function demoSpin() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+    curClip = SWORDSPIN;
+    frameIdx = 0;
+    window.setTimeout(sfxIgnite, 300 * paceMul());
+    await sleep(SWORDSPIN.frames.length * SWORDSPIN.ms * paceMul() + 200);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
 }
 
 // Demo path: the sword move outside the gaming mood (guards itself).
