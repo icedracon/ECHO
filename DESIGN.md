@@ -423,3 +423,29 @@ toggle for quiet mode (NOT a settings page).
 
 **Sound direction:** layered near-inaudible soundscape (cloth, boot scuff,
 chair creak, holster click) instead of adding louder effects.
+
+---
+
+## 11. The product vision (2026-07-28, user + advisor)
+
+**Money requires an ORIGINAL character.** Dante = personal pack forever, never
+monetized. Design an owned character (same vibe, distinct name/silhouette/
+colors/lore) via the staged PixelLab pipeline (v2 create-character endpoints).
+
+**The director AI** — the real product: reflexes stay rule-based (instant,
+offline); a cheap LLM (e.g. Haiku, BYO key) is consulted at big moments and
+every few minutes with mood + story + day stats, PICKS behaviours from the
+frame library and WRITES his lines dynamically — in character, memory-aware.
+A companion who says something new about YOUR actual day.
+
+**MCP both ways:** ECHO as an MCP server so any AI tool (Claude Code, Cursor,
+ChatGPT desktop) drives the companion directly; the director calls out via
+API. ECHO = an embodiment layer any AI can wear.
+
+**Business model:** free engine + original default character; paid premium
+packs; crown jewel = "describe your companion, AI generates the full pack"
+(our staged generation pipeline, automated, as a product).
+
+**Company pitches:** cameo preset + character packs make the corporate story
+("micro-moments of delight, your mascot one manifest away"). Expectations:
+cold pitches usually meet silence; traction from shipping is what opens doors.
