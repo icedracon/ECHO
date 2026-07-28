@@ -38,6 +38,8 @@ const URGES: UrgeDef[] = [
   { clip: "stretch", plays: 1, hold: [6000, 14000], weight: (l) => 4 + (1 - l.v.energy) * 9 },
   { clip: "shrug", plays: 1, hold: [4000, 9000], weight: (l) => 2 + l.v.boredom * 8 },
   { clip: "headtilt", plays: 1, hold: [4000, 8000], weight: (l) => 2 + l.v.curiosity * 7 },
+  // M5: peers out past the screen edge when curiosity runs high.
+  { clip: "lookout", plays: 1, hold: [5000, 10000], weight: (l) => 1 + l.v.curiosity * 9 },
 ];
 
 // Naps only really happen when he's genuinely low / it's night.

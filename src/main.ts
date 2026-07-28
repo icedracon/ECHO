@@ -608,6 +608,12 @@ const GUNSPIN = clip("gunspin", 85, true, 8);
 GUNSPIN.msSeq = [120, 105, 90, 75, 65, 58, 54, 50, 60];
 const TAUNT = clip("taunt", 100, true, 8);
 TAUNT.msSeq = [120, 100, 85, 80, 85, 95, 105, 115, 130];
+// M5 living behaviours: the payoffs and flourishes of a life, not reactions.
+const PIZZA = clip("pizza", 160, false, 0, 13); // the gag's earned payoff
+const COINFLIP = clip("coinflip", 140, true, 8, 9); // standing coin toss
+const SWORDSPIN = clip("swordspin", 110, true, 8, 9); // fiery twirl (gaming beat)
+const WAKEUP = clip("wakeup", 150, false, 0, 9); // chained after every nap
+
 const TYPING = clip("typing", 110, false, 0); // laptop OUT — a transition, plays once
 // Physics: a reach starts quick and settles slow — ease-out, never linear.
 TYPING.msSeq = [90, 90, 95, 100, 110, 125, 145, 175, 220];
@@ -644,6 +650,8 @@ const IDLE_MS: Record<string, number> = {
   stretch: 140,
   shrug: 150,
   headtilt: 170,
+  // M5 living behaviours.
+  lookout: 170,
 };
 const idleClipCache: Record<string, Clip> = {};
 function idleClip(name: string): Clip {
@@ -896,10 +904,18 @@ async function gamingAmbience() {
   gagActive = true;
   try {
     await standUp();
-    curClip = GUNSPIN;
-    frameIdx = 0;
-    await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
-    sfxHolster();
+    // M5: sometimes the fiery sword twirl instead of the gun spins.
+    if (Math.random() < 0.4) {
+      curClip = SWORDSPIN;
+      frameIdx = 0;
+      window.setTimeout(sfxIgnite, 300 * paceMul());
+      await sleep(SWORDSPIN.frames.length * SWORDSPIN.ms * paceMul() + 200);
+    } else {
+      curClip = GUNSPIN;
+      frameIdx = 0;
+      await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
+      sfxHolster();
+    }
   } finally {
     gagActive = false;
     setState("idle"); // sits back down, legs swinging
@@ -996,6 +1012,18 @@ function playIdleCycle() {
     const l = story.pizzaLine();
     if (l) showBubble(l, PRIO.NOTABLE);
   }
+  // M5: the payoff — ONLY after 3+ earned mentions, then the cycle restarts.
+  if (story.s.gags.pizzaMentions >= 3 && Math.random() < 0.02 && !gagActive && home) {
+    story.s.gags.pizzaMentions = 0;
+    story.save();
+    dbg("pizza payoff!");
+    commitFor(PIZZA.frames.length * 170);
+    curClip = PIZZA;
+    frameIdx = 0;
+    showBubble("Finally.", PRIO.NOTABLE);
+    afterClip = () => playIdleCycle();
+    return;
+  }
   curUrge = pickIdle(life, lastIdleClip);
   lastIdleClip = curUrge.clip;
   idlePlaysLeft = curUrge.plays;
@@ -1017,7 +1045,16 @@ function idleStepDone() {
     return;
   }
   const [lo, hi] = curUrge.hold;
-  holdStill(idleClip(curUrge.clip), lo + Math.random() * (hi - lo), playIdleCycle);
+  // M5: waking from a nap is its own little scene, not a teleport to alert.
+  const next =
+    curUrge.clip === "nap"
+      ? () => {
+          curClip = WAKEUP;
+          frameIdx = 0;
+          afterClip = () => playIdleCycle();
+        }
+      : playIdleCycle;
+  holdStill(idleClip(curUrge.clip), lo + Math.random() * (hi - lo), next);
 }
 
 function playWalk() {
@@ -1236,7 +1273,8 @@ function reactWin() {
   const pick = pickWeighted([
     ["cheer", 0.3],
     ["flourish", 0.12 + life.v.cockiness * 0.18],
-    ["laugh", 0.15],
+    ["laugh", 0.13],
+    ["coin", 0.1], // M5: flips a coin over a win
     ["line", 0.2],
     ["nothing", 0.15 + life.v.focus * 0.15],
     // M2 Lv5 unlock: the sword joins the win pool, rare and earned.
@@ -1245,6 +1283,7 @@ function reactWin() {
   dbg(`react=win:${pick}`);
   if (pick === "cheer") void lightWin();
   else if (pick === "flourish") void gunFlourish();
+  else if (pick === "coin") void coinFlourish();
   else if (pick === "laugh") laughBeat();
   else if (pick === "sword") void demoSword();
   else if (pick === "line") showBubble(pickLine(WIN_LINES), PRIO.NOTABLE);
@@ -1287,6 +1326,23 @@ function annoyedWatch() {
   curClip = idleClip("checkwatch");
   frameIdx = 0;
   showBubble(pickLine(SHRUG_LINES), PRIO.NOTABLE);
+}
+
+// M5: stands, flips a coin over the win, checks it, sits back down.
+async function coinFlourish() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+    curClip = COINFLIP;
+    frameIdx = 0;
+    await sleep(COINFLIP.frames.length * COINFLIP.ms * paceMul() + 250);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
 }
 
 // A single show-off gun spin with a holster click — the cocky win reaction.
