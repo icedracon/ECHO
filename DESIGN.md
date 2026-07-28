@@ -617,11 +617,9 @@ battle he's overseeing:
 - Typing/mouse = gameplay, suppressed — same engine rule.
 
 **Media (YouTube/music) — the stoic's concession.** Corvin does not dance.
-- His music beat: eyes closed, and ONE finger tapping the sword hilt in
-  rhythm. That single tapping finger on a greatsword hilt is the entire
-  soul of the character — minimal, dry, alive.
-- The big media moment (плакат-equivalent): ARTSIV PERFORMS — takes off
-  and flies a slow aerial dance carrying a small banner in his talons
-  (the user's gif rides the banner), while Corvin watches with the
-  one-second closed-eyes almost-smile. Celebration, outsourced — as
-  always.
+- Small music beat: eyes closed, ONE finger tapping the sword hilt.
+- THE BIG MEDIA MOMENT (user-chosen): CORVIN PLAYS GUITAR — the sentinel
+  sets the sword aside, pulls out an acoustic guitar and plays, eyes
+  closed, while ARTSIV FLIES overhead in slow circles. The stoic's one
+  indulgence — campfire warrior, the storyteller with strings. The
+  contrast IS the moment.
