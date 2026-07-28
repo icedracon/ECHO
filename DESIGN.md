@@ -449,3 +449,48 @@ packs; crown jewel = "describe your companion, AI generates the full pack"
 **Company pitches:** cameo preset + character packs make the corporate story
 ("micro-moments of delight, your mascot one manifest away"). Expectations:
 cold pitches usually meet silence; traction from shipping is what opens doors.
+
+---
+
+## 12. The original character — "Corvin & Artsiv" (working names, 2026-07-28)
+
+Reference: Downloads/88f6469a…png + 06a0b15e…png — long black hair, torn black
+coat, a DEMONIC RIGHT ARM (black chitin, red glowing cracks), a massive dark
+greatsword with red veins, and a WHITE EAGLE companion. Name candidates:
+Corvin / Kael / Veyron; the eagle "Artsiv" (Armenian for eagle).
+
+**Identity — the anti-Dante (differentiation is the design):** Dante is loud
+cocky joy; Corvin is quiet intensity. The demon arm is the enemy living IN
+him — a wound he restrains, not a power he flaunts. The white eagle is his
+light: conscience, companion, and a SECOND on-screen actor.
+
+**Loves:** night (energy INVERTED vs Dante — he wakes up as you burn the
+midnight oil) · rain on the window · long focused runs · the eagle (feeds
+it, lets it land) · blade maintenance as RITUAL, whetstone strokes · quiet
+wins.
+
+**Doesn't love:** loud celebration (a win = slow nod + claw flex, never a
+cheer) · being watched (4th-wall moment = he turns AWAY, hood up) ·
+mornings (slow, silent) · errors — they anger THE ARM: red cracks flare and
+he grips it with the human hand. His breakdown is an internal fight, not a
+fall — he kneels, the arm rebels, and ARTSIV LANDS TO CALM HIM. That scene
+is the emotional signature of the whole character.
+
+**Attack style (vs Dante's fast combos — heavy executioner):**
+- Slow windup → ONE devastating overhead execution slash (screen-weight).
+- Demon-claw secondaries: grab, crush, a backhand swat.
+- Charged stance: the arm's red cracks glow brighter as power builds.
+- Artsiv strikes: dive-marks a target before the blade falls.
+- Ultimate "Unchained": the arm fully awakens (his Devil-Trigger analog) —
+  brief, terrifying, then he chains it back down.
+
+**Engine mapping:** success=nod+claw-flex · streak=execution slash ·
+error=arm flare (restrained) · breakdown=kneel + eagle landing · idle=
+whetstone ritual, feeding Artsiv, hood, horizon-watch · typing=black
+grimoire instead of a laptop · away=Artsiv stays on a perch watching (the
+companion's companion). Eagle is a SEPARATE small sprite — independent
+flight, cameos, landings.
+
+**Sprite plan:** pixelize the MAN ALONE from the reference (bird excluded),
+8-rotation sheet ("pixel 360"), then Artsiv as his own mini-sheet. Corvin
+is the monetizable face: fully original — ours.
