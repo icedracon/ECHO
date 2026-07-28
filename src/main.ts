@@ -652,6 +652,7 @@ const IDLE_MS: Record<string, number> = {
   headtilt: 170,
   // M5 living behaviours.
   lookout: 170,
+  cleansword: 200,
 };
 const idleClipCache: Record<string, Clip> = {};
 function idleClip(name: string): Clip {
@@ -1025,6 +1026,9 @@ function playIdleCycle() {
     return;
   }
   curUrge = pickIdle(life, lastIdleClip);
+  // M5 gate: a Stranger doesn't get the intimate sword-care moment yet.
+  if (curUrge.clip === "cleansword" && story.chapter() === "stranger")
+    curUrge = { clip: "sitswing", plays: 2, hold: [8000, 16000] };
   lastIdleClip = curUrge.clip;
   idlePlaysLeft = curUrge.plays;
   curClip = idleClip(curUrge.clip);

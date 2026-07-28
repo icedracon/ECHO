@@ -40,6 +40,9 @@ const URGES: UrgeDef[] = [
   { clip: "headtilt", plays: 1, hold: [4000, 8000], weight: (l) => 2 + l.v.curiosity * 7 },
   // M5: peers out past the screen edge when curiosity runs high.
   { clip: "lookout", plays: 1, hold: [5000, 10000], weight: (l) => 1 + l.v.curiosity * 9 },
+  // M5: quiet sword care in focused moments — rare, and Partner-chapter only
+  // (gated in playIdleCycle; the planner doesn't know the story).
+  { clip: "cleansword", plays: 1, hold: [6000, 12000], weight: (l) => 1.5 + l.v.focus * 4 },
 ];
 
 // Naps only really happen when he's genuinely low / it's night.
