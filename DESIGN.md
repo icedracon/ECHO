@@ -494,3 +494,53 @@ flight, cameos, landings.
 **Sprite plan:** pixelize the MAN ALONE from the reference (bird excluded),
 8-rotation sheet ("pixel 360"), then Artsiv as his own mini-sheet. Corvin
 is the monetizable face: fully original — ours.
+
+### 12b. Corvin — the character bible (2026-07-28)
+
+**Essence: a sentinel, not a hunter.** Dante fights for the joy of it;
+Corvin keeps a post. The demon arm is a battle he lost ONCE — keeping it
+chained every day is his quiet victory. Not brooding: SETTLED. Economy of
+motion, level shoulders, the demon arm always held slightly behind his body
+(he hides it). His tell: the claw slowly flexing and closing when stressed.
+
+**Psychology.** Driven by duty and a quiet attachment (the eagle first, the
+user later). Fears one thing: losing control of the arm — of himself. Every
+error streak is the arm STIRRING, so the user's failures are personally
+dangerous to him — that's why he watches your work like a guard, not a fan.
+Respects: effort, persistence, night shifts. Values silence; idleness never
+annoys him.
+
+**Artsiv.** An equal, not a pet. Judges with a head-tilt, warns before
+trouble, and lands on the demon arm to calm it — their wordless dialogue is
+the character's charm engine. When Corvin is "happy", it's an exhale and
+one second of closed eyes; when he celebrates, ARTSIV celebrates for him
+(a victory circle overhead).
+
+**Speech (dry, verbs first, one wry line a day):** wins — "Done." /
+"Clean." / "The blade approves." · errors — "...it stirs." / "Hold." ·
+streak-end — "Chained again." · night — "Now we're awake." · morning —
+"Too bright." · leave — "Artsiv watches." · return — "Back to post." ·
+partner-tier — "The arm is quiet today. Good day." / "You work like me.
+Too much."
+
+**Relationship arc.** Stranger: a sentry's courtesy ("Working." "Noted.").
+Colleague: dry humor, nods. Partner: rare personal lines and protection —
+on your bad days: "Steady. We've beaten this one before."
+
+**Engine mapping — resting vector (vs Dante's):** energy INVERTED by time
+of day (day 0.35 / night 0.75) · cockiness resting 0.2 and barely grows ·
+confidence steady 0.6 · patience HIGH 0.8 but falls off a cliff (when it
+falls — the arm flares) · focus 0.7 · curiosity 0.3 (ARTSIV is curious for
+him — the eagle does the looking around) · boredom grows slowly.
+
+**Scene replacements (his versions of Dante's beats):**
+- Jackpot → THE EXECUTION: one slow overhead severing strike, then silence.
+- Dance → ARTSIV'S FLIGHT: the eagle lifts off, a victory circle, returns.
+- Breakdown → THE STRUGGLE: the arm rebels, he drops to one knee gripping
+  it; Artsiv lands on the demon arm and it goes still. His signature scene.
+- Devil Trigger → UNCHAINED: the arm fully wakes, eyes go red, two seconds
+  of the thing he could be — then he chains it back down.
+- Плакат scene → Artsiv carries a banner in his talons.
+
+**What he NEVER does:** dance, taunt the user, sleep on post (his nap = a
+seated meditation, eyes closed, hand resting on the hilt).
