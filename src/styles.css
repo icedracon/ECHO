@@ -151,3 +151,17 @@ body {
 #hud #level {
   color: #cbd3de;
 }
+
+/* Artsiv in free flight: absolutely positioned inside the stage, driven by
+   artsivFly(). Static element — dynamically-appended nodes never painted in
+   the transparent window. */
+#artsiv {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 6;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.4));
+}

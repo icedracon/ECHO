@@ -126,9 +126,11 @@ fn poster_media() -> Vec<(String, String)> {
         return out;
     };
     let dir = home.join(".echo").join("media");
-    let want: [(&str, &[(&str, &str)]); 2] = [
+    let want: [(&str, &[(&str, &str)]); 3] = [
         ("poster", &[("gif", "image/gif"), ("png", "image/png"), ("webp", "image/webp")]),
         ("song", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+        // Corvin's midnight ritual: ~/.echo/media/nightsong.mp3 (user's own file)
+        ("nightsong", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
     ];
     for (stem, exts) in want {
         for (ext, mime) in exts {
@@ -167,6 +169,27 @@ fn story_save(data: String) {
         let dir = home.join(".echo");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("story.json"), data);
+    }
+}
+
+/// Character pack selection: ~/.echo/character holds "dante" (default) or
+/// "corvin". Read at boot; `echo be corvin > ~/.echo/demo` switches live.
+#[tauri::command]
+fn character_load() -> String {
+    let Some(home) = dirs::home_dir() else {
+        return String::new();
+    };
+    std::fs::read_to_string(home.join(".echo").join("character"))
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn character_save(name: String) {
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".echo");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("character"), name);
     }
 }
 
@@ -224,7 +247,9 @@ pub fn run() {
             voice_clips,
             poster_media,
             story_load,
-            story_save
+            story_save,
+            character_load,
+            character_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

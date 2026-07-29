@@ -121,3 +121,33 @@ Raise `IDLE_SEQ` holds, raise `winStreak/errStreak` to 4, raise `SCENE_MIN_GAP` 
 ### Quick "make him livelier" recipe
 Lower streak thresholds to 2, lower `SCENE_MIN_GAP` to 90000, raise
 `AMBIENT_BUBBLE_CHANCE` to 0.4, shorten `IDLE_SEQ` holds.
+
+---
+
+## J. Corvin — first sheet (src/corvin.ts, public/pixel/corvin/)
+20 moves, 203 frames, all approved from GIF previews. Timings live in
+`src/corvin.ts` (msSeq = the approved preview pacing, verbatim).
+Demo reel: `echo corvin > ~/.echo/demo` plays the full showcase.
+
+| Move | Dir | Frames | Total ms | Notes |
+|---|---|---|---|---|
+| Idle | `idle` | 9 | 2070 | breathing loop |
+| Walk-in | `walkin` | 9 | 1020/pass | over-shoulder sword carry |
+| Walk-out | `walkout` | 9 | 1020/pass | knight back-carry, mirror for exit |
+| Sit | `sit` | 9 | 1800 | sword across knees, settle=8 |
+| Bow | `bow` | 9 | 2030 | knightly, back bends 25–30° |
+| Meditate | `meditate` | 9 | 2920/pass | seated, loops |
+| Aura rise | `aurarise` | 9 | 1610 | FULL flare: pool -> engulf |
+| Aura burn | `auraburn` | 9 | 1080/pass | flicker loop at peak |
+| Aura sink | `aurasink` | 9 | 1880 | flames sink back |
+| Exec raise | `execraise` | 9 | 2410 | slow lift, 650 ms tension hold |
+| Exec strike | `execstrike` | 13 | 2360 | slam 220 ms + shadow burst |
+| Kneel down | `kneeldown` | 11 | 2710 | vigil entry, 750 ms hold |
+| Eagle hop | `eaglehop` | 11 | 2410 | Artsiv to the crossguard |
+| Kneel rise | `kneelrise` | 13 | 2610 | eagle returns, he stands |
+| Whetstone | `whetstone` | 11 | 3150/pass | storyteller loop (tales.ts) |
+| Guitar | `guitar` | 11 | 1760/pass | YouTube moment, Artsiv hovers |
+| Charge | `charge` | 15 | 3480 | blade ignition, 940 ms peak |
+| Takeoff | `takeoff` | 9 | 1620 | ends: Corvin alone |
+| Landing | `landing` | 9 | 1720 | glide + brake, ends at base |
+| Artsiv solo | `artsivfly` | 10 | 1400/pass | 84x37 flying sprite, engine-driven |

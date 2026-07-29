@@ -169,3 +169,45 @@ with it for a day.
   say so.
 - Keep clips consistent: one Dante, generated from a single base sprite. Never
   mix art styles. No copyrighted audio/frames in the repo — original only.
+
+---
+
+# Handoff 2026-07-29 — Corvin's first sheet is LIVE
+
+## What exists now
+- **20 Corvin moves, 203 frames** in `public/pixel/corvin/` (sources in
+  `assets-src/wip/corvin/`), all user-approved from GIF previews one by one.
+- **`src/corvin.ts`** — the clip catalogue with hand-tuned msSeq timings
+  (= the approved preview pacing). Table in `MOVES.md` §J.
+- **Showcase reel**: `echo corvin > ~/.echo/demo` → full reel on the taskbar
+  (walk-in, bow, charge, execution, FULL shadow aura, sit + whetstone tale,
+  guitar + hovering Artsiv, vigil with the eagle, Artsiv takeoff/landing,
+  meditate, mirrored knightly walk-out). Verified frame-by-frame with the
+  BitBlt capture rig — no Dante flashes (playCorvin commits per clip).
+- Dante gaming beats FIXED and verified: `game_start` event (Steam
+  RunningAppID / fullscreen edge) arms devil@3:00, sword@7:00, then 10-min
+  cadences; TOPMOST re-asserted each heartbeat (borderless games show him;
+  exclusive fullscreen cannot be drawn over). Beat loop try/catch + skip logs.
+- PixelLab: key `7e9bb8f8...` active (~19 gens left), old key in `.env` as
+  `PIXELLAB_API_KEY_OLD` (~2.5 gens).
+
+## Key techniques that worked (reuse these)
+- Prompt alone won't engulf the body in aura: PAINT the peak frame (PIL:
+  dilated-silhouette flame halo + floor pool), then generate rise/burn/sink
+  with pinned endpoints. `aura_peak_anchor.png` is the canon aura peak.
+- Pinning first=last to base KILLS big pose changes (raise attempt just glowed
+  the blade — that became the charge move). Free the last frame, then use its
+  final frame as the next stage's anchor.
+- Donor transplants: guitar + flying eagle came from the banned white-face
+  still (`key_guitar.png`) — objects are usable, faces are not. The standalone
+  `artsivfly` sprite was cropped from the guitar loop, zero credits.
+
+## Tomorrow (user said: continue generating new moves)
+1. New moves via the one-by-one verdict loop (queue ideas: Unchained DT-analog
+   from aura peak, hunt-watch stance for Steam, storyteller gesture variants,
+   Artsiv shoulder-nuzzle, damage/stagger reaction).
+2. Then the real pack integration: character switch (`~/.echo/character`),
+   scene remaps (Jackpot→Execution, плакат→guitar, DT→Unchained,
+   Breakdown→vigil), tales.ts wiring with story.json arc pointers, resting
+   vector (DESIGN §12b), Artsiv free-flight during Steam (engine-driven
+  `artsivfly` sprite on its own element).

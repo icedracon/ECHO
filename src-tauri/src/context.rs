@@ -177,6 +177,23 @@ fn spawn_typing(app: AppHandle) {
                             "spin" => "demo_spin",
                             "clean" => "demo_clean",
                             "wake" => "demo_wake",
+                            // Fan-facing switches: `echo corvin` / `echo dante`.
+                            "corvin" | "be corvin" => "demo_be_corvin",
+                            "dante" | "be dante" => "demo_be_dante",
+                            "reel" => "demo_corvin", // the full showcase reel
+                            "cleave" => "demo_cleave",
+                            "unchained" => "demo_unchained",
+                            "hunt" => "demo_hunt",
+                            "nuzzle" => "demo_nuzzle",
+                            "damage" => "demo_damage",
+                            "vigil" => "demo_vigil",
+                            "execution" => "demo_execution",
+                            "guitar" => "demo_guitar",
+                            "night" => "demo_night",
+                            "chapter" => "demo_chapter",
+                            "tale" => "demo_tale",
+                            "scan" => "demo_scan",
+                            "fly" => "demo_fly",
                             _ => "",
                         };
                         if !kind.is_empty() {
@@ -533,12 +550,17 @@ fn spawn_dns(app: AppHandle) {
             let fullscreen_game = foreground_fullscreen() && !media_titles;
             if fullscreen_game && !had_fullscreen {
                 clog("fullscreen foreground -> gaming mood");
+                // A fullscreen flip is a real game starting (non-Steam path).
+                let _ = app.emit("context-event", ContextEvent { kind: "game_start" });
             }
             had_fullscreen = fullscreen_game;
             let steam_game = steam_running_app();
             if steam_game && !had_steam_game {
                 clog("steam RunningAppID set -> game session");
                 fire_game = true;
+                // The 0->N edge is the actual game LAUNCH — the frontend anchors
+                // its devil/sword clocks to this, not to the Steam client window.
+                let _ = app.emit("context-event", ContextEvent { kind: "game_start" });
             }
             had_steam_game = steam_game;
 

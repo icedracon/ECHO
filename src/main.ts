@@ -5,6 +5,7 @@ import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
 import { Story, dateKey } from "./story";
+import { CORVIN, corvinClipTotal } from "./corvin";
 import {
   pickIdle,
   type IdleUrge,
@@ -563,6 +564,31 @@ const ANIMS: Record<State, Clip> = {
   success: clip("cheer", 90, false), // once -> idle
   error: clip("stagger", 80, false), // once -> idle
 };
+// ---- Character packs ---------------------------------------------------------
+// "dante" (default) or "corvin" — read from ~/.echo/character at boot, switched
+// live with `echo be corvin > ~/.echo/demo`. Corvin swaps the state clips and
+// every big scene; the engine (states, streaks, budgets, story) is shared.
+let character: "dante" | "corvin" = "dante";
+const isCorvin = () => character === "corvin";
+const ANIMS_DANTE: Record<State, Clip> = { ...ANIMS };
+function applyCharacter() {
+  if (isCorvin()) {
+    ANIMS.idle = CORVIN.windidle as Clip; // the watch, coat moving in the wind
+    ANIMS.thinking = CORVIN.windidle as Clip;
+    // Work states sit on the CALM wind idle — the horizon-scan pose looped
+    // nonstop when it was the coding base (user: "не давай ему так часто").
+    // huntwatch stays in the quiet rotation and the gaming mood only.
+    ANIMS.coding = CORVIN.windidle as Clip;
+    ANIMS.searching = CORVIN.windidle as Clip;
+    ANIMS.speaking = CORVIN.idle as Clip;
+    ANIMS.success = CORVIN.idle as Clip; // wins get pooled reactions, not cheers
+    ANIMS.error = CORVIN.damage as Clip; // takes the hit, never falls
+  } else {
+    Object.assign(ANIMS, ANIMS_DANTE);
+  }
+  dbg(`character: ${character}`);
+}
+
 // Walk = the legs-visible side walk (regenerated upright-posture version).
 const WALK = clip("sidewalk", 110, true, 0, 8);
 // Contact frames (footfalls) hold a beat longer — ground stops feet, feet
@@ -680,6 +706,7 @@ const IDLE_CYCLE = ["sitswing", "sitcross", "sitthink"].map(idleClip); // showca
 let afterClip: (() => void) | null = null;
 
 // preload every frame
+const PRELOADED: HTMLImageElement[] = [];
 [
   ...Object.values(ANIMS),
   ...Object.keys(IDLE_MS).map(idleClip),
@@ -696,7 +723,16 @@ let afterClip: (() => void) | null = null;
   TAUNT,
   TYPING,
   TYPETAP,
-].forEach((c) => c.frames.forEach((s) => (new Image().src = s)));
+  // The whole Corvin pack too — an unloaded frame on a clip switch flashes the
+  // broken-image icon mid-scene (caught by the capture rig, twice per reel).
+  ...Object.values(CORVIN),
+].forEach((c) =>
+  c.frames.forEach((s) => {
+    const im = new Image();
+    im.src = s;
+    PRELOADED.push(im); // HOLD the references — dropped Images get cache-evicted
+  }),
+);
 
 // Context awareness (from the Rust context watcher): you typing -> he types;
 // opening video/music -> a dance; launching a game -> he shoots. Rate-limited
@@ -717,6 +753,24 @@ function onContext(kind: string) {
     if (Math.abs(home.lastX - home.cornerX) > 4) return; // not settled yet
     // YOU typing outranks ambient AI poses — he sits down and works with you.
     typingUntil = Date.now() + 9000; // each keystroke extends the session
+    if (isCorvin()) {
+      // No laptop for the sentinel: while you type he sits and tends the blade.
+      // A typing session that survives 7 minutes earns a novel chapter; a gap
+      // longer than 90 s starts the session clock over.
+      if (!typingSessionStart || Date.now() - lastTypingEventAt > 90_000)
+        typingSessionStart = Date.now();
+      lastTypingEventAt = Date.now();
+      maybeTellNovel();
+      if (curClip !== (CORVIN.whetstone as Clip)) {
+        stage.dataset.state = "idle";
+        curClip = CORVIN.whetstone as Clip;
+        frameIdx = 0;
+        afterClip = null;
+        dbg("typing -> whetstone (corvin)");
+        tickTyping();
+      }
+      return;
+    }
     if (curClip !== TYPING && curClip !== TYPETAP) {
       stage.dataset.state = "idle";
       posture("idle", true); // laptop needs him seated
@@ -803,11 +857,56 @@ function onContext(kind: string) {
     void demoSpin();
     return;
   }
+  if (kind === "demo_corvin") {
+    void demoCorvin();
+    return;
+  }
+  // Character pack switch (live, persisted): `echo be corvin > ~/.echo/demo`.
+  if (kind === "demo_be_corvin" || kind === "demo_be_dante") {
+    character = kind === "demo_be_corvin" ? "corvin" : "dante";
+    applyCharacter();
+    void invoke("character_save", { name: character }).catch(() => {});
+    showBubble(isCorvin() ? "Корвин. Страж." : "Dante's back.", PRIO.NOTABLE);
+    setState("idle");
+    return;
+  }
+  // Corvin scene QA hooks — same names you'd guess: echo cleave > ~/.echo/demo
+  if (kind === "demo_cleave") return void cleaveScene();
+  if (kind === "demo_unchained") return void unchainedScene();
+  if (kind === "demo_hunt") return void huntwatchPass();
+  if (kind === "demo_nuzzle") return void nuzzleScene();
+  if (kind === "demo_damage") return void reactErrorCorvin();
+  if (kind === "demo_vigil") return void vigilScene();
+  if (kind === "demo_execution") return void executionScene();
+  if (kind === "demo_guitar") return void guitarScene(12000);
+  if (kind === "demo_night") return void nightSongScene();
+  if (kind === "demo_tale") return void whetstoneTaleScene();
+  if (kind === "demo_scan") return void magicscanScene();
+  if (kind === "demo_fly") return void artsivCycleScene();
+  if (kind === "demo_chapter") {
+    typingSessionStart = Date.now() - NOVEL_AFTER_TYPING_MS - 1000;
+    if (story.s.novel) story.s.novel.lastAt = 0;
+    maybeTellNovel();
+    return;
+  }
   if (kind === "gaming_active") {
     // Short tail: heartbeats arrive every ~10 s while the game/fullscreen is
     // real, and typing should recover FAST once it ends (a 3-min tail read as
     // "typing randomly broken" after closing a game).
     gamingUntil = Date.now() + 60 * 1000;
+    // Borderless games repaint above us unless TOPMOST is re-asserted; do it
+    // on the heartbeat so he rides on top of the game, not behind it.
+    void getCurrentWindow().setAlwaysOnTop(true).catch(() => {});
+    return;
+  }
+  if (kind === "game_start") {
+    // The REAL game launch edge (Steam RunningAppID 0->N or a fullscreen flip):
+    // anchor the fixed schedule here — devil at 3:00, sword at 7:00, then each
+    // every 10 min. The Steam client window alone must not arm these.
+    lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
+    lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
+    armDanteClocks(); // spin@6:00/20m, coin@+3h, pizza@+3.5h — same session zero
+    dbg("game_start -> beat clocks armed (devil@3:00, sword@7:00)");
     return;
   }
   if (kind === "media_active") {
@@ -819,7 +918,8 @@ function onContext(kind: string) {
         lastMediaDance = Date.now();
         markScene();
         dbg("media session poster (15s)");
-        posterScene(15000); // the плакат every time, not just on open
+        if (isCorvin()) void guitarScene(15000); // he plays along instead
+        else posterScene(15000); // the плакат every time, not just on open
       } else {
         // Name the guard that vetoed it — silent skips are undebuggable.
         dbg(
@@ -835,14 +935,15 @@ function onContext(kind: string) {
     // (poster gif + song from ~/.echo/media) and dances beside it.
     lastMediaDance = Date.now();
     markScene();
-    posterScene(15000);
+    if (isCorvin()) void guitarScene(15000);
+    else posterScene(15000);
   } else if (kind === "gaming") {
+    // Mood only — the devil/sword clocks are armed by "game_start" (the real
+    // launch edge), never by DNS hits or the Steam client window.
     gamingUntil = Date.now() + 3 * 60 * 1000;
-    // Stagger the big gaming moments: sword ~4 min into the session, devil ~10.
-    lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 4 * 60 * 1000;
-    lastGamingDevil = Date.now();
     markScene();
-    shootScene(3); // launched a game -> a longer 3-shot burst
+    if (isCorvin()) void magicscanScene(); // the hunt opens with a perimeter scan
+    else shootScene(3); // launched a game -> a longer 3-shot burst
   }
 }
 
@@ -856,6 +957,17 @@ let typingUntil = 0;
 let cursorGlance = 0;
 function tickTyping() {
   window.setTimeout(() => {
+    if (isCorvin()) {
+      // Whetstone session: keep stroking while you type, then simply rest.
+      if (curClip !== (CORVIN.whetstone as Clip)) return;
+      if (Date.now() < typingUntil) {
+        tickTyping();
+        return;
+      }
+      curClip = ANIMS.idle;
+      frameIdx = 0;
+      return;
+    }
     if (curClip !== TYPING && curClip !== TYPETAP) return; // something else took over
     if (Date.now() < typingUntil) {
       tickTyping(); // still typing — keep the laptop out
@@ -960,6 +1072,669 @@ async function demoSpin() {
   }
 }
 
+// ---- Corvin showcase (`echo corvin > ~/.echo/demo`) ------------------------
+// The Sentinel's full first sheet on the taskbar, timed per corvin.ts: entry,
+// bow, charge, execution, shadow aura, storyteller, guitar, vigil, Artsiv
+// cycle, meditation, exit. A rehearsal for the character pack — Dante's stage,
+// Corvin's reel.
+async function playCorvin(c: (typeof CORVIN)[keyof typeof CORVIN], passes = 1) {
+  const total = corvinClipTotal(c) * passes;
+  commitFor(total + 300); // session events must not flash Dante mid-reel
+  curClip = c;
+  frameIdx = 0;
+  await sleep(total);
+}
+
+async function demoCorvin() {
+  if (!home || gagActive) return;
+  gagActive = true;
+  afterClip = null; // a stale idle-cycle callback must not steal the reel
+  try {
+    stage.dataset.state = "idle";
+    await standUp();
+    showBubble("Corvin. The Sentinel.", PRIO.NOTABLE);
+    await playCorvin(CORVIN.walkin, 2); // steps onto the stage
+    await playCorvin(CORVIN.bow);
+    await playCorvin(CORVIN.idle);
+    await playCorvin(CORVIN.charge); // the blade ignites
+    await playCorvin(CORVIN.execraise); // execution: slow raise...
+    await playCorvin(CORVIN.execstrike); // ...one devastating cut
+    await playCorvin(CORVIN.aurarise); // the shadow monarch aura
+    await playCorvin(CORVIN.auraburn, 2);
+    await playCorvin(CORVIN.aurasink);
+    await playCorvin(CORVIN.sit);
+    showBubble("The bird thinks your code is sloppy.", PRIO.NOTABLE);
+    await playCorvin(CORVIN.whetstone, 2); // storyteller strokes
+    await playCorvin(CORVIN.guitar, 3); // the YouTube moment
+    await playCorvin(CORVIN.idle); // neutral beat before the vigil
+    await playCorvin(CORVIN.kneeldown);
+    await playCorvin(CORVIN.eaglehop);
+    await playCorvin(CORVIN.kneelrise);
+    await playCorvin(CORVIN.takeoff); // Artsiv flies...
+    await sleep(900);
+    await playCorvin(CORVIN.landing); // ...and returns
+    await playCorvin(CORVIN.meditate, 2);
+    stage.dataset.facing = "left";
+    await playCorvin(CORVIN.walkout, 2); // leaves the way knights do
+  } finally {
+    stage.dataset.facing = "right";
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// ---- Corvin scenes (the pack's behaviour layer) ------------------------------
+// Same engine, the sentinel's answers: Execution for Jackpot, Unchained for the
+// Devil Trigger, the vigil for a breakdown, guitar for the плакат, the watch
+// and the arcane scan for gaming, tales over the whetstone, a nuzzle for
+// milestones. Every scene runs through the one gag gate and ends back in idle.
+// Corvin is silent by design (user-directed): no ambient lines, no win/error
+// commentary. His words live exclusively in the stories (tales / novel /
+// midnight), voiced through tellStory below.
+
+// ---- Story voice (user-directed): байки звучат ГОЛОСОМ и не прерываются -----
+// The system TTS (WebView2 -> Windows voices). Cyrillic lines pick a Russian
+// voice, everything else English; low pitch, unhurried rate — a worn sentinel.
+// While a story runs the nuzzle loop plays and a rolling commit + gagActive
+// keep every other system out until the last word is spoken.
+let ttsVoices: SpeechSynthesisVoice[] = [];
+function initTts() {
+  const load = () => {
+    ttsVoices = window.speechSynthesis?.getVoices() ?? [];
+  };
+  load();
+  window.speechSynthesis?.addEventListener?.("voiceschanged", load);
+}
+function speakLine(text: string): Promise<void> {
+  return new Promise((res) => {
+    const synth = window.speechSynthesis;
+    if (!synth) {
+      window.setTimeout(res, 2600); // no TTS -> bubble pacing only
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(text);
+    const ru = /[А-Яа-яЁё]/.test(text);
+    const v =
+      ttsVoices.find((x) => x.lang.toLowerCase().startsWith(ru ? "ru" : "en")) ?? null;
+    if (v) u.voice = v;
+    u.rate = 0.92;
+    u.pitch = 0.62; // low and worn
+    u.volume = 0.9;
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        res();
+      }
+    };
+    u.onend = finish;
+    u.onerror = finish;
+    synth.speak(u);
+    window.setTimeout(finish, 14000); // hard cap per line
+  });
+}
+
+// The storytelling pose: the nuzzle replayed as a loop — Artsiv stays close
+// while he talks (user-directed).
+const NUZZLE_LOOP: Clip = { ...(CORVIN.nuzzle as Clip), loop: true, settle: 0 };
+async function tellStory(lines: string[], title?: string) {
+  curClip = NUZZLE_LOOP;
+  frameIdx = 0;
+  afterClip = null;
+  if (title) {
+    commitFor(20_000);
+    showBubble(title, PRIO.NOTABLE);
+    await speakLine(title);
+    await sleep(400);
+  }
+  for (const l of lines) {
+    commitFor(20_000); // rolling commit: nothing yanks the clip mid-sentence
+    showBubble(l, PRIO.NOTABLE);
+    await speakLine(l);
+    await sleep(350);
+  }
+  commitFor(400); // release quickly once the story is told
+}
+
+async function corvinScene(body: () => Promise<void>, accent?: string) {
+  if (!home || gagActive) {
+    dbg(`corvin scene refused: home=${!!home} gag=${gagActive} com=${committed()}`);
+    return;
+  }
+  dbg("corvin scene start");
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    if (accent) document.documentElement.style.setProperty("--accent", accent);
+    await standUp();
+    await body();
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// Execution — the win payoff: slow raise, tension, one devastating cut.
+async function executionScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.execraise);
+    window.setTimeout(() => {
+      shake(420);
+      sfxIgnite();
+    }, 230 * paceMul()); // the slam lands 3 frames into the strike
+    await playCorvin(CORVIN.execstrike);
+  }, ACCENT.success);
+}
+
+// Unchained — the Devil Trigger: crimson blade, crouch, the shadow tower.
+async function unchainedScene() {
+  await corvinScene(async () => {
+    vignettePulse();
+    sfxAura();
+    window.setTimeout(sfxDemonRoar, 900 * paceMul());
+    await playCorvin(CORVIN.unchrise);
+    shake(500);
+    await playCorvin(CORVIN.unchburn, 2);
+    await playCorvin(CORVIN.unchsink);
+  }, ACCENT.error);
+}
+
+// The vigil — his breakdown: no rage, a knee, the eagle, and back up.
+async function vigilScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.kneeldown);
+    await playCorvin(CORVIN.eaglehop);
+    await playCorvin(CORVIN.kneelrise);
+  });
+}
+
+// Разрубание — the full combo (gaming's sword beat and rare win flourish).
+async function cleaveScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.cleaveprep);
+    sfxIgnite();
+    await playCorvin(CORVIN.cleaveslash);
+    window.setTimeout(() => shake(460), 190 * paceMul()); // ground impact
+    await playCorvin(CORVIN.cleavesmash);
+    await playCorvin(CORVIN.cleaverecover);
+  }, ACCENT.success);
+}
+
+// The warm beat: Artsiv preens his hair. Milestones only — it must stay rare.
+async function nuzzleScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.nuzzle);
+    await playCorvin(CORVIN.idle);
+  });
+}
+
+// The плакат moment, Corvin's way: he sits and plays for the music you opened.
+async function guitarScene(durationMs: number) {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.sit);
+    const passes = Math.max(2, Math.round(durationMs / corvinClipTotal(CORVIN.guitar)));
+    await playCorvin(CORVIN.guitar, passes);
+  });
+}
+
+// The arcane perimeter scan (gaming's rare beat and the hunt's opening).
+async function magicscanScene() {
+  await corvinScene(async () => {
+    sfxAura();
+    await playCorvin(CORVIN.magicscan);
+  });
+}
+
+// One quiet pass of the watch — gaming ambience between the big beats.
+async function huntwatchPass() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.huntwatch);
+  });
+}
+
+// Tales: he remembers where he stopped (story.nextTale). Voiced, over the
+// nuzzle loop, uninterruptible until the last word (user-directed).
+async function whetstoneTaleScene() {
+  const tale = story.nextTale();
+  await corvinScene(async () => {
+    if (tale) await tellStory(tale.lines);
+    else await playCorvin(CORVIN.whetstone, 2); // corpus finished — quiet strokes
+  });
+}
+
+// ---- The novel (user-directed): 7+ minutes of typing earns a chapter --------
+// He's been sharpening beside you the whole session; at the 7-minute mark he
+// starts telling the next chapter of the 100-chapter novel — bubbles over the
+// whetstone loop, one line every ~5 s (a chapter runs 40-90 s). Strictly
+// sequential; ≥20 min between chapters so a long night doesn't dump the book.
+let typingSessionStart = 0;
+let lastTypingEventAt = 0;
+const NOVEL_AFTER_TYPING_MS = 7 * 60 * 1000;
+const NOVEL_MIN_GAP_MS = 20 * 60 * 1000;
+let novelTelling = false;
+function maybeTellNovel() {
+  if (!isCorvin() || novelTelling || !home) return;
+  if (Date.now() - typingSessionStart < NOVEL_AFTER_TYPING_MS) return;
+  const lastAt = story.s.novel?.lastAt ?? 0;
+  if (Date.now() - lastAt < NOVEL_MIN_GAP_MS) return;
+  if (gagActive || showcasing || introActive || wandering || away || returning) return;
+  const ch = story.nextNovelChapter();
+  novelTelling = true;
+  dbg(`novel chapter ${ch.idx}: ${ch.title}`);
+  // Voiced, over the nuzzle loop, uninterruptible (user-directed).
+  void corvinScene(async () => {
+    await tellStory(ch.lines, `Глава ${ch.idx}. ${ch.title}.`);
+  }).finally(() => {
+    novelTelling = false;
+  });
+}
+
+// ---- The midnight ritual -----------------------------------------------------
+// At 00:00, once per night: he sits, plays ~/.echo/media/nightsong.mp3 on the
+// guitar for ~30 s, and afterwards tells one fragment of the MIDNIGHT arc —
+// the story of the letter that never came ("Anlatamam": "I cannot tell it").
+// The arc lives outside the whetstone rotation; the ritual is how you earn it.
+const NIGHT_SONG_MS = 30_000;
+async function nightSongScene() {
+  await corvinScene(async () => {
+    let audio: HTMLAudioElement | null = null;
+    const url = posterMedia.get("nightsong");
+    if (url) {
+      audio = new Audio(url);
+      audio.volume = 0.55;
+      void audio.play().catch(() => {});
+    }
+    try {
+      await playCorvin(CORVIN.sit);
+      const passes = Math.max(2, Math.round(NIGHT_SONG_MS / corvinClipTotal(CORVIN.guitar)));
+      await playCorvin(CORVIN.guitar, passes);
+    } finally {
+      if (audio) {
+        // A soft fade instead of a hard cut — it's a ritual, not an alarm.
+        const a = audio;
+        const fade = window.setInterval(() => {
+          a.volume = Math.max(0, a.volume - 0.06);
+          if (a.volume <= 0.01) {
+            a.pause();
+            window.clearInterval(fade);
+          }
+        }, 120);
+      }
+    }
+    const lines = story.nextMidnightTale();
+    await tellStory(lines); // the midnight fragment, voiced, Artsiv close
+  });
+}
+
+// Fires within the first minutes of the new day; one gag flag per night. If he
+// is mid-scene at 00:00 sharp, the next minute's check catches it.
+function scheduleMidnight() {
+  window.setInterval(() => {
+    if (!isCorvin() || !home) return;
+    const now = new Date();
+    if (now.getHours() !== 0 || now.getMinutes() >= 10) return; // the midnight window
+    const last = story.s.gags.lastNightSongAt ?? 0;
+    if (Date.now() - last < 12 * 3_600_000) return; // once per night
+    if (gagActive || showcasing || introActive || wandering || away || returning) return;
+    story.s.gags.lastNightSongAt = Date.now();
+    story.save();
+    dbg("midnight ritual");
+    void nightSongScene();
+  }, 60_000);
+}
+
+// The shadow aura — his stretch/flex idle flourish.
+async function auraScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.aurarise);
+    await playCorvin(CORVIN.auraburn, 2);
+    await playCorvin(CORVIN.aurasink);
+  });
+}
+
+// Artsiv free flight: takeoff clip, then the STATIC #artsiv img (dynamic
+// nodes never paint in the transparent window) sweeps ellipses over the stage
+// while the body holds the "alone" settle frame, then the landing.
+const artsivEl = document.getElementById("artsiv") as HTMLImageElement;
+function artsivFly(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const rect = stage.getBoundingClientRect();
+    const el = artsivEl;
+    const frames = CORVIN.artsivfly.frames;
+    let fi = 0;
+    el.src = frames[0];
+    const w = Math.max(60, rect.width * 0.55);
+    el.style.width = `${w}px`;
+    el.style.display = "block";
+    const frameTimer = window.setInterval(() => {
+      fi = (fi + 1) % frames.length;
+      el.src = frames[fi];
+    }, CORVIN.artsivfly.ms);
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const t = (now - t0) / ms;
+      if (t >= 1 || !gagActive) {
+        window.clearInterval(frameTimer);
+        el.style.display = "none";
+        resolve();
+        return;
+      }
+      const a = t * 2 * Math.PI * (ms / 4200); // ~one lap per 4.2 s
+      const cx = rect.width / 2 + Math.cos(a) * rect.width * 0.28 - w / 2;
+      const cy = rect.height * 0.04 + Math.sin(2 * a) * rect.height * 0.05;
+      el.style.left = `${Math.round(cx)}px`;
+      el.style.top = `${Math.round(cy)}px`;
+      el.style.transform = `scaleX(${Math.cos(a + Math.PI / 2) < 0 ? -1 : 1})`;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+// The FULL-SCREEN flight (user-directed "летать где угодно"): a transparent
+// click-through window over the whole monitor; the eagle launches from
+// Corvin's corner, sweeps two grand laps across the screen and returns.
+// Falls back to the small in-window flight if the window can't be created.
+async function skyFly(ms: number): Promise<boolean> {
+  if (!home) return false;
+  const h = home;
+  let win: WebviewWindow | null = null;
+  try {
+    const mon = await currentMonitor();
+    if (!mon) return false;
+    const sf = mon.scaleFactor || window.devicePixelRatio || 1;
+    const mw = Math.round(mon.size.width / sf);
+    const mh = Math.round(mon.size.height / sf);
+    // Corvin's head in the sky-window's logical coordinates.
+    const sx = Math.round((h.lastX - mon.position.x) / sf) + 55;
+    const sy = Math.round((h.y - mon.position.y) / sf) + 8;
+    win = new WebviewWindow("skyfly", {
+      url: `index.html?skyfly=1&ms=${ms}&sx=${sx}&sy=${sy}`,
+      width: mw,
+      height: mh,
+      x: Math.round(mon.position.x / sf),
+      y: Math.round(mon.position.y / sf),
+      visible: true,
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focus: false,
+      shadow: false,
+    });
+    const created = await new Promise<boolean>((res) => {
+      win!.once("tauri://created", () => res(true));
+      win!.once("tauri://error", (e) => {
+        dbg(`skyfly window error: ${JSON.stringify(e)}`);
+        res(false);
+      });
+    });
+    if (!created) return false;
+    void win.setIgnoreCursorEvents(true).catch(() => {});
+    dbg(`skyfly open mon=${mw}x${mh} start=${sx},${sy}`);
+    // The sky window emits skyfly-done when the lap is flown.
+    await new Promise<void>((res) => {
+      let settled = false;
+      const fin = () => {
+        if (!settled) {
+          settled = true;
+          res();
+        }
+      };
+      void listen("skyfly-done", fin).then((un) => window.setTimeout(() => un(), ms + 4000));
+      window.setTimeout(fin, ms + 3000); // hard cap
+    });
+    return true;
+  } finally {
+    if (win) void win.close().catch(() => {});
+  }
+}
+
+async function artsivCycleScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.takeoff);
+    const FLIGHT_MS = 11_000;
+    commitFor(FLIGHT_MS + 1200);
+    const flew = await skyFly(FLIGHT_MS);
+    if (!flew) {
+      commitFor(7600);
+      await artsivFly(7000); // fallback: the small in-window circles
+    }
+    await playCorvin(CORVIN.landing);
+  });
+}
+
+// Corvin's reaction pools — a sentinel doesn't cheer; he acknowledges.
+function reactWinCorvin() {
+  // Silent sentinel: a win earns steel, not words (user-directed).
+  const pick = pickWeighted([
+    ["charge", 0.16],
+    ["cleave", 0.06],
+    ["nothing", 0.78],
+  ]);
+  dbg(`react=win(corvin):${pick}`);
+  if (pick === "charge")
+    void corvinScene(async () => {
+      sfxIgnite();
+      await playCorvin(CORVIN.charge);
+    }, ACCENT.success);
+  else if (pick === "cleave") void cleaveScene();
+}
+
+function reactErrorCorvin() {
+  // Silent: he takes the hit or he doesn't flinch. No commentary.
+  const pick = pickWeighted([
+    ["damage", 0.5],
+    ["nothing", 0.5],
+  ]);
+  dbg(`react=err(corvin):${pick}`);
+  if (pick === "damage") {
+    stage.dataset.state = "error";
+    document.documentElement.style.setProperty("--accent", ACCENT.error);
+    commitFor(corvinClipTotal(CORVIN.damage) * paceMul() + 300);
+    curClip = CORVIN.damage as Clip;
+    frameIdx = 0;
+    sfxIgnite();
+  }
+}
+
+// Corvin's idle life, two tiers (user-directed: "не хочу вечный один луп"):
+//   quiet poses — the base rotates every ~25-50 s between the watch, the
+//     horizon scan, seated meditation and quiet whetstone strokes (never the
+//     same pose twice in a row; standing up from a seat plays the sit reversed)
+//   big urges — every 2-3 rotations one of: a tale, the aura, the arcane scan,
+//     Artsiv's flight, a bow. Scenes end in setState("idle") which re-arms this.
+const CORVIN_SIT_REV: Clip = {
+  frames: [...CORVIN.sit.frames].reverse(),
+  ms: 150,
+  msSeq: [200, 170, 150, 140, 130, 120, 115, 110, 110],
+  loop: false,
+  settle: 0,
+};
+let corvinIdleTimer = 0;
+let corvinQuietPose = "watch";
+let corvinQuietRuns = 0;
+function corvinSetQuiet(pose: string) {
+  const wasSeated = corvinQuietPose === "meditate" || corvinQuietPose === "whet";
+  const willSit = pose === "meditate" || pose === "whet";
+  corvinQuietPose = pose;
+  const target = (): Clip =>
+    pose === "scan" ? (CORVIN.huntwatch as Clip)
+    : pose === "meditate" ? (CORVIN.meditate as Clip)
+    : pose === "whet" ? (CORVIN.whetstone as Clip)
+    : ANIMS.idle;
+  if (willSit && !wasSeated) {
+    curClip = CORVIN.sit as Clip; // ease down first
+    frameIdx = 0;
+    afterClip = () => {
+      curClip = target();
+      frameIdx = 0;
+    };
+  } else if (!willSit && wasSeated) {
+    curClip = CORVIN_SIT_REV; // stand back up, reversed sit
+    frameIdx = 0;
+    afterClip = () => {
+      curClip = target();
+      frameIdx = 0;
+    };
+  } else {
+    curClip = target();
+    frameIdx = 0;
+    afterClip = null;
+  }
+}
+let corvinTickArmed = false;
+function corvinIdleCycle() {
+  if (!home) return;
+  // Re-entering idle must NOT reset the urge clock — playIdleCycle fires on
+  // every setState("idle") and the constant resets were why he "only ever
+  // loops the watch". Keep the current quiet pose, keep the counter, and make
+  // sure exactly one tick chain is armed.
+  if (!gagActive && stage.dataset.state === "idle") corvinSetQuiet(corvinQuietPose);
+  if (!corvinTickArmed) {
+    corvinTickArmed = true;
+    corvinIdleTick();
+  }
+}
+function corvinIdleTick() {
+  // Arming discipline: armed=true only while a timer is pending. The callback
+  // clears it on entry; every path that wants the chain alive calls
+  // corvinIdleTick() again (urge launches don't — the scene's setState("idle")
+  // -> corvinIdleCycle() re-arms instead). Without this, a tick landing inside
+  // any scene killed every urge and pose rotation until app restart.
+  corvinTickArmed = true;
+  window.clearTimeout(corvinIdleTimer);
+  corvinIdleTimer = window.setTimeout(
+    () => {
+      corvinTickArmed = false;
+      if (!isCorvin() || gagActive || showcasing || introActive || wandering || away || returning) {
+        return; // corvinIdleCycle() (next setState idle) restarts the chain
+      }
+      const st = stage.dataset.state || "idle";
+      const workish = st === "coding" || st === "searching" || st === "speaking";
+      // Urges may fire during WORK states too (the AI session keeps him in
+      // "coding" almost permanently — pure idle basically never happens while
+      // a session runs, and that read as "he only ever loops"). No busyBurst
+      // gate here: the session hammering is exactly when he must stay alive.
+      if ((st !== "idle" && !workish) || Date.now() < typingUntil) {
+        corvinIdleTick();
+        return;
+      }
+      corvinQuietRuns += 1;
+      if (workish) {
+        // No pose rotation here — setState would stomp it on the next event.
+        // Straight to an urge on a slightly slower clock (~45-120 s).
+        if (corvinQuietRuns >= 2 + Math.floor(Math.random() * 2)) {
+          corvinQuietRuns = 0;
+          const pick = pickWeighted([
+            ["tale", 0.24],
+            ["aura", 0.16],
+            ["bow", 0.08],
+            ["scan", 0.24],
+            ["artsiv", 0.28],
+          ]);
+          dbg(`work(corvin) urge=${pick}`);
+          if (pick === "tale") void whetstoneTaleScene();
+          else if (pick === "aura") void auraScene();
+          else if (pick === "bow") void corvinScene(() => playCorvin(CORVIN.bow));
+          else if (pick === "scan") void magicscanScene();
+          else void artsivCycleScene();
+          return;
+        }
+        corvinIdleTick();
+        return;
+      }
+      if (corvinQuietRuns >= 1 + Math.floor(Math.random() * 2)) {
+        // a big urge earned by a few quiet rotations
+        corvinQuietRuns = 0;
+        const pick = pickWeighted([
+          ["tale", 0.26],
+          ["aura", 0.18],
+          ["bow", 0.1],
+          ["scan", 0.22],
+          ["artsiv", 0.24],
+        ]);
+        dbg(`idle(corvin) urge=${pick}`);
+        if (pick === "tale") void whetstoneTaleScene();
+        else if (pick === "aura") void auraScene();
+        else if (pick === "bow") void corvinScene(() => playCorvin(CORVIN.bow));
+        else if (pick === "scan") void magicscanScene();
+        else void artsivCycleScene();
+        return; // the scene's setState("idle") re-arms the cycle
+      }
+      const next = pickWeighted(
+        (
+          [
+            ["watch", 0.38],
+            ["scan", 0.16],
+            ["meditate", 0.24],
+            ["whet", 0.22],
+          ] as Array<[string, number]>
+        ).filter(([k]) => k !== corvinQuietPose), // never the same pose twice
+      );
+      dbg(`idle(corvin) pose=${next}`);
+      corvinSetQuiet(next);
+      corvinIdleTick();
+    },
+    // user-directed: "хочу другие анимации чаще" — quick pose turns, an urge
+    // roughly every 30-90 s of quiet
+    15_000 + Math.random() * 15_000,
+  );
+}
+
+// ---- Dante's fixed-clock beats (user-directed timings) -----------------------
+// ALL anchored to the GAME-SESSION start (the Steam shoot burst is minute 0):
+// swordspin at 6:00 then every 20 min; sword move at 7:00 then every 10 min
+// (the gaming loop owns that one); coinflip at +3 h then every 3 h; pizza at
+// +3.5 h then every 3.5 h. Until the first game launch these clocks are silent.
+// Shrug: 20 min of doing nothing at all (no typing, no gaming), any time.
+// Checked every 30 s; a busy moment defers to the next tick, never skips.
+const BOOT_AT = Date.now();
+let lastDanteSpin = 0; // 0 = unarmed until a game session starts
+let lastDanteCoin = 0;
+let lastDantePizza = 0;
+let lastDanteShrug = BOOT_AT;
+function armDanteClocks() {
+  lastDanteSpin = Date.now() - 20 * 60_000 + 6 * 60_000; // -> first spin at 6:00
+  lastDanteCoin = Date.now(); // -> coin at +3 h
+  lastDantePizza = Date.now(); // -> pizza at +3.5 h
+  dbg("dante clocks armed: spin@6:00/20m, coin@3h, pizza@3.5h");
+}
+function scheduleDanteBeats() {
+  window.setInterval(() => {
+    if (isCorvin() || !home || !beatReady()) return;
+    const now = Date.now();
+    if (lastDantePizza && now - lastDantePizza > 3.5 * 3_600_000) {
+      lastDantePizza = now;
+      dbg("dante beat: pizza (3.5h clock)");
+      demoSeated(PIZZA, "Finally.");
+      return;
+    }
+    if (lastDanteCoin && now - lastDanteCoin > 3 * 3_600_000) {
+      lastDanteCoin = now;
+      dbg("dante beat: coinflip (game +3h clock)");
+      void coinFlourish();
+      return;
+    }
+    if (lastDanteSpin && now - lastDanteSpin > 20 * 60_000) {
+      lastDanteSpin = now;
+      dbg("dante beat: swordspin (game 6:00 + 20min clock)");
+      void demoSpin();
+      return;
+    }
+    // Shrug only when truly idle: no typing and no game for the whole window.
+    const idleEnough =
+      now - Math.max(lastTypingEventAt, gamingUntil - 60_000) > 20 * 60_000;
+    if (idleEnough && now - lastDanteShrug > 20 * 60_000) {
+      lastDanteShrug = now;
+      dbg("dante beat: shrug (20min idle clock)");
+      demoSeated(idleClip("shrug"));
+    }
+  }, 30_000);
+}
+
 // Demo path: the sword move outside the gaming mood (guards itself).
 async function demoSword() {
   if (!home || gagActive) return;
@@ -1007,40 +1782,70 @@ async function gamingSpecial() {
   if (beatReady()) await diveGag(); // ...the fall + climb
 }
 
-// Big gaming moments on their own ~10 min cadences (staggered at session
-// start: sword ~4 min in, devil ~10 min in), checked at random beat moments.
+// Big gaming moments on fixed 10-min cadences: Devil Trigger at 3:00 into the
+// session, sword move at 7:00 (clocks armed in the "gaming" handler), then
+// every 10 min each. Checked every 20 s so beats land near their exact mark.
 const GAMING_SWORD_EVERY = 10 * 60 * 1000;
 const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
 let lastGamingSword = 0;
 let lastGamingDevil = 0;
+let nextGamingAmbience = 0;
 
-// Jittered so the beats land at random moments, never on a fixed tick.
+let lastBeatSkipLog = 0;
 function scheduleGamingBeat() {
-  window.setTimeout(
-    async () => {
+  window.setTimeout(async () => {
+    try {
+      const now = Date.now();
       if (gamingActive() && beatReady()) {
-        const now = Date.now();
-        if (swordReady && now - lastGamingSword > GAMING_SWORD_EVERY && sceneAllowed()) {
-          lastGamingSword = now;
-          markScene();
-          dbg("gaming sword move (10min cadence)");
-          await demoSword();
-        } else if (now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
+        if (now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
           lastGamingDevil = now;
           markScene();
-          dbg("gaming devil trigger (10min cadence)");
-          devilTriggerScene();
+          dbg("gaming devil trigger (3:00 + 10min cadence)");
+          if (isCorvin()) void unchainedScene();
+          else devilTriggerScene();
+        } else if (
+          (isCorvin() || swordReady) &&
+          now - lastGamingSword > GAMING_SWORD_EVERY &&
+          sceneAllowed()
+        ) {
+          lastGamingSword = now;
+          markScene();
+          dbg("gaming sword move (7:00 + 10min cadence)");
+          if (isCorvin()) await cleaveScene();
+          else await demoSword();
         } else if (now - lastGamingSpecial > 60 * 60 * 1000 && Math.random() < 0.35) {
           dbg("gaming special (hourly)");
-          await gamingSpecial();
-        } else {
-          await gamingAmbience();
+          if (isCorvin()) {
+            lastGamingSpecial = Date.now();
+            await executionScene(); // the hourly hunt trophy
+            await sleep(15000 + Math.random() * 60000);
+            if (beatReady()) await artsivCycleScene(); // ...Artsiv surveys the field
+          } else {
+            await gamingSpecial();
+          }
+        } else if (now > nextGamingAmbience) {
+          // Small flourishes keep their own loose ~1.5-3.5 min rhythm so the
+          // 20 s cadence tick doesn't spam them.
+          nextGamingAmbience = now + 90_000 + Math.random() * 120_000;
+          if (isCorvin()) await huntwatchPass();
+          else await gamingAmbience();
         }
+      } else if (gamingActive() && now - lastBeatSkipLog > 60_000) {
+        // A beat wanted to run but a guard vetoed it — name the guard so a
+        // silent 2-hour drought is diagnosable from the log.
+        lastBeatSkipLog = now;
+        dbg(
+          `gaming beat skipped: gag=${gagActive} show=${showcasing} away=${away} ` +
+            `ret=${returning} wand=${wandering} com=${committed()} home=${!!home}`,
+        );
       }
-      scheduleGamingBeat();
-    },
-    60_000 + Math.random() * 150_000, // every ~1–3.5 min, randomly
-  );
+    } catch (err) {
+      dbg(`gaming beat error: ${err}`);
+    }
+    // The chain must survive a throwing beat — a dead timer means no sword
+    // for the rest of the session.
+    scheduleGamingBeat();
+  }, 20_000);
 }
 
 // M3 blink: closed-eye variants of the held idle frames (hand-pixel-edited,
@@ -1083,6 +1888,10 @@ let idlePlaysLeft = 0;
 let lastIdleClip: string | null = null;
 
 function playIdleCycle() {
+  if (isCorvin()) {
+    corvinIdleCycle();
+    return;
+  }
   // M2 serialized gag: the pizza he never gets — once a week at most, and the
   // M5 payoff animation stays locked until he's earned it by asking.
   if (Math.random() < 0.05) {
@@ -1156,9 +1965,11 @@ function idleStepDone() {
   holdStill(idleClip(curUrge.clip), lo + Math.random() * (hi - lo), next);
 }
 
-function playWalk() {
+function playWalk(leaving = false) {
   cancelAnimationFrame(winTween); // walking overrides any sit/stand tween
-  curClip = WALK;
+  // Corvin walks in with the sword over the shoulder and OUT with it slung
+  // across his back, the way knights carry it home.
+  curClip = isCorvin() ? ((leaving ? CORVIN.walkout : CORVIN.walkin) as Clip) : WALK;
   frameIdx = 0;
 }
 
@@ -1181,6 +1992,11 @@ function frameLoop() {
       const fn = afterClip;
       afterClip = null;
       fn(); // e.g. advance the idle cycle
+    } else if (gagActive) {
+      // A sleep-driven scene (playCorvin) owns this one-shot: HOLD the settle
+      // frame. Running past the end put frames[length] = undefined on screen —
+      // the broken-image flash the capture rig kept catching.
+      frameIdx = Math.min(curClip.settle, curClip.frames.length - 1);
     } else if (stage.dataset.state === "idle") {
       playIdleCycle(); // a one-shot (laugh) ended while idle -> resume the rotation
     } else {
@@ -1234,7 +2050,8 @@ function setState(state: State) {
     say("hmm"); // ~/.echo/voice/hmm.mp3 if present
   }
   // Working states cycle through several poses instead of repeating one.
-  if (state === "coding" || state === "searching" || state === "speaking") {
+  // (Dante only — Corvin's pack answers every state through ANIMS.)
+  if (!isCorvin() && (state === "coding" || state === "searching" || state === "speaking")) {
     if (prev !== state) workIdx = (workIdx + 1) % WORK_POSES.length;
     // Cocky Dante taunts more (M1.4: the mood shows).
     const name =
@@ -1284,17 +2101,19 @@ function markScene() {
 }
 
 function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
-  if (bubbleTimer) clearTimeout(bubbleTimer);
-  if (!text) {
-    bubble.classList.add("hidden");
-    return;
-  }
-  // Ambient chatter: usually skipped entirely, and always silent.
-  if (prio === PRIO.AMBIENT) {
+  // Ambient chatter: usually skipped entirely, and always silent. Decide
+  // BEFORE touching the hide timer — a bailing ambient call used to clear the
+  // previous bubble's hide timeout and leave it stuck on screen forever.
+  if (text && prio === PRIO.AMBIENT) {
     // M2: a Stranger (week one) talks half as much — reserve is earned away.
     const chance =
       story.chapter() === "stranger" ? AMBIENT_BUBBLE_CHANCE / 2 : AMBIENT_BUBBLE_CHANCE;
     if (busyBurst() || Math.random() > chance) return;
+  }
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  if (!text) {
+    bubble.classList.add("hidden");
+    return;
   }
   bubble.textContent = text;
   bubble.classList.remove("hidden");
@@ -1376,6 +2195,10 @@ function pickWeighted(items: Array<[string, number]>): string {
 }
 
 function reactWin() {
+  if (isCorvin()) {
+    reactWinCorvin();
+    return;
+  }
   const pick = pickWeighted([
     ["cheer", 0.3],
     ["flourish", 0.12 + life.v.cockiness * 0.18],
@@ -1397,6 +2220,10 @@ function reactWin() {
 }
 
 function reactError() {
+  if (isCorvin()) {
+    reactErrorCorvin();
+    return;
+  }
   // Low patience forces the cold treatment — anger is quiet.
   const pick =
     life.v.patience < 0.3
@@ -1538,7 +2365,9 @@ function applyEvent(e: AgentEvent) {
     Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
   prevStars = e.stars;
   // No ambient chatter over a running scene — the scene owns the screen.
-  if (!gagActive && !showcasing) showBubble(e.phrase, PRIO.AMBIENT);
+  // Corvin is SILENT (user-directed): no work chatter at all — his words live
+  // in the stories only. Dante keeps his phrases.
+  if (!gagActive && !showcasing && !isCorvin()) showBubble(e.phrase, PRIO.AMBIENT);
   dbg(
     `event=${e.state} lvlUp=${leveledUp} milestone=${crossedMilestone} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
   );
@@ -1585,8 +2414,9 @@ function applyEvent(e: AgentEvent) {
       errStreak = 0;
       markScene();
       budgetScene("breakdown");
-      showBubble("Come on, seriously?", PRIO.MAJOR);
-      diveGag(); // patience gone -> full breakdown
+      if (!isCorvin()) showBubble("Come on, seriously?", PRIO.MAJOR);
+      if (isCorvin()) void vigilScene(); // his breakdown is a knee and the eagle
+      else diveGag(); // patience gone -> full breakdown
       // M2: after the climb — a once-ever first, or a partner's word.
       window.setTimeout(() => {
         if (story.first("breakdown")) showBubble("First real fight. We got up.", PRIO.NOTABLE);
@@ -1624,7 +2454,8 @@ function applyEvent(e: AgentEvent) {
       winStreak = 0;
       markScene();
       budgetScene("devil");
-      devilTriggerScene();
+      if (isCorvin()) void unchainedScene();
+      else devilTriggerScene();
       // M2 level chapters: levels unlock existing content, told as story.
       if (lastLevel >= 5 && story.unlock("sword_win_pool"))
         window.setTimeout(() => showBubble("Level 5. The sword comes out now.", PRIO.NOTABLE), 4000);
@@ -1634,13 +2465,15 @@ function applyEvent(e: AgentEvent) {
       winStreak = 0;
       markScene();
       budgetScene("dance");
-      danceScene(); // 25★ milestone -> dance
+      if (isCorvin()) void nuzzleScene(); // 25★ -> the eagle's rare approval
+      else danceScene(); // 25★ milestone -> dance
     } else if (winStreak >= 3 && sceneAllowed() && sceneBudgetOk("jackpot")) {
       winStreak = 0;
       markScene();
       budgetScene("jackpot");
       story.today().jackpots += 1;
-      shootScene(); // on a roll -> Jackpot
+      if (isCorvin()) void executionScene(); // on a roll -> the Execution
+      else shootScene(); // on a roll -> Jackpot
       if (story.first("jackpot"))
         window.setTimeout(() => showBubble("First Jackpot. Remember this one.", PRIO.NOTABLE), 5000);
     } else if (slainDemon) {
@@ -1711,7 +2544,10 @@ let postureChangedAt = 0;
 let postureRetry = 0;
 function posture(state: string, force = false) {
   if (!home) return;
-  const seated = SEATED.has(state);
+  // Corvin never takes the seated window height: his seated clips (sit,
+  // whetstone, guitar, meditate) are bottom-anchored scene poses, and Dante's
+  // sit-down transition clip must never play on him.
+  const seated = !isCorvin() && SEATED.has(state);
   const targetY = seated ? home.sitY : home.y;
   window.clearTimeout(postureRetry);
   if (seated === seatedNow) {
@@ -1837,22 +2673,34 @@ async function runIntro() {
     delete stage.dataset.facing;
     // deceleration beat — he's stopped walking, takes a breath
     await sleep(400);
-    // arrival: stand tall, arms crossed, and LOOK around before settling in
-    curClip = STAND_CROSS;
-    frameIdx = 0;
-    await sleep(900);
-    stage.dataset.facing = "left"; // glance left
-    await sleep(650);
-    stage.dataset.facing = "right"; // glance right
-    await sleep(650);
-    delete stage.dataset.facing;
-    await sleep(500); // settle
-    // then sit DOWN onto the panel (stand->sit) while the window lowers
-    curClip = SITDOWN;
-    frameIdx = 0;
-    posture("idle", true); // drop the window to the seated height
-    await sleep(SITDOWN.frames.length * SITDOWN.ms);
-    setState("idle"); // seated leg-swing loop
+    if (isCorvin()) {
+      // The sentinel arrives his own way: a knightly bow, then the watch.
+      curClip = CORVIN.bow as Clip;
+      frameIdx = 0;
+      await sleep(corvinClipTotal(CORVIN.bow));
+      setState("idle");
+    } else {
+      // arrival: stand tall, arms crossed, and LOOK around before settling in
+      curClip = STAND_CROSS;
+      frameIdx = 0;
+      await sleep(900);
+      stage.dataset.facing = "left"; // glance left
+      await sleep(650);
+      stage.dataset.facing = "right"; // glance right
+      await sleep(650);
+      delete stage.dataset.facing;
+      await sleep(500); // settle
+      // the arrival stumble (user-directed): a quick stagger sells the stop
+      curClip = ANIMS_DANTE.error;
+      frameIdx = 0;
+      await sleep(ANIMS_DANTE.error.frames.length * ANIMS_DANTE.error.ms + 120);
+      // then sit DOWN onto the panel (stand->sit) while the window lowers
+      curClip = SITDOWN;
+      frameIdx = 0;
+      posture("idle", true); // drop the window to the seated height
+      await sleep(SITDOWN.frames.length * SITDOWN.ms);
+      setState("idle"); // seated leg-swing loop
+    }
     // Discovery > demonstration. No auto-showcase — let users find everything
     // naturally. Set localStorage "echo.forceReel"=1 + reload for debug.
     dbg("intro done -> natural (discovery > demonstration)");
@@ -1876,13 +2724,19 @@ async function leaveScene() {
     delete stage.dataset.facing;
     afterClip = null;
     await new Promise<void>((res) => (moveWindowY(h.y, 300), window.setTimeout(res, 320)));
-    curClip = STAND_CROSS; // stand tall, arms crossed
+    curClip = isCorvin() ? (CORVIN.windidle as Clip) : STAND_CROSS;
     frameIdx = 0;
-    showBubble(pickLine(LEAVE_LINES), PRIO.MAJOR);
+    if (!isCorvin()) showBubble(pickLine(LEAVE_LINES), PRIO.MAJOR);
     await sleep(2400);
+    if (!isCorvin()) {
+      // the departure stumble (user-directed) — he shakes it off and goes
+      curClip = ANIMS_DANTE.error;
+      frameIdx = 0;
+      await sleep(ANIMS_DANTE.error.frames.length * ANIMS_DANTE.error.ms + 120);
+    }
     const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
-    playWalk();
+    playWalk(true);
     await slideWindow(offX, 150); // walk off to the left
     away = true;
     awayAt = Date.now();
@@ -2290,6 +3144,18 @@ async function main() {
   void initVoiceFiles(); // pick up any ~/.echo/voice/*.wav the user dropped in
   void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
   startBreathing(); // M1.5: the constant tier — he's never a statue again
+  scheduleMidnight(); // Corvin's 00:00 guitar + the MIDNIGHT arc
+  scheduleDanteBeats(); // fixed clocks: spin 6m/20m, coin 3h, pizza 3.5h, shrug
+  initTts(); // system voices for the storyteller (ru + en)
+
+  // Character pack: ~/.echo/character decides who walks in (default Dante).
+  try {
+    const c = await invoke<string>("character_load");
+    if (c === "corvin") character = "corvin";
+  } catch {
+    /* dante */
+  }
+  applyCharacter();
 
   // M2: load the story; a new day gets a greeting built from yesterday's REAL
   // numbers — he remembers, and says so once the walk-in has finished.
@@ -2417,5 +3283,77 @@ async function posterMain() {
   window.setTimeout(reveal, 1200);
 }
 
-if (new URLSearchParams(location.search).has("poster")) posterMain();
+// ?skyfly=1 -> this window IS the sky: a transparent monitor-sized layer where
+// Artsiv launches from Corvin's corner, flies two grand laps and returns.
+function skyflyMain(q: URLSearchParams) {
+  const ms = Math.max(4000, Number(q.get("ms")) || 11000);
+  const sx = Number(q.get("sx")) || window.innerWidth - 160;
+  const sy = Number(q.get("sy")) || window.innerHeight - 240;
+  document.body.innerHTML = "";
+  document.body.style.cssText = "margin:0;background:transparent;overflow:hidden";
+  const img = document.createElement("img");
+  img.style.cssText =
+    "position:absolute;left:0;top:0;width:150px;image-rendering:pixelated;" +
+    "pointer-events:none;filter:drop-shadow(0 4px 6px rgba(0,0,0,0.45));";
+  document.body.appendChild(img);
+  const frames = Array.from(
+    { length: 10 },
+    (_, i) => `/pixel/corvin/artsivfly/frame_${i}.png?v=1`,
+  );
+  frames.forEach((s) => (new Image().src = s));
+  let fi = 0;
+  img.src = frames[0];
+  const frameTimer = window.setInterval(() => {
+    fi = (fi + 1) % frames.length;
+    img.src = frames[fi];
+  }, 140);
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const cx = W * 0.5;
+  const cy = H * 0.34;
+  const rx = W * 0.36;
+  const ry = H * 0.2;
+  const ease = (p: number) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
+  // Ellipse entry angle nearest to Corvin's corner, so paths join smoothly.
+  const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx);
+  const pos = (t: number): [number, number] => {
+    const IN = 0.16;
+    const OUT = 0.84;
+    const ex = (a: number) => cx + Math.cos(a) * rx;
+    const ey = (a: number) => cy + Math.sin(a) * ry;
+    if (t < IN) {
+      const p = ease(t / IN);
+      return [sx + (ex(a0) - sx) * p, sy + (ey(a0) - sy) * p];
+    }
+    if (t > OUT) {
+      const p = ease((t - OUT) / (1 - OUT));
+      return [ex(a0) + (sx - ex(a0)) * p, ey(a0) + (sy - ey(a0)) * p];
+    }
+    const a = a0 + ((t - IN) / (OUT - IN)) * 2 * Math.PI * 2; // two grand laps
+    return [ex(a), ey(a)];
+  };
+  const t0 = performance.now();
+  let px = sx;
+  const step = (now: number) => {
+    const t = (now - t0) / ms;
+    if (t >= 1) {
+      window.clearInterval(frameTimer);
+      void emit("skyfly-done");
+      return;
+    }
+    const [x, y] = pos(t);
+    img.style.left = `${Math.round(x - 75)}px`;
+    img.style.top = `${Math.round(y - 30)}px`;
+    img.style.transform = `scaleX(${x < px ? -1 : 1})`;
+    px = x;
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  // Safety: if the parent never closes us (crash), self-hide after ms + 5 s.
+  window.setTimeout(() => void getCurrentWindow().close().catch(() => {}), ms + 5000);
+}
+
+const bootQ = new URLSearchParams(location.search);
+if (bootQ.has("poster")) posterMain();
+else if (bootQ.has("skyfly")) skyflyMain(bootQ);
 else main();

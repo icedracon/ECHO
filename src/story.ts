@@ -4,6 +4,8 @@
 // Persisted to ~/.echo/story.json via the backend (incremental writes — there
 // is no clean shutdown hook).
 import { invoke } from "@tauri-apps/api/core";
+import { TALES } from "./tales";
+import { NOVEL } from "./novel";
 
 export interface DayStats {
   wins: number;
@@ -23,8 +25,15 @@ interface StoryState {
     lastPizzaAt: number;
     lastPizzaPayoffAt?: number;
     lastSwordCareAt?: number;
+    lastNightSongAt?: number; // Corvin's 00:00 guitar — once per night
   };
   unlocks: string[];
+  // Corvin the storyteller: per-arc fragment pointers — he NEVER repeats
+  // himself and picks up each arc where he left off (DESIGN §12c).
+  tales?: { ptr: Record<string, number>; lastArc?: string; lastAt?: number };
+  // The 100-chapter novel (novel.ts): strictly sequential, told after long
+  // typing sessions. Restarts from chapter 1 when the book ends.
+  novel?: { ch: number; lastAt?: number };
 }
 
 export const dateKey = (t = Date.now()) => {
@@ -94,6 +103,63 @@ export class Story {
     this.s.unlocks.push(key);
     this.save();
     return true;
+  }
+
+  // Corvin's storyteller memory: pick the next untold fragment. Arcs rotate;
+  // deep arcs (THE ARM, HARDSHIPS) stay locked until the chapter allows them.
+  // Returning to an arc after 20h+ prepends its continuity opener.
+  nextTale(): { lines: string[] } | null {
+    if (!this.s.tales) this.s.tales = { ptr: {} };
+    const t = this.s.tales;
+    const rank = { stranger: 0, colleague: 1, partner: 2 } as const;
+    const open = TALES.filter(
+      (a) =>
+        a.id !== "midnight" && // the night arc belongs to the midnight guitar only
+        rank[a.minChapter] <= rank[this.chapter()] &&
+        (t.ptr[a.id] ?? 0) < a.fragments.length,
+    );
+    if (!open.length) return null;
+    // round-robin: least-told arc first, but never the same arc twice in a row
+    open.sort((a, b) => (t.ptr[a.id] ?? 0) - (t.ptr[b.id] ?? 0));
+    const arc = open.find((a) => a.id !== t.lastArc) ?? open[0];
+    const idx = t.ptr[arc.id] ?? 0;
+    const frag = arc.fragments[idx];
+    const gap = Date.now() - (t.lastAt ?? 0);
+    const lines =
+      idx > 0 && arc.id !== t.lastArc && gap > 20 * 3_600_000
+        ? [arc.opener, ...frag.lines]
+        : [...frag.lines];
+    t.ptr[arc.id] = idx + 1;
+    t.lastArc = arc.id;
+    t.lastAt = Date.now();
+    this.save();
+    return { lines };
+  }
+
+  // The Warden's novel: next chapter in strict order, looping after 100.
+  nextNovelChapter(): { idx: number; title: string; lines: string[] } {
+    if (!this.s.novel) this.s.novel = { ch: 0 };
+    const n = this.s.novel;
+    const idx = n.ch % NOVEL.length;
+    n.ch = idx + 1;
+    n.lastAt = Date.now();
+    this.save();
+    const c = NOVEL[idx];
+    return { idx: idx + 1, title: c.title, lines: [...c.lines] };
+  }
+
+  // The midnight arc: one fragment per night, only after the 00:00 guitar.
+  // When the arc runs dry it loops from the start — the ritual never ends.
+  nextMidnightTale(): string[] {
+    if (!this.s.tales) this.s.tales = { ptr: {} };
+    const arc = TALES.find((a) => a.id === "midnight");
+    if (!arc) return [];
+    const t = this.s.tales;
+    let idx = t.ptr["midnight"] ?? 0;
+    if (idx >= arc.fragments.length) idx = 0; // the ritual loops
+    t.ptr["midnight"] = idx + 1;
+    this.save();
+    return [...arc.fragments[idx].lines];
   }
 
   // The pizza gag: at most one mention a week; the payoff animation (M5) is
