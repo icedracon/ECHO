@@ -26,6 +26,7 @@ interface StoryState {
     lastPizzaPayoffAt?: number;
     lastSwordCareAt?: number;
     lastNightSongAt?: number; // Corvin's 00:00 guitar — once per night
+    lastBreakdownAt?: number; // the 01:00 / 13:00 breakdown
   };
   unlocks: string[];
   // Corvin the storyteller: per-arc fragment pointers — he NEVER repeats

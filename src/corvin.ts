@@ -73,6 +73,13 @@ export const CORVIN = {
   cleaverecover: cc("cleaverecover", 9, 180, false, 8, [180, 180, 180, 180, 180, 180, 180, 200, 560]),
   // The warm beat: Artsiv preens his hair on big wins
   nuzzle: cc("nuzzle", 13, 300, false, 12, [450, 250, 240, 230, 260, 420, 500, 460, 300, 260, 250, 280, 650]),
+  // THE BREAKDOWN (01:00 / 13:00): the sword slips, he goes down on both knees,
+  // Artsiv leaves his shoulder for the ground. No aura, no words, no music —
+  // the only scene where he has nothing left. The hold loop is deliberately
+  // slow: one heavy breath, the bird turning its head, nothing else.
+  breakdown: cc("breakdown", 11, 220, false, 10, [500, 200, 200, 200, 200, 200, 200, 200, 220, 260, 700]),
+  breakhold: cc("breakhold", 9, 420, true),
+  breakrise: cc("breakrise", 13, 240, false, 12, [700, 230, 230, 230, 230, 230, 240, 240, 250, 260, 280, 300, 700]),
 } as const;
 
 export const corvinClipTotal = (c: CorvinClip): number =>

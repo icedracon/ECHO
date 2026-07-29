@@ -888,6 +888,7 @@ function onContext(kind: string) {
     return;
   }
   if (kind === "demo_tale") return void whetstoneTaleScene();
+  if (kind === "demo_break") return void breakdownScene();
   if (kind === "demo_ritual") {
     story.s.lastRitualDay = ""; // let today's ceremony run again, for QA
     maybeDailyRitual();
@@ -1634,15 +1635,90 @@ function scheduleMidnight() {
   window.setInterval(() => {
     if (!isCorvin() || !home) return;
     const now = new Date();
-    if (now.getHours() !== 0 || now.getMinutes() >= 10) return; // the midnight window
-    const last = story.s.gags.lastNightSongAt ?? 0;
-    if (Date.now() - last < 12 * 3_600_000) return; // once per night
-    if (gagActive || showcasing || introActive || wandering || away || returning) return;
-    story.s.gags.lastNightSongAt = Date.now();
-    story.save();
-    dbg("midnight ritual");
-    void nightSongScene();
+    const h = now.getHours();
+    const busy = gagActive || showcasing || introActive || wandering || away || returning;
+    if (busy || now.getMinutes() >= 10) return; // each ritual has a 10-min window
+    // 00:00 — the guitar. He plays, the shadow rises, one quiet line.
+    if (h === 0) {
+      const last = story.s.gags.lastNightSongAt ?? 0;
+      if (Date.now() - last < 12 * 3_600_000) return; // once per night
+      story.s.gags.lastNightSongAt = Date.now();
+      story.save();
+      dbg("midnight ritual");
+      void nightSongScene();
+      return;
+    }
+    // 01:00 and 13:00 — the breakdown (user-directed clock). Six-hour guard so
+    // a restart inside the window can't replay it.
+    if (h === 1 || h === 13) {
+      const last = story.s.gags.lastBreakdownAt ?? 0;
+      if (Date.now() - last < 6 * 3_600_000) return;
+      story.s.gags.lastBreakdownAt = Date.now();
+      story.save();
+      dbg(`breakdown ritual (${h}:00)`);
+      void breakdownScene();
+    }
   }, 60_000);
+}
+
+// ---- The breakdown (01:00 and 13:00) ----------------------------------------
+// The one scene where he has nothing left: no aura, no voice, no music. Just a
+// low wind, a man on his knees, and a bird that comes down to sit with him.
+// Synthesized wind — filtered noise with a slow-drifting filter, no assets.
+function playWind(): () => void {
+  const a = ac();
+  if (!a) return () => {};
+  const len = Math.floor(a.sampleRate * 2);
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 320;
+  lp.Q.value = 0.7;
+  const g = a.createGain();
+  g.gain.value = 0.0001;
+  g.gain.exponentialRampToValueAtTime(0.16, a.currentTime + 3);
+  // the gusts: the filter drifts, so it breathes instead of hissing
+  const lfo = a.createOscillator();
+  lfo.frequency.value = 0.08;
+  const lfoGain = a.createGain();
+  lfoGain.gain.value = 150;
+  lfo.connect(lfoGain).connect(lp.frequency);
+  src.connect(lp).connect(g).connect(a.destination);
+  src.start();
+  lfo.start();
+  return () => {
+    const now = a.currentTime;
+    g.gain.cancelScheduledValues(now);
+    g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 2.5);
+    window.setTimeout(() => {
+      try {
+        src.stop();
+        lfo.stop();
+      } catch {
+        /* already stopped */
+      }
+    }, 2800);
+  };
+}
+
+const BREAK_HOLD_PASSES = 4; // ~14 s of holding perfectly still
+async function breakdownScene() {
+  await corvinScene(async () => {
+    const stopWind = playWind(); // it runs until the scene ends
+    try {
+      await playCorvin(CORVIN.breakdown); // the sword falls, he goes down
+      await playCorvin(CORVIN.breakhold, BREAK_HOLD_PASSES); // nothing happens
+      await playCorvin(CORVIN.breakrise); // and he gets up anyway
+    } finally {
+      stopWind();
+    }
+  });
 }
 
 // The shadow aura — his stretch/flex idle flourish.
