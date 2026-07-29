@@ -41,6 +41,16 @@ fn clog(msg: &str) {
     }
 }
 
+/// `Instant::now() - N seconds`, but safe on a freshly booted machine.
+/// Windows `Instant` counts from boot, so plain subtraction PANICS when uptime
+/// is under N — i.e. ECHO crashed whenever it was launched (or autostarted)
+/// within 10 minutes of turning the PC on. Saturates to "now" instead.
+fn ago(secs: u64) -> Instant {
+    Instant::now()
+        .checked_sub(Duration::from_secs(secs))
+        .unwrap_or_else(Instant::now)
+}
+
 // --- Typing: you're at the keyboard -> he works alongside you ----------------
 // device_query returned nothing on this machine, so we poll Win32 directly:
 // GetAsyncKeyState reports global key state regardless of window focus.
@@ -113,8 +123,8 @@ fn any_typing_key_down() -> bool {
 
 fn spawn_typing(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut last_emit = Instant::now() - Duration::from_secs(60);
-        let mut last_key = Instant::now() - Duration::from_secs(60);
+        let mut last_emit = ago(60);
+        let mut last_key = ago(60);
         let mut ticks: u64 = 0;
         let mut seen_any = false;
         let mut last_zone: u8 = 0;
@@ -504,8 +514,8 @@ fn spawn_dns(app: AppHandle) {
         let mut had_fullscreen = false;
         let mut had_steam_game = false;
         let mut had_battery = false;
-        let mut last_media = Instant::now() - Duration::from_secs(600);
-        let mut last_game = Instant::now() - Duration::from_secs(600);
+        let mut last_media = ago(600);
+        let mut last_game = ago(600);
         {
             let titles = window_titles();
             had_media = titles.iter().any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));

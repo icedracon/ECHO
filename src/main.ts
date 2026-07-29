@@ -1347,22 +1347,111 @@ function maybeTellNovel() {
 // the story of the letter that never came ("Anlatamam": "I cannot tell it").
 // The arc lives outside the whetstone rotation; the ritual is how you earn it.
 const NIGHT_SONG_MS = 30_000;
+
+// The default song, synthesized: a plucked-string lament in A minor, composed
+// for Corvin and generated in-engine (Karplus-Strong), so a fresh download
+// ALWAYS has music — no audio assets, nothing copyrighted, nothing to install.
+// Drop ~/.echo/media/nightsong.mp3 and that plays instead.
+function pluckBuffer(a: AudioContext, freq: number, dur: number, bright = 0.996): AudioBuffer {
+  const sr = a.sampleRate;
+  const N = Math.max(2, Math.round(sr / freq));
+  const len = Math.floor(sr * dur);
+  const buf = a.createBuffer(1, len, sr);
+  const d = buf.getChannelData(0);
+  const ring = new Float32Array(N);
+  for (let i = 0; i < N; i++) ring[i] = Math.random() * 2 - 1;
+  let idx = 0;
+  for (let i = 0; i < len; i++) {
+    const cur = ring[idx];
+    const nxt = ring[(idx + 1) % N];
+    ring[idx] = (cur + nxt) * 0.5 * bright; // string decay
+    d[i] = cur;
+    idx = (idx + 1) % N;
+  }
+  return buf;
+}
+
+function playNightMelody(ms: number): () => void {
+  const a = ac();
+  if (!a) return () => {};
+  const out = a.createGain();
+  out.gain.value = 0.0001;
+  out.gain.exponentialRampToValueAtTime(0.5, a.currentTime + 1.4); // fades in
+  const room = a.createBiquadFilter(); // a little air, like a stone hall
+  room.type = "lowpass";
+  room.frequency.value = 2600;
+  out.connect(room).connect(a.destination);
+
+  // Original phrase: Am — F — Dm — E, fingerpicked, four bars, slow.
+  const N = {
+    A2: 110, C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61,
+    G3: 196, A3: 220, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63,
+  };
+  const bars: number[][] = [
+    [N.A2, N.E3, N.A3, N.C4, N.E3, N.A3],
+    [N.F3, N.C4, N.F3 * 2, N.A3, N.C4, N.A3],
+    [N.D3, N.A3, N.D4, N.F3 * 2, N.A3, N.D4],
+    [N.E3, N.B3, N.E4, N.C4, N.B3, N.G3],
+  ];
+  const STEP = 0.44; // slow, unhurried
+  const t0 = a.currentTime + 0.15;
+  const total = ms / 1000;
+  let t = t0;
+  let bar = 0;
+  const sources: AudioBufferSourceNode[] = [];
+  while (t - t0 < total) {
+    const notes = bars[bar % bars.length];
+    notes.forEach((f, i) => {
+      const when = t + i * STEP;
+      if (when - t0 > total) return;
+      const src = a.createBufferSource();
+      src.buffer = pluckBuffer(a, f, 2.2, i === 0 ? 0.9975 : 0.995);
+      const g = a.createGain();
+      g.gain.setValueAtTime(i === 0 ? 0.9 : 0.55, when); // bass note leads
+      g.gain.exponentialRampToValueAtTime(0.001, when + 2.1);
+      src.connect(g).connect(out);
+      src.start(when);
+      sources.push(src);
+    });
+    t += notes.length * STEP;
+    bar += 1;
+  }
+  return () => {
+    const now = a.currentTime;
+    out.gain.cancelScheduledValues(now);
+    out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), now);
+    out.gain.exponentialRampToValueAtTime(0.0001, now + 1.1); // the same soft fade
+    window.setTimeout(() => sources.forEach((s) => s.stop()), 1300);
+  };
+}
+
 async function nightSongScene() {
   await corvinScene(async () => {
     let audio: HTMLAudioElement | null = null;
+    let stopMelody: (() => void) | null = null;
     const url = posterMedia.get("nightsong");
     if (url) {
       audio = new Audio(url);
       audio.volume = 0.55;
       void audio.play().catch(() => {});
+    } else {
+      // No song installed (every fresh download) — he plays his own.
+      stopMelody = playNightMelody(NIGHT_SONG_MS);
+      if (story.first("nightsong_hint")) {
+        window.setTimeout(
+          () => showBubble("Свою песню — в ~/.echo/media/nightsong.mp3", PRIO.NOTABLE),
+          2200,
+        );
+      }
     }
     try {
       await playCorvin(CORVIN.sit);
       const passes = Math.max(2, Math.round(NIGHT_SONG_MS / corvinClipTotal(CORVIN.guitar)));
       await playCorvin(CORVIN.guitar, passes);
     } finally {
+      // A soft fade instead of a hard cut — it's a ritual, not an alarm.
+      if (stopMelody) stopMelody();
       if (audio) {
-        // A soft fade instead of a hard cut — it's a ritual, not an alarm.
         const a = audio;
         const fade = window.setInterval(() => {
           a.volume = Math.max(0, a.volume - 0.06);
