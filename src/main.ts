@@ -887,8 +887,25 @@ function onContext(kind: string) {
     else posterScene(30_000);
     return;
   }
+  // ALT+B — a story on demand (user-directed): the next chapter of the novel,
+  // skipping the 7-minute typing gate and the 20-minute spacing.
+  if (kind === "hotkey_story") {
+    if (!isCorvin()) return;
+    typingSessionStart = Date.now() - NOVEL_AFTER_TYPING_MS - 1000;
+    if (story.s.novel) story.s.novel.lastAt = 0;
+    maybeTellNovel();
+    return;
+  }
   if (kind === "demo_tale") return void whetstoneTaleScene();
   if (kind === "demo_break") return void breakdownScene();
+  if (kind === "demo_requiem") return void requiemScene();
+  if (kind === "demo_breach") return void breachScene();
+  if (kind === "demo_letter") return void letterScene();
+  if (kind === "demo_road") return void roadScene();
+  if (kind === "demo_rain") return void rainScene();
+  if (kind === "demo_cairn") return void cairnScene();
+  if (kind === "demo_combo") return void comboFlowScene();
+  if (kind === "demo_parry") return void parryBeat();
   if (kind === "demo_ritual") {
     story.s.lastRitualDay = ""; // let today's ceremony run again, for QA
     maybeDailyRitual();
@@ -918,7 +935,7 @@ function onContext(kind: string) {
     // every 10 min. The Steam client window alone must not arm these.
     lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
     lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
-    lastGamingExec = Date.now() - GAMING_EXEC_EVERY + 11 * 60 * 1000; // -> 11:00
+    armHuntClocks(); // Corvin's full repertoire, one beat per minute mark
     armDanteClocks(); // spin@6:00/20m, coin@+3h, pizza@+3.5h — same session zero
     dbg("game_start -> beat clocks armed (devil@3:00, sword@7:00)");
     return;
@@ -1261,6 +1278,7 @@ async function executionScene() {
       sfxIgnite();
     }, 230 * paceMul()); // the slam lands 3 frames into the strike
     await playCorvin(CORVIN.execstrike);
+    await windedTail(); // and then he has to breathe
   }, ACCENT.success);
 }
 
@@ -1295,6 +1313,7 @@ async function cleaveScene() {
     window.setTimeout(() => shake(460), 190 * paceMul()); // ground impact
     await playCorvin(CORVIN.cleavesmash);
     await playCorvin(CORVIN.cleaverecover);
+    await windedTail();
   }, ACCENT.success);
 }
 
@@ -1637,7 +1656,43 @@ function scheduleMidnight() {
     const now = new Date();
     const h = now.getHours();
     const busy = gagActive || showcasing || introActive || wandering || away || returning;
-    if (busy || now.getMinutes() >= 10) return; // each ritual has a 10-min window
+    if (busy) return;
+    // The 23:40 requiem owns the last twenty minutes of the day; every other
+    // ritual keeps its ten-minute window at the top of its hour.
+    if (now.getMinutes() >= 10 && !(h === 23 && now.getMinutes() >= 40)) return;
+    // 17:00 — the Breach, hard (user-directed). The day's one real fight.
+    if (h === 17) {
+      const last = story.s.gags.lastBreachAt ?? 0;
+      if (Date.now() - last < 6 * 3_600_000) return;
+      dbg("breach ritual (17:00)");
+      void breachScene(); // it stamps lastBreachAt itself
+      return;
+    }
+    // The rest of the repertoire, one move per fixed hour (user-directed).
+    const slot = DAILY_HOURS.find((s) => s.h === h);
+    if (slot) {
+      const key = `${dateKey()}-${h}`;
+      if (story.s.gags.lastHourSlot === key) return; // already run today
+      // Only when you're actually there (user-directed): no performances to an
+      // empty room. Not stamped on a miss, so it retries within the hour.
+      const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
+      if (Date.now() - seen > 30 * 60_000) return;
+      story.s.gags.lastHourSlot = key;
+      story.save();
+      dbg(`daily hour ${h}:00 -> ${slot.name}`);
+      slot.run();
+    }
+    // 23:40 — the requiem: the whole grief line as one film, under the song.
+    // Midnight picks it up twenty minutes later with the guitar.
+    if (h === 23 && now.getMinutes() >= 40) {
+      const last = story.s.gags.lastRequiemAt ?? 0;
+      if (Date.now() - last < 12 * 3_600_000) return; // once a night
+      story.s.gags.lastRequiemAt = Date.now();
+      story.save();
+      dbg("requiem ritual (23:40)");
+      void requiemScene();
+      return;
+    }
     // 00:00 — the guitar. He plays, the shadow rises, one quiet line.
     if (h === 0) {
       const last = story.s.gags.lastNightSongAt ?? 0;
@@ -1721,6 +1776,202 @@ async function breakdownScene() {
   });
 }
 
+// ---- The grief line: four quiet scenes on long, private clocks -------------
+// None of them are performances. They happen, you may or may not be looking,
+// and they leave without a word. The wind is the only sound.
+async function letterScene() {
+  await corvinScene(async () => {
+    const stopWind = playWind();
+    try {
+      await playCorvin(CORVIN.letter);
+    } finally {
+      stopWind();
+    }
+  });
+}
+
+async function roadScene() {
+  await corvinScene(async () => {
+    const stopWind = playWind();
+    try {
+      // Evenings and nights it rains on that road (user-directed); by day he
+      // watches it dry. Same wait either way.
+      const p = dayPart();
+      const wet = p === "evening" || p === "night";
+      await playCorvin(wet ? CORVIN.roadrain : CORVIN.road);
+      await sleep(6000); // he keeps watching after the clip settles
+    } finally {
+      stopWind();
+    }
+  });
+}
+
+// Artsiv's strike (the action line's last piece): he sends the eagle, it dives
+// across the whole screen talons-first, and comes back to the shoulder.
+async function artsivStrikeScene() {
+  await corvinScene(async () => {
+    await playCorvin(CORVIN.takeoff);
+    commitFor(9000);
+    const flew = await skyFly(7000, true); // dive mode
+    if (!flew) await artsivFly(5000);
+    await playCorvin(CORVIN.landing);
+  });
+}
+
+async function rainScene(ms = 22_000) {
+  await corvinScene(async () => {
+    const stopWind = playWind();
+    try {
+      const passes = Math.max(2, Math.round(ms / corvinClipTotal(CORVIN.rain)));
+      await playCorvin(CORVIN.rain, passes);
+    } finally {
+      stopWind();
+    }
+  });
+}
+
+async function cairnScene() {
+  await corvinScene(async () => {
+    const stopWind = playWind();
+    try {
+      await playCorvin(CORVIN.cairn);
+      await sleep(2500); // the palm stays on the stone
+    } finally {
+      stopWind();
+    }
+  });
+}
+
+// ---- The requiem (23:40): all five grief scenes as one film ----------------
+// User-directed: everything sad, joined, with the song under it — and then
+// midnight takes over with the guitar. The order is the arc: he looks at the
+// letter, watches the road, stands in the rain, visits the grave, and only
+// then goes down. One line at the very end, and nothing else.
+// Song priority: ~/.echo/media/sadsong.mp3, then nightsong.mp3, then the
+// synthesized lament, so it always has music.
+async function requiemScene() {
+  await corvinScene(async () => {
+    // NO music (user-directed): the requiem carries itself. Only the wind —
+    // silence is heavier here than any song. The guitar comes at 00:00.
+    const stopWind = playWind();
+    try {
+      dbg("requiem: the whole grief line");
+      await playCorvin(CORVIN.letter); // he looks at it
+      await playCorvin(CORVIN.roadrain); // watches the road in the rain
+      await sleep(4000);
+      await playCorvin(CORVIN.rain, 2); // and just stands in it
+      await playCorvin(CORVIN.cairn); // and visits the grave
+      await sleep(2000);
+      await playCorvin(CORVIN.breakdown); // and then he goes down
+      await playCorvin(CORVIN.breakhold, BREAK_HOLD_PASSES);
+      await playCorvin(CORVIN.breakrise); // and gets up anyway
+    } finally {
+      stopWind();
+    }
+    // One line, then the watch. Midnight follows in twenty minutes.
+    let i = Math.floor(Math.random() * NIGHT_SAD_LINES.length);
+    if (i === lastSadLine) i = (i + 1) % NIGHT_SAD_LINES.length;
+    lastSadLine = i;
+    const line = NIGHT_SAD_LINES[i];
+    showBubble(line, PRIO.NOTABLE);
+    await speakLine(line);
+    await sleep(1500);
+  });
+}
+
+// Long private cadences — these must stay rare to keep their weight.
+const LETTER_EVERY = 7 * 86_400_000; // once a week
+const CAIRN_EVERY = 30 * 86_400_000; // once a month
+function griefUrge(): (() => Promise<void>) | null {
+  const now = Date.now();
+  const g = story.s.gags;
+  if (now - (g.lastCairnAt ?? 0) > CAIRN_EVERY) {
+    g.lastCairnAt = now;
+    story.save();
+    dbg("grief: the cairn (monthly)");
+    return cairnScene;
+  }
+  if (now - (g.lastLetterAt ?? 0) > LETTER_EVERY) {
+    g.lastLetterAt = now;
+    story.save();
+    dbg("grief: the letter (weekly)");
+    return letterScene;
+  }
+  return null;
+}
+
+// ---- The fight line ---------------------------------------------------------
+// A block instead of a hit: sparks, boots skidding, back into guard.
+function parryBeat() {
+  stage.dataset.state = "error";
+  document.documentElement.style.setProperty("--accent", ACCENT.error);
+  commitFor(corvinClipTotal(CORVIN.parry) * paceMul() + 300);
+  curClip = CORVIN.parry as Clip;
+  frameIdx = 0;
+  window.setTimeout(() => {
+    sfxGunshot(); // the steel-on-steel crack lands on the spark frame
+    shake(220);
+  }, 170 * paceMul());
+}
+
+// Every big fight now ends with him breathing — this is what gives them weight.
+async function windedTail() {
+  await playCorvin(CORVIN.winded);
+}
+
+// THE BREACH — the fight he nearly loses. Twenty seconds, six parts, one run.
+// Camera and sound are timed to the frames: the exchange rattles, the knockdown
+// hits once and then goes quiet, the rise brings the aura back, and the finisher
+// detonates. Ends on the winded tail — he has to breathe after this one.
+async function breachScene() {
+  await corvinScene(async () => {
+    story.s.gags.lastBreachAt = Date.now();
+    story.save();
+    dbg("BREACH");
+    await playCorvin(CORVIN.bralarm); // Artsiv screams, he squares up
+    window.setTimeout(() => shake(300), 120 * paceMul());
+    window.setTimeout(sfxIgnite, 260 * paceMul());
+    await playCorvin(CORVIN.brclash); // the exchange
+    sfxDemonRoar(); // whatever came through answers
+    window.setTimeout(() => shake(520), 60 * paceMul());
+    await playCorvin(CORVIN.brthrown); // and it puts him on the ground
+    vignettePulse();
+    sfxAura();
+    await playCorvin(CORVIN.brrise); // he gets up with the shadow out
+    window.setTimeout(() => shake(420), 200 * paceMul());
+    sfxIgnite();
+    await playCorvin(CORVIN.brcounter); // the counter
+    window.setTimeout(() => {
+      shake(620);
+      sfxAura();
+    }, 240 * paceMul());
+    await playCorvin(CORVIN.brfinish); // the finisher
+    await windedTail(); // and then he breathes
+  }, ACCENT.error);
+}
+
+// The combo flow (no new art): charge into the cleave into the Execution, one
+// unbroken run with the camera and the sound rising through it.
+async function comboFlowScene() {
+  await corvinScene(async () => {
+    sfxIgnite();
+    await playCorvin(CORVIN.charge);
+    shake(260);
+    await playCorvin(CORVIN.cleaveprep);
+    sfxIgnite();
+    await playCorvin(CORVIN.cleaveslash);
+    window.setTimeout(() => shake(420), 190 * paceMul());
+    await playCorvin(CORVIN.cleavesmash);
+    await playCorvin(CORVIN.execraise);
+    window.setTimeout(() => {
+      shake(560);
+      sfxAura();
+    }, 230 * paceMul());
+    await playCorvin(CORVIN.execstrike);
+    await windedTail();
+  }, ACCENT.success);
+}
+
 // The shadow aura — his stretch/flex idle flourish.
 async function auraScene() {
   await corvinScene(async () => {
@@ -1773,7 +2024,7 @@ function artsivFly(ms: number): Promise<void> {
 // click-through window over the whole monitor; the eagle launches from
 // Corvin's corner, sweeps two grand laps across the screen and returns.
 // Falls back to the small in-window flight if the window can't be created.
-async function skyFly(ms: number): Promise<boolean> {
+async function skyFly(ms: number, dive = false): Promise<boolean> {
   if (!home) return false;
   const h = home;
   let win: WebviewWindow | null = null;
@@ -1787,7 +2038,7 @@ async function skyFly(ms: number): Promise<boolean> {
     const sx = Math.round((h.lastX - mon.position.x) / sf) + 55;
     const sy = Math.round((h.y - mon.position.y) / sf) + 8;
     win = new WebviewWindow("skyfly", {
-      url: `index.html?skyfly=1&ms=${ms}&sx=${sx}&sy=${sy}`,
+      url: `index.html?skyfly=1&ms=${ms}&sx=${sx}&sy=${sy}${dive ? "&dive=1" : ""}`,
       width: mw,
       height: mh,
       x: Math.round(mon.position.x / sf),
@@ -1860,12 +2111,17 @@ function reactWinCorvin() {
 }
 
 function reactErrorCorvin() {
-  // Silent: he takes the hit or he doesn't flinch. No commentary.
+  // Silent: he blocks it, takes it, or doesn't flinch at all. No commentary.
   const pick = pickWeighted([
-    ["damage", 0.5],
-    ["nothing", 0.5],
+    ["parry", 0.3],
+    ["damage", 0.3],
+    ["nothing", 0.4],
   ]);
   dbg(`react=err(corvin):${pick}`);
+  if (pick === "parry") {
+    parryBeat();
+    return;
+  }
   if (pick === "damage") {
     stage.dataset.state = "error";
     document.documentElement.style.setProperty("--accent", ACCENT.error);
@@ -1932,6 +2188,10 @@ const CORVIN_CLOCKS: Array<{ name: string; every: number; last: number; run: () 
   { name: "aura", every: 8 * 60_000, last: 0, run: () => void auraScene() },
   { name: "tale", every: 12 * 60_000, last: 0, run: () => void whetstoneTaleScene() },
   { name: "bow", every: 20 * 60_000, last: 0, run: () => void corvinScene(() => playCorvin(CORVIN.bow)) },
+  // The quiet ones. Long clocks on purpose — they stop meaning anything the
+  // moment they become frequent.
+  { name: "road", every: 25 * 60_000, last: 0, run: () => void roadScene() },
+  { name: "rain", every: 40 * 60_000, last: 0, run: () => void rainScene() },
 ];
 // Staggered from boot so the first hour doesn't fire them all at once:
 // scan 2:00, aura 4:00, artsiv 6:00, tale 8:00, bow 15:00.
@@ -1941,6 +2201,13 @@ function armCorvinClocks() {
   for (const c of CORVIN_CLOCKS) c.last = now - c.every + firstAt[c.name] * 60_000;
 }
 function runCorvinClock() {
+  // The grief scenes outrank every clock: their cadences are measured in weeks
+  // and months, so they must never lose a slot to a routine urge.
+  const grief = griefUrge();
+  if (grief) {
+    void grief();
+    return;
+  }
   const now = Date.now();
   const due = CORVIN_CLOCKS.filter((c) => now - c.last >= c.every).sort(
     (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
@@ -2142,13 +2409,59 @@ async function gamingSpecial() {
 // every 10 min each. Checked every 20 s so beats land near their exact mark.
 const GAMING_SWORD_EVERY = 10 * 60 * 1000;
 const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
-// Corvin's third hunt clock (user-directed "exec/cleave hardening"): the
-// Execution lands at 11:00 into the hunt, then every 15 min — a fixed slot
-// like the others, not a dice roll.
-const GAMING_EXEC_EVERY = 15 * 60 * 1000;
+// The Breach joins the hunt on its own 10-minute clock (user-directed), first
+// at 10:00 in. With four clocks running the hunt is a near-constant show —
+// that is the intent: Steam is when he actually fights.
 let lastGamingSword = 0;
 let lastGamingDevil = 0;
-let lastGamingExec = 0;
+// ---- The hunt table (user-directed: everything he owns fires during Steam) --
+// Each beat gets its own minute mark and its own cadence, so one session walks
+// through the whole repertoire instead of replaying two moves. `firstAt` is
+// minutes into the session; armed on the real game-launch edge.
+const HUNT_CLOCKS: Array<{
+  name: string;
+  firstAt: number;
+  every: number;
+  last: number;
+  run: () => Promise<void>;
+}> = [
+  // THREE beats belong to the hunt (user-directed) — the rest live on the
+  // daily hour table below, so a game session stays a fight, not a revue.
+  { name: "unchained", firstAt: 3, every: 10 * 60_000, last: 0, run: () => unchainedScene() },
+  { name: "cleave", firstAt: 7, every: 10 * 60_000, last: 0, run: () => cleaveScene() },
+  { name: "breach", firstAt: 10, every: 10 * 60_000, last: 0, run: () => breachScene() },
+];
+
+// ---- The day's hour table (user-directed) ----------------------------------
+// Everything that isn't a hunt beat gets a fixed hour instead. One firing per
+// hour per day, remembered in story.json so a restart can't replay it.
+const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
+  // Afternoon through night (user-directed): mornings played to an empty room.
+  // The three hunt beats keep daily slots too, so you see them on days with
+  // no games at all.
+  { h: 12, name: "scan", run: () => void magicscanScene() },
+  { h: 14, name: "unchained", run: () => void unchainedScene() },
+  {
+    h: 15,
+    name: "charge",
+    run: () =>
+      void corvinScene(async () => {
+        sfxIgnite();
+        await playCorvin(CORVIN.charge);
+      }, ACCENT.success),
+  },
+  { h: 16, name: "artsiv-flight", run: () => void artsivCycleScene() },
+  { h: 18, name: "execution", run: () => void executionScene() },
+  { h: 19, name: "aura", run: () => void auraScene() },
+  { h: 20, name: "cleave", run: () => void cleaveScene() },
+  { h: 21, name: "combo", run: () => void comboFlowScene() },
+  { h: 22, name: "artsiv-strike", run: () => void artsivStrikeScene() },
+];
+function armHuntClocks() {
+  const now = Date.now();
+  for (const c of HUNT_CLOCKS) c.last = now - c.every + c.firstAt * 60_000;
+  dbg(`hunt clocks armed: ${HUNT_CLOCKS.map((c) => `${c.name}@${c.firstAt}:00`).join(", ")}`);
+}
 let nextGamingAmbience = 0;
 
 let lastBeatSkipLog = 0;
@@ -2157,33 +2470,35 @@ function scheduleGamingBeat() {
     try {
       const now = Date.now();
       if (gamingActive() && beatReady()) {
-        if (now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
+        // Corvin's hunt runs off the clock TABLE below, so every move he owns
+        // gets its own minute mark inside a session (user-directed: "all
+        // animations on time in Steam"). Most-overdue wins when two are due.
+        const due = isCorvin()
+          ? HUNT_CLOCKS.filter((c) => now - c.last >= c.every).sort(
+              (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
+            )
+          : [];
+        if (due.length && sceneAllowed()) {
+          const c = due[0];
+          c.last = now;
+          markScene();
+          dbg(`hunt ${c.name} (${c.firstAt}:00 + ${Math.round(c.every / 60_000)}m)`);
+          await c.run();
+        } else if (!isCorvin() && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
           lastGamingDevil = now;
           markScene();
           dbg("gaming devil trigger (3:00 + 10min cadence)");
-          if (isCorvin()) void unchainedScene();
-          else devilTriggerScene();
+          devilTriggerScene();
         } else if (
-          (isCorvin() || swordReady) &&
+          !isCorvin() &&
+          swordReady &&
           now - lastGamingSword > GAMING_SWORD_EVERY &&
           sceneAllowed()
         ) {
           lastGamingSword = now;
           markScene();
           dbg("gaming sword move (7:00 + 10min cadence)");
-          if (isCorvin()) await cleaveScene();
-          else await demoSword();
-        } else if (
-          isCorvin() &&
-          now - lastGamingExec > GAMING_EXEC_EVERY &&
-          sceneAllowed()
-        ) {
-          // Execution on its own hard clock during the hunt: 11:00 in, then
-          // every 15 min — no dice roll (user-directed).
-          lastGamingExec = now;
-          markScene();
-          dbg("gaming execution (11:00 + 15min cadence)");
-          await executionScene();
+          await demoSword();
         } else if (
           !isCorvin() &&
           now - lastGamingSpecial > 60 * 60 * 1000 &&
@@ -3680,17 +3995,21 @@ function skyflyMain(q: URLSearchParams) {
     "position:absolute;left:0;top:0;width:150px;image-rendering:pixelated;" +
     "pointer-events:none;filter:drop-shadow(0 4px 6px rgba(0,0,0,0.45));";
   document.body.appendChild(img);
-  const frames = Array.from(
-    { length: 10 },
-    (_, i) => `/pixel/corvin/artsivfly/frame_${i}.png?v=1`,
-  );
+  // dive=1 -> the strike: talons-forward frames and a steep attack run.
+  const dive = q.has("dive");
+  const frames = dive
+    ? Array.from({ length: 11 }, (_, i) => `/pixel/corvin/artsivdive/frame_${i}.png?v=1`)
+    : Array.from({ length: 10 }, (_, i) => `/pixel/corvin/artsivfly/frame_${i}.png?v=1`);
   frames.forEach((s) => (new Image().src = s));
   let fi = 0;
   img.src = frames[0];
-  const frameTimer = window.setInterval(() => {
-    fi = (fi + 1) % frames.length;
-    img.src = frames[fi];
-  }, 140);
+  const frameTimer = window.setInterval(
+    () => {
+      fi = (fi + 1) % frames.length;
+      img.src = frames[fi];
+    },
+    dive ? 90 : 140, // a dive beats its wings faster
+  );
   const W = window.innerWidth;
   const H = window.innerHeight;
   const cx = W * 0.5;
@@ -3701,6 +4020,27 @@ function skyflyMain(q: URLSearchParams) {
   // Ellipse entry angle nearest to Corvin's corner, so paths join smoothly.
   const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx);
   const pos = (t: number): [number, number] => {
+    if (dive) {
+      // The strike: climb high, then a steep power dive clean across the
+      // screen, and back up out of frame to Corvin's corner.
+      const CLIMB = 0.3;
+      const STRIKE = 0.62;
+      const topX = W * 0.82;
+      const topY = H * 0.1;
+      const hitX = W * 0.16;
+      const hitY = H * 0.78;
+      if (t < CLIMB) {
+        const p = ease(t / CLIMB);
+        return [sx + (topX - sx) * p, sy + (topY - sy) * p];
+      }
+      if (t < STRIKE) {
+        const p = (t - CLIMB) / (STRIKE - CLIMB);
+        const q = p * p; // it accelerates all the way down
+        return [topX + (hitX - topX) * q, topY + (hitY - topY) * q];
+      }
+      const p = ease((t - STRIKE) / (1 - STRIKE));
+      return [hitX + (sx - hitX) * p, hitY + (sy - hitY) * p - Math.sin(p * Math.PI) * H * 0.25];
+    }
     const IN = 0.16;
     const OUT = 0.84;
     const ex = (a: number) => cx + Math.cos(a) * rx;

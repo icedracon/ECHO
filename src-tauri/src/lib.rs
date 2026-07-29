@@ -126,11 +126,13 @@ fn poster_media() -> Vec<(String, String)> {
         return out;
     };
     let dir = home.join(".echo").join("media");
-    let want: [(&str, &[(&str, &str)]); 3] = [
+    let want: [(&str, &[(&str, &str)]); 4] = [
         ("poster", &[("gif", "image/gif"), ("png", "image/png"), ("webp", "image/webp")]),
         ("song", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
         // Corvin's midnight ritual: ~/.echo/media/nightsong.mp3 (user's own file)
         ("nightsong", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+        // The 23:40 requiem — its own track if you want one, else nightsong.
+        ("sadsong", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
     ];
     for (stem, exts) in want {
         for (ext, mime) in exts {

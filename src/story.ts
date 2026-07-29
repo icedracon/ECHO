@@ -27,6 +27,11 @@ interface StoryState {
     lastSwordCareAt?: number;
     lastNightSongAt?: number; // Corvin's 00:00 guitar — once per night
     lastBreakdownAt?: number; // the 01:00 / 13:00 breakdown
+    lastLetterAt?: number; // the letter — once a week at most
+    lastCairnAt?: number; // the cairn — once a month
+    lastBreachAt?: number; // the Breach — the big fight
+    lastRequiemAt?: number; // the 23:40 requiem — the whole grief line
+    lastHourSlot?: string; // "YYYY-MM-DD-H" of the last daily-hour move
   };
   unlocks: string[];
   // Corvin the storyteller: per-arc fragment pointers — he NEVER repeats

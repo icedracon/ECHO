@@ -79,6 +79,49 @@ export const CORVIN = {
   // slow: one heavy breath, the bird turning its head, nothing else.
   breakdown: cc("breakdown", 11, 220, false, 10, [500, 200, 200, 200, 200, 200, 200, 200, 220, 260, 700]),
   breakhold: cc("breakhold", 9, 420, true),
+  // ---- The grief line (all five, user-directed) ----
+  // The letter: never read aloud, never explained. The long hold in the middle
+  // IS the scene — he just looks at it.
+  letter: cc("letter", 15, 300, false, 14,
+    [500, 260, 240, 240, 240, 300, 900, 1400, 900, 300, 260, 240, 240, 260, 700]),
+  // The empty road: he turns his back on you and watches for someone. The last
+  // frames stretch out on purpose — nothing is going to happen.
+  road: cc("road", 13, 300, false, 12,
+    [500, 240, 230, 230, 230, 240, 260, 300, 420, 600, 900, 1200, 1600]),
+  // Rain: the downpour is hand-drawn over the frames, so it loops seamlessly.
+  rain: cc("rain", 16, 110, true),
+  // The same road, in the rain (user-directed): when he turns his back on you
+  // to watch for someone, it should be pouring.
+  roadrain: cc("roadrain", 13, 300, false, 12,
+    [500, 240, 230, 230, 230, 240, 260, 300, 420, 600, 900, 1200, 1600]),
+  // The cairn: the old Warden's grave, which he dug himself.
+  cairn: cc("cairn", 13, 400, false, 12,
+    [500, 280, 260, 260, 260, 280, 300, 340, 420, 900, 1600, 1200, 900]),
+  // ---- The fight line ----
+  // A block: sparks, boots skidding, straight back into guard. 0.7 s total.
+  parry: cc("parry", 9, 80, false, 8, [60, 55, 55, 70, 110, 90, 80, 90, 140]),
+  // The bridge between the lines: after a real fight he has to breathe.
+  winded: cc("winded", 11, 300, false, 10,
+    [400, 260, 300, 340, 300, 260, 300, 340, 300, 280, 700]),
+  // Artsiv's dive — wings folded, talons forward. Flown by the sky window.
+  artsivdive: cc("artsivdive", 11, 90, true),
+  // ---- THE BREACH: 96 frames, six parts, one unbroken fight ----
+  // Something comes through the Door and he loses the tempo before he wins it.
+  // The pacing is the whole point: the exchange is fast, being knocked down is
+  // SLOW (he lies there longer than is comfortable), the rise is heavy, and the
+  // counter is explosive again.
+  bralarm: cc("bralarm", 13, 150, false, 12,
+    [400, 150, 140, 130, 130, 120, 120, 120, 130, 140, 160, 200, 420]),
+  brclash: cc("brclash", 17, 90, false, 16,
+    [90, 80, 70, 70, 75, 80, 70, 70, 80, 90, 100, 110, 120, 130, 150, 180, 260]),
+  brthrown: cc("brthrown", 15, 200, false, 14,
+    [70, 60, 60, 65, 75, 90, 110, 140, 180, 240, 420, 700, 900, 700, 600]),
+  brrise: cc("brrise", 17, 260, false, 16,
+    [600, 320, 300, 280, 260, 240, 230, 220, 210, 200, 190, 190, 200, 220, 260, 320, 600]),
+  brcounter: cc("brcounter", 17, 120, false, 16,
+    [260, 150, 90, 70, 60, 55, 55, 60, 70, 90, 110, 130, 150, 180, 220, 280, 360]),
+  brfinish: cc("brfinish", 17, 220, false, 16,
+    [140, 90, 80, 240, 150, 140, 150, 160, 180, 200, 220, 240, 260, 300, 360, 440, 700]),
   breakrise: cc("breakrise", 13, 240, false, 12, [700, 230, 230, 230, 230, 230, 240, 240, 250, 260, 280, 300, 700]),
 } as const;
 

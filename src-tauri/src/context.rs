@@ -144,14 +144,24 @@ fn spawn_typing(app: AppHandle) {
             unsafe {
                 const VK_MENU: i32 = 0x12;
                 const VK_S: i32 = 0x53;
+                const VK_B: i32 = 0x42;
                 static mut HOTKEY_AT: Option<Instant> = None;
-                let combo = GetAsyncKeyState(VK_MENU) as u16 & 0x8000 != 0
-                    && GetAsyncKeyState(VK_S) as u16 & 0x8000 != 0;
+                let alt = GetAsyncKeyState(VK_MENU) as u16 & 0x8000 != 0;
                 let cooled = HOTKEY_AT.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
-                if combo && cooled {
-                    HOTKEY_AT = Some(Instant::now());
-                    clog("hotkey ALT+S -> song");
-                    let _ = app.emit("context-event", ContextEvent { kind: "hotkey_song" });
+                if alt && cooled {
+                    // ALT+S — the song. ALT+B — a story (user-directed).
+                    let kind = if GetAsyncKeyState(VK_S) as u16 & 0x8000 != 0 {
+                        Some(("hotkey_song", "ALT+S -> song"))
+                    } else if GetAsyncKeyState(VK_B) as u16 & 0x8000 != 0 {
+                        Some(("hotkey_story", "ALT+B -> story"))
+                    } else {
+                        None
+                    };
+                    if let Some((k, label)) = kind {
+                        HOTKEY_AT = Some(Instant::now());
+                        clog(&format!("hotkey {label}"));
+                        let _ = app.emit("context-event", ContextEvent { kind: k });
+                    }
                 }
             }
             let active =
@@ -218,6 +228,14 @@ fn spawn_typing(app: AppHandle) {
                             "chapter" => "demo_chapter",
                             "tale" => "demo_tale",
                             "break" => "demo_break",
+                            "requiem" => "demo_requiem",
+                            "letter" => "demo_letter",
+                            "road" => "demo_road",
+                            "rain" => "demo_rain",
+                            "cairn" => "demo_cairn",
+                            "combo" => "demo_combo",
+                            "parry" => "demo_parry",
+                            "breach" => "demo_breach",
                             "ritual" => "demo_ritual",
                             "scan" => "demo_scan",
                             "fly" => "demo_fly",
