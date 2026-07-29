@@ -1588,20 +1588,22 @@ async function nightSongScene() {
     // Sit, banish the sword, pick the guitar up FIRST — the music must start
     // on the first strum, not over an empty lap (user-directed timing).
     await corvinTakeGuitar();
-    const url = posterMedia.get("nightsong");
+    // The night song ships with the build (public/media/nightsong.mp3), so
+    // every install has it; ~/.echo/media/nightsong.mp3 overrides it if you
+    // drop your own. The synthesized lament is the last resort.
+    const url = posterMedia.get("nightsong") ?? NIGHT_SONG_URL;
     if (url) {
       audio = new Audio(url);
       audio.volume = 0.55;
-      void audio.play().catch(() => {});
+      audio.onerror = () => {
+        dbg("nightsong missing -> synth lament");
+        stopMelody = playNightMelody(NIGHT_SONG_MS);
+      };
+      void audio.play().catch(() => {
+        stopMelody = playNightMelody(NIGHT_SONG_MS);
+      });
     } else {
-      // No song installed (every fresh download) — he plays his own.
       stopMelody = playNightMelody(NIGHT_SONG_MS);
-      if (story.first("nightsong_hint")) {
-        window.setTimeout(
-          () => showBubble("Свою песню — в ~/.echo/media/nightsong.mp3", PRIO.NOTABLE),
-          2200,
-        );
-      }
     }
     try {
       const passes = Math.max(2, Math.round(NIGHT_SONG_MS / corvinClipTotal(CORVIN.guitar)));
@@ -3646,6 +3648,8 @@ async function initPosterMedia() {
 // Bundled default song (shipped in the exe); ~/.echo/media/song.mp3 overrides.
 // The poster window resolves its own gif the same way in posterMain().
 const POSTER_SONG_URL = "/media/song.mp3";
+// Corvin's night song, bundled with the build so every install has music.
+const NIGHT_SONG_URL = "/media/nightsong.mp3";
 
 // Measure a gif so the poster window can take its shape (landscape gifs get a
 // landscape плакат instead of a letterboxed sliver).

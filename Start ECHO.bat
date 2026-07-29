@@ -26,6 +26,11 @@ if not exist "%USERPROFILE%\.echo\media" mkdir "%USERPROFILE%\.echo\media" 2>nul
 for %%f in ("public\media\*.gif") do if /i not "%%~nxf"=="poster.gif" copy /y "%%f" "%USERPROFILE%\.echo\media\poster.gif" >nul
 if not exist "%USERPROFILE%\.echo\media\poster.gif" if exist "public\media\poster.gif" copy /y "public\media\poster.gif" "%USERPROFILE%\.echo\media\poster.gif" >nul
 if exist "public\media\song.mp3" if not exist "%USERPROFILE%\.echo\media\song.mp3" copy /y "public\media\song.mp3" "%USERPROFILE%\.echo\media\song.mp3" >nul
+if exist "public\media
+ightsong.mp3" if not exist "%USERPROFILE%\.echo\media
+ightsong.mp3" copy /y "public\media
+ightsong.mp3" "%USERPROFILE%\.echo\media
+ightsong.mp3" >nul
 
 rem ---- Prebuilt first. A normal user never compiles anything. ----
 if exist "ECHO.exe" (

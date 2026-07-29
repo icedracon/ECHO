@@ -75,6 +75,7 @@ if [ ! -f "$HOME/.echo/media/poster.gif" ] && [ -f "public/media/poster.gif" ]; 
 fi
 if [ ! -f "$HOME/.echo/media/song.mp3" ] && [ -f "public/media/song.mp3" ]; then
     cp "public/media/song.mp3" "$HOME/.echo/media/song.mp3"
+    cp "public/media/nightsong.mp3" "$HOME/.echo/media/nightsong.mp3"
 fi
 
 # Check node_modules
