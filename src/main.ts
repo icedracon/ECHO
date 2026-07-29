@@ -880,6 +880,13 @@ function onContext(kind: string) {
   if (kind === "demo_execution") return void executionScene();
   if (kind === "demo_guitar") return void guitarScene(12000);
   if (kind === "demo_night") return void nightSongScene();
+  // ALT+S (global hotkey): the song on demand — Corvin plays the guitar,
+  // Dante raises the плакат. Same busy-gate as demos: never mid-scene.
+  if (kind === "hotkey_song") {
+    if (isCorvin()) void nightSongScene();
+    else posterScene(30_000);
+    return;
+  }
   if (kind === "demo_tale") return void whetstoneTaleScene();
   if (kind === "demo_scan") return void magicscanScene();
   if (kind === "demo_fly") return void artsivCycleScene();
@@ -1154,12 +1161,16 @@ function speakLine(text: string): Promise<void> {
     }
     const u = new SpeechSynthesisUtterance(text);
     const ru = /[А-Яа-яЁё]/.test(text);
+    // A sentinel needs a MAN's voice: prefer the male system voices by name,
+    // fall back to any voice of the right language.
+    const male = ru ? ["pavel", "dmitry", "artem"] : ["david", "mark", "guy", "james", "ryan"];
+    const pool = ttsVoices.filter((x) => x.lang.toLowerCase().startsWith(ru ? "ru" : "en"));
     const v =
-      ttsVoices.find((x) => x.lang.toLowerCase().startsWith(ru ? "ru" : "en")) ?? null;
+      pool.find((x) => male.some((m) => x.name.toLowerCase().includes(m))) ?? pool[0] ?? null;
     if (v) u.voice = v;
-    u.rate = 0.92;
-    u.pitch = 0.62; // low and worn
-    u.volume = 0.9;
+    u.rate = 0.88; // unhurried
+    u.pitch = 0.42; // deep, worn, powerful
+    u.volume = 1.0;
     let done = false;
     const finish = () => {
       if (!done) {
@@ -1609,7 +1620,19 @@ function corvinIdleTick() {
   corvinIdleTimer = window.setTimeout(
     () => {
       corvinTickArmed = false;
-      if (!isCorvin() || gagActive || showcasing || introActive || wandering || away || returning) {
+      // gamingActive: during a hunt the 3:00/7:00/hourly beats OWN the stage —
+      // random urges must not steal their windows (they were: beat skipped
+      // gag=true while a tale played over the game).
+      if (
+        !isCorvin() ||
+        gagActive ||
+        showcasing ||
+        introActive ||
+        wandering ||
+        away ||
+        returning ||
+        gamingActive()
+      ) {
         return; // corvinIdleCycle() (next setState idle) restarts the chain
       }
       const st = stage.dataset.state || "idle";

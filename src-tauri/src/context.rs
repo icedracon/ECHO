@@ -129,6 +129,21 @@ fn spawn_typing(app: AppHandle) {
             if key_now {
                 last_key = Instant::now();
             }
+            // Global hotkey ALT+S (user-directed): the midnight song on demand.
+            // Edge-triggered with a 5 s cooldown so holding it fires once.
+            unsafe {
+                const VK_MENU: i32 = 0x12;
+                const VK_S: i32 = 0x53;
+                static mut HOTKEY_AT: Option<Instant> = None;
+                let combo = GetAsyncKeyState(VK_MENU) as u16 & 0x8000 != 0
+                    && GetAsyncKeyState(VK_S) as u16 & 0x8000 != 0;
+                let cooled = HOTKEY_AT.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
+                if combo && cooled {
+                    HOTKEY_AT = Some(Instant::now());
+                    clog("hotkey ALT+S -> song");
+                    let _ = app.emit("context-event", ContextEvent { kind: "hotkey_song" });
+                }
+            }
             let active =
                 key_now || (last_key.elapsed() < Duration::from_secs(2) && idle_ms() < 700);
             if active {

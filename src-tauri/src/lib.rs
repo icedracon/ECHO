@@ -172,10 +172,24 @@ fn story_save(data: String) {
     }
 }
 
-/// Character pack selection: ~/.echo/character holds "dante" (default) or
-/// "corvin". Read at boot; `echo be corvin > ~/.echo/demo` switches live.
+/// Character pack selection. Precedence:
+/// 1. The exe's own name — Echo-Corvin.exe / Echo-Dante.exe are LOCKED builds
+///    (one binary, two names): fans download their hero and always boot him.
+/// 2. ~/.echo/character ("dante" / "corvin"), written by the live switch
+///    `echo corvin > ~/.echo/demo`. Plain ECHO.exe uses this.
 #[tauri::command]
 fn character_load() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(stem) = exe.file_stem().and_then(|s| s.to_str()) {
+            let s = stem.to_lowercase();
+            if s.contains("corvin") {
+                return "corvin".into();
+            }
+            if s.contains("dante") {
+                return "dante".into();
+            }
+        }
+    }
     let Some(home) = dirs::home_dir() else {
         return String::new();
     };
