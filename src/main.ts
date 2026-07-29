@@ -5,7 +5,7 @@ import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
 import { Story, dateKey } from "./story";
-import { CORVIN, corvinClipTotal } from "./corvin";
+import { CORVIN, corvinClipTotal, type CorvinClip } from "./corvin";
 import {
   pickIdle,
   type IdleUrge,
@@ -888,6 +888,11 @@ function onContext(kind: string) {
     return;
   }
   if (kind === "demo_tale") return void whetstoneTaleScene();
+  if (kind === "demo_ritual") {
+    story.s.lastRitualDay = ""; // let today's ceremony run again, for QA
+    maybeDailyRitual();
+    return;
+  }
   if (kind === "demo_scan") return void magicscanScene();
   if (kind === "demo_fly") return void artsivCycleScene();
   if (kind === "demo_chapter") {
@@ -912,17 +917,20 @@ function onContext(kind: string) {
     // every 10 min. The Steam client window alone must not arm these.
     lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
     lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
+    lastGamingExec = Date.now() - GAMING_EXEC_EVERY + 11 * 60 * 1000; // -> 11:00
     armDanteClocks(); // spin@6:00/20m, coin@+3h, pizza@+3.5h — same session zero
     dbg("game_start -> beat clocks armed (devil@3:00, sword@7:00)");
     return;
   }
   if (kind === "media_active") {
     mediaUntil = Date.now() + 3 * 60 * 1000; // video/music still playing
+    serviceMediaWish(); // a queued "you opened YouTube" moment gets its chance
     // While it's on, he breaks into a 15 s dance every ~10 min — but it shares
     // the one scene budget, so it can't stack against Jackpot & co.
     if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY) {
       if (beatReady() && sceneAllowed()) {
         lastMediaDance = Date.now();
+        mediaWanted = 0; // the wish is served
         markScene();
         dbg("media session poster (15s)");
         if (isCorvin()) void guitarScene(15000); // he plays along instead
@@ -940,10 +948,10 @@ function onContext(kind: string) {
   if (kind === "media") {
     // You opened music/video — that's deliberate: he holds up his плакат
     // (poster gif + song from ~/.echo/media) and dances beside it.
-    lastMediaDance = Date.now();
-    markScene();
-    if (isCorvin()) void guitarScene(15000);
-    else posterScene(15000);
+    // The edge fires ONCE (Rust throttles it), so a busy moment must not eat
+    // it: queue instead, and only burn the 10-minute clock once it really ran.
+    mediaWanted = Date.now();
+    serviceMediaWish();
   } else if (kind === "gaming") {
     // Mood only — the devil/sword clocks are armed by "game_start" (the real
     // launch edge), never by DNS hits or the Steam client window.
@@ -1188,8 +1196,25 @@ function speakLine(text: string): Promise<void> {
 // The storytelling pose: the nuzzle replayed as a loop — Artsiv stays close
 // while he talks (user-directed).
 const NUZZLE_LOOP: Clip = { ...(CORVIN.nuzzle as Clip), loop: true, settle: 0 };
-async function tellStory(lines: string[], title?: string) {
-  curClip = NUZZLE_LOOP;
+// Seated poses he can be telling a story FROM; going straight to the standing
+// nuzzle from one of these read as "he broke the animation and jumped up"
+// (user-reported on the midnight guitar). Stand up properly first.
+const SEATED_CLIPS = new Set<Clip>([
+  CORVIN.sit as Clip,
+  CORVIN.guitar as Clip,
+  CORVIN.whetstone as Clip,
+  CORVIN.meditate as Clip,
+]);
+async function tellStory(lines: string[], title?: string, pose?: Clip) {
+  const target = pose ?? NUZZLE_LOOP;
+  if (SEATED_CLIPS.has(curClip) && !SEATED_CLIPS.has(target)) {
+    commitFor(2000);
+    curClip = CORVIN_SIT_REV; // rise first — no teleporting to his feet
+    frameIdx = 0;
+    afterClip = null;
+    await sleep(corvinClipTotal(CORVIN_SIT_REV));
+  }
+  curClip = target;
   frameIdx = 0;
   afterClip = null;
   if (title) {
@@ -1280,12 +1305,35 @@ async function nuzzleScene() {
   });
 }
 
+// Sitting down to play, properly (user-directed): sit with the sword, banish
+// the blade into shadow, lift the guitar off the floor — THEN music. Leaving
+// runs the same two clips backwards, so the guitar goes down and the sword
+// reassembles out of the motes. Returns the ms it took, so callers can start
+// audio exactly on the first strum instead of over an empty lap.
+const REV = (c: CorvinClip): Clip => ({
+  frames: [...c.frames].reverse(),
+  ms: c.ms,
+  msSeq: c.msSeq ? [...c.msSeq].reverse() : undefined,
+  loop: false,
+  settle: c.frames.length - 1,
+});
+async function corvinTakeGuitar() {
+  await playCorvin(CORVIN.sit);
+  await playCorvin(CORVIN.swordaway); // the blade crumbles, tip first
+  await playCorvin(CORVIN.guitartake); // reaches down, lifts it, Artsiv rises
+}
+async function corvinPutGuitar() {
+  await playCorvin(REV(CORVIN.guitartake)); // guitar back to the floor
+  await playCorvin(REV(CORVIN.swordaway)); // motes gather into steel again
+}
+
 // The плакат moment, Corvin's way: he sits and plays for the music you opened.
 async function guitarScene(durationMs: number) {
   await corvinScene(async () => {
-    await playCorvin(CORVIN.sit);
+    await corvinTakeGuitar();
     const passes = Math.max(2, Math.round(durationMs / corvinClipTotal(CORVIN.guitar)));
     await playCorvin(CORVIN.guitar, passes);
+    await corvinPutGuitar();
   });
 }
 
@@ -1312,6 +1360,78 @@ async function whetstoneTaleScene() {
     if (tale) await tellStory(tale.lines);
     else await playCorvin(CORVIN.whetstone, 2); // corpus finished — quiet strokes
   });
+}
+
+// ---- Media wish queue (user-directed "youtube trigger fix") ------------------
+// The "media" edge fires once when you open YouTube/Spotify — the backend then
+// throttles it for two minutes. If he happened to be mid-scene, the moment used
+// to be DROPPED and nothing played until you reopened the tab. Now the wish is
+// remembered and served the second he's free (it expires after 3 min so it
+// can't surprise you long after the fact).
+let mediaWanted = 0;
+function serviceMediaWish() {
+  if (!mediaWanted) return;
+  if (Date.now() - mediaWanted > 3 * 60_000) {
+    mediaWanted = 0; // stale — you've moved on
+    return;
+  }
+  if (!beatReady() || !sceneAllowed()) return; // try again on the next heartbeat
+  mediaWanted = 0;
+  lastMediaDance = Date.now();
+  markScene();
+  dbg("media wish served");
+  if (isCorvin()) void guitarScene(15000);
+  else posterScene(15000);
+}
+
+// ---- Daily life (user-directed: more than YouTube and Steam) -----------------
+// The day has a shape. Two layers:
+//   * a once-per-day RITUAL on your first activity — dawn watch, evening care
+//   * time-of-day flavour that tilts which idle urges he reaches for
+// Both persist through ~/.echo/story.json, so "once a day" survives restarts.
+type DayPart = "night" | "morning" | "day" | "evening";
+function dayPart(): DayPart {
+  const h = new Date().getHours();
+  if (h < 5) return "night";
+  if (h < 11) return "morning";
+  if (h < 18) return "day";
+  return "evening";
+}
+
+// His first appearance each calendar day gets a small ceremony — the thing that
+// makes a companion feel like he lives with you rather than restarts with you.
+function maybeDailyRitual() {
+  if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+  const today = dateKey();
+  if (story.s.lastRitualDay === today) return;
+  if (!sceneAllowed()) return;
+  story.s.lastRitualDay = today;
+  story.save();
+  const part = dayPart();
+  dbg(`daily ritual (${part})`);
+  markScene();
+  if (isCorvin()) {
+    if (part === "morning") {
+      // Dawn watch: the aura burns off the night, then he takes his post.
+      void corvinScene(async () => {
+        await playCorvin(CORVIN.aurarise);
+        await playCorvin(CORVIN.auraburn, 2);
+        await playCorvin(CORVIN.aurasink);
+        await playCorvin(CORVIN.bow);
+      });
+    } else if (part === "evening") {
+      // Evening care: he sits down with the whetstone and tells you something.
+      void whetstoneTaleScene();
+    } else if (part === "night") {
+      // Deep night: he sends Artsiv up to circle once, then stands watch.
+      void artsivCycleScene();
+    } else {
+      void magicscanScene(); // midday: sweep the perimeter
+    }
+  } else {
+    // Dante: a stretch and a word, then back to it.
+    demoSeated(WAKEUP, part === "morning" ? "Morning." : "Alright. Where were we?");
+  }
 }
 
 // ---- The novel (user-directed): 7+ minutes of typing earns a chapter --------
@@ -1346,7 +1466,23 @@ function maybeTellNovel() {
 // guitar for ~30 s, and afterwards tells one fragment of the MIDNIGHT arc —
 // the story of the letter that never came ("Anlatamam": "I cannot tell it").
 // The arc lives outside the whetstone rotation; the ritual is how you earn it.
-const NIGHT_SONG_MS = 30_000;
+const NIGHT_SONG_MS = 60_000; // a full minute of playing (user-directed)
+const NIGHT_AFTER_AURA_MS = 30_000; // then the shadow rises, then the quiet word
+// What the song leaves behind. One line, half a minute after the aura —
+// never explained, never repeated twice in a row.
+const NIGHT_SAD_LINES = [
+  "Девять вёсен. Я всё ещё считаю их.",
+  "Дорога пуста. Как и вчера.",
+  "Она сказала «весной». Весна приходила девять раз.",
+  "Я помню её голос лучше, чем своё имя.",
+  "Иногда играю громче. Чтобы не слышать тишину.",
+  "Арцив тоже смотрит на дорогу. Мы об этом не говорим.",
+  "Тьма забирает всё. Кроме памяти.",
+  "Шестьсот лет. А болит одно письмо.",
+  "Ворота держатся. Я — не каждую ночь.",
+  "Не спрашивай ничего. Просто побудь рядом.",
+];
+let lastSadLine = -1;
 
 // The default song, synthesized: a plucked-string lament in A minor, composed
 // for Corvin and generated in-engine (Karplus-Strong), so a fresh download
@@ -1429,6 +1565,9 @@ async function nightSongScene() {
   await corvinScene(async () => {
     let audio: HTMLAudioElement | null = null;
     let stopMelody: (() => void) | null = null;
+    // Sit, banish the sword, pick the guitar up FIRST — the music must start
+    // on the first strum, not over an empty lap (user-directed timing).
+    await corvinTakeGuitar();
     const url = posterMedia.get("nightsong");
     if (url) {
       audio = new Audio(url);
@@ -1445,9 +1584,8 @@ async function nightSongScene() {
       }
     }
     try {
-      await playCorvin(CORVIN.sit);
       const passes = Math.max(2, Math.round(NIGHT_SONG_MS / corvinClipTotal(CORVIN.guitar)));
-      await playCorvin(CORVIN.guitar, passes);
+      await playCorvin(CORVIN.guitar, passes); // he's already holding it
     } finally {
       // A soft fade instead of a hard cut — it's a ritual, not an alarm.
       if (stopMelody) stopMelody();
@@ -1462,8 +1600,31 @@ async function nightSongScene() {
         }, 120);
       }
     }
-    const lines = story.nextMidnightTale();
-    await tellStory(lines); // the midnight fragment, voiced, Artsiv close
+    // Song over: the guitar goes back to the floor, the sword reassembles out
+    // of the motes, and he rises. Only then does the shadow come out.
+    await corvinPutGuitar();
+    commitFor(2000);
+    curClip = CORVIN_SIT_REV;
+    frameIdx = 0;
+    afterClip = null;
+    await sleep(corvinClipTotal(CORVIN_SIT_REV));
+    // After the song: the shadow rises (he lets it out once a night), and half
+    // a minute later — one quiet, bitter line. No story, no explanation.
+    await playCorvin(CORVIN.aurarise);
+    await playCorvin(CORVIN.auraburn, 2);
+    await playCorvin(CORVIN.aurasink);
+    commitFor(NIGHT_AFTER_AURA_MS + 12_000);
+    curClip = ANIMS.idle; // he stands his watch with it
+    frameIdx = 0;
+    afterClip = null;
+    await sleep(NIGHT_AFTER_AURA_MS);
+    let i = Math.floor(Math.random() * NIGHT_SAD_LINES.length);
+    if (i === lastSadLine) i = (i + 1) % NIGHT_SAD_LINES.length;
+    lastSadLine = i;
+    const line = NIGHT_SAD_LINES[i];
+    showBubble(line, PRIO.NOTABLE);
+    await speakLine(line);
+    await sleep(1200);
   });
 }
 
@@ -1609,10 +1770,10 @@ async function artsivCycleScene() {
 // Corvin's reaction pools — a sentinel doesn't cheer; he acknowledges.
 function reactWinCorvin() {
   // Silent sentinel: a win earns steel, not words (user-directed).
+  // No cleave here — Разрубание belongs to the hunt (Steam) alone.
   const pick = pickWeighted([
-    ["charge", 0.16],
-    ["cleave", 0.06],
-    ["nothing", 0.78],
+    ["charge", 0.2],
+    ["nothing", 0.8],
   ]);
   dbg(`react=win(corvin):${pick}`);
   if (pick === "charge")
@@ -1620,7 +1781,6 @@ function reactWinCorvin() {
       sfxIgnite();
       await playCorvin(CORVIN.charge);
     }, ACCENT.success);
-  else if (pick === "cleave") void cleaveScene();
 }
 
 function reactErrorCorvin() {
@@ -1685,6 +1845,37 @@ function corvinSetQuiet(pose: string) {
     afterClip = null;
   }
 }
+// Fixed clocks for his daily animations (user-directed: hard timing, not a
+// dice roll). Each move has its own period and fires when it's the most
+// overdue — so every one of them is guaranteed to show up, on schedule.
+// The Steam-only moves (cleave, Unchained) and the YouTube-only move (guitar)
+// are deliberately NOT here: those belong to their triggers alone.
+const CORVIN_CLOCKS: Array<{ name: string; every: number; last: number; run: () => void }> = [
+  { name: "scan", every: 6 * 60_000, last: 0, run: () => void magicscanScene() },
+  { name: "artsiv", every: 10 * 60_000, last: 0, run: () => void artsivCycleScene() },
+  { name: "aura", every: 8 * 60_000, last: 0, run: () => void auraScene() },
+  { name: "tale", every: 12 * 60_000, last: 0, run: () => void whetstoneTaleScene() },
+  { name: "bow", every: 20 * 60_000, last: 0, run: () => void corvinScene(() => playCorvin(CORVIN.bow)) },
+];
+// Staggered from boot so the first hour doesn't fire them all at once:
+// scan 2:00, aura 4:00, artsiv 6:00, tale 8:00, bow 15:00.
+function armCorvinClocks() {
+  const now = Date.now();
+  const firstAt: Record<string, number> = { scan: 2, aura: 4, artsiv: 6, tale: 8, bow: 15 };
+  for (const c of CORVIN_CLOCKS) c.last = now - c.every + firstAt[c.name] * 60_000;
+}
+function runCorvinClock() {
+  const now = Date.now();
+  const due = CORVIN_CLOCKS.filter((c) => now - c.last >= c.every).sort(
+    (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
+  );
+  if (!due.length) return; // nothing owed yet — he just keeps his watch
+  const c = due[0];
+  c.last = now;
+  dbg(`clock(corvin) ${c.name} (every ${Math.round(c.every / 60_000)}m)`);
+  c.run();
+}
+
 let corvinTickArmed = false;
 function corvinIdleCycle() {
   if (!home) return;
@@ -1738,21 +1929,9 @@ function corvinIdleTick() {
       if (workish) {
         // No pose rotation here — setState would stomp it on the next event.
         // Straight to an urge on a slightly slower clock (~45-120 s).
-        if (corvinQuietRuns >= 2 + Math.floor(Math.random() * 2)) {
+        if (corvinQuietRuns >= 2) {
           corvinQuietRuns = 0;
-          const pick = pickWeighted([
-            ["tale", 0.24],
-            ["aura", 0.16],
-            ["bow", 0.08],
-            ["scan", 0.24],
-            ["artsiv", 0.28],
-          ]);
-          dbg(`work(corvin) urge=${pick}`);
-          if (pick === "tale") void whetstoneTaleScene();
-          else if (pick === "aura") void auraScene();
-          else if (pick === "bow") void corvinScene(() => playCorvin(CORVIN.bow));
-          else if (pick === "scan") void magicscanScene();
-          else void artsivCycleScene();
+          runCorvinClock(); // same fixed clocks while you work
           return;
         }
         corvinIdleTick();
@@ -1761,19 +1940,7 @@ function corvinIdleTick() {
       if (corvinQuietRuns >= 1 + Math.floor(Math.random() * 2)) {
         // a big urge earned by a few quiet rotations
         corvinQuietRuns = 0;
-        const pick = pickWeighted([
-          ["tale", 0.26],
-          ["aura", 0.18],
-          ["bow", 0.1],
-          ["scan", 0.22],
-          ["artsiv", 0.24],
-        ]);
-        dbg(`idle(corvin) urge=${pick}`);
-        if (pick === "tale") void whetstoneTaleScene();
-        else if (pick === "aura") void auraScene();
-        else if (pick === "bow") void corvinScene(() => playCorvin(CORVIN.bow));
-        else if (pick === "scan") void magicscanScene();
-        else void artsivCycleScene();
+        runCorvinClock(); // fixed clocks, not a dice roll (user-directed)
         return; // the scene's setState("idle") re-arms the cycle
       }
       const next = pickWeighted(
@@ -1899,8 +2066,13 @@ async function gamingSpecial() {
 // every 10 min each. Checked every 20 s so beats land near their exact mark.
 const GAMING_SWORD_EVERY = 10 * 60 * 1000;
 const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
+// Corvin's third hunt clock (user-directed "exec/cleave hardening"): the
+// Execution lands at 11:00 into the hunt, then every 15 min — a fixed slot
+// like the others, not a dice roll.
+const GAMING_EXEC_EVERY = 15 * 60 * 1000;
 let lastGamingSword = 0;
 let lastGamingDevil = 0;
+let lastGamingExec = 0;
 let nextGamingAmbience = 0;
 
 let lastBeatSkipLog = 0;
@@ -1925,16 +2097,24 @@ function scheduleGamingBeat() {
           dbg("gaming sword move (7:00 + 10min cadence)");
           if (isCorvin()) await cleaveScene();
           else await demoSword();
-        } else if (now - lastGamingSpecial > 60 * 60 * 1000 && Math.random() < 0.35) {
+        } else if (
+          isCorvin() &&
+          now - lastGamingExec > GAMING_EXEC_EVERY &&
+          sceneAllowed()
+        ) {
+          // Execution on its own hard clock during the hunt: 11:00 in, then
+          // every 15 min — no dice roll (user-directed).
+          lastGamingExec = now;
+          markScene();
+          dbg("gaming execution (11:00 + 15min cadence)");
+          await executionScene();
+        } else if (
+          !isCorvin() &&
+          now - lastGamingSpecial > 60 * 60 * 1000 &&
+          Math.random() < 0.35
+        ) {
           dbg("gaming special (hourly)");
-          if (isCorvin()) {
-            lastGamingSpecial = Date.now();
-            await executionScene(); // the hourly hunt trophy
-            await sleep(15000 + Math.random() * 60000);
-            if (beatReady()) await artsivCycleScene(); // ...Artsiv surveys the field
-          } else {
-            await gamingSpecial();
-          }
+          await gamingSpecial();
         } else if (now > nextGamingAmbience) {
           // Small flourishes keep their own loose ~1.5-3.5 min rhythm so the
           // 20 s cadence tick doesn't spam them.
@@ -2307,6 +2487,14 @@ function pickWeighted(items: Array<[string, number]>): string {
 }
 
 function reactWin() {
+  // A committed one-shot OWNS the sprite: a second event arriving mid-animation
+  // used to restart or replace it (user: "he breaks one animation for the
+  // second trigger"). Reactions set curClip directly, bypassing setState's
+  // guard, so the check has to live here too.
+  if (committed()) {
+    dbg("react=win skipped (animation in flight)");
+    return;
+  }
   if (isCorvin()) {
     reactWinCorvin();
     return;
@@ -2332,6 +2520,10 @@ function reactWin() {
 }
 
 function reactError() {
+  if (committed()) {
+    dbg("react=err skipped (animation in flight)");
+    return; // let the running beat finish — see reactWin()
+  }
   if (isCorvin()) {
     reactErrorCorvin();
     return;
@@ -2464,6 +2656,8 @@ const pickLine = (a: string[]) => a[Math.floor(Math.random() * a.length)];
 
 function applyEvent(e: AgentEvent) {
   lastActivity = Date.now(); // any event means the AI is active
+  maybeDailyRitual(); // the first activity of a new day gets its ceremony
+  serviceMediaWish(); // and a queued media moment gets another chance
   recentEvents.push(lastActivity); // feeds busyBurst() — stay quiet when I'm hammering
   life.onEvent(e.state); // v2 P1: nudge the internal state (doesn't drive behaviour yet)
   // HUD + bubble are always live, even while a state is being held.
@@ -2566,7 +2760,8 @@ function applyEvent(e: AgentEvent) {
       winStreak = 0;
       markScene();
       budgetScene("devil");
-      if (isCorvin()) void unchainedScene();
+      // Unchained is Steam-only (user-directed) — a level-up gets the aura.
+      if (isCorvin()) void auraScene();
       else devilTriggerScene();
       // M2 level chapters: levels unlock existing content, told as story.
       if (lastLevel >= 5 && story.unlock("sword_win_pool"))
@@ -3258,6 +3453,7 @@ async function main() {
   startBreathing(); // M1.5: the constant tier — he's never a statue again
   scheduleMidnight(); // Corvin's 00:00 guitar + the MIDNIGHT arc
   scheduleDanteBeats(); // fixed clocks: spin 6m/20m, coin 3h, pizza 3.5h, shrug
+  armCorvinClocks(); // and Corvin's: scan 6m, aura 8m, artsiv 10m, tale 12m, bow 20m
   initTts(); // system voices for the storyteller (ru + en)
 
   // Character pack: ~/.echo/character decides who walks in (default Dante).

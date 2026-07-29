@@ -42,7 +42,11 @@ export const CORVIN = {
   kneelrise: cc("kneelrise", 13, 170, false, 12, [170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 190, 550]),
   // storyteller (seated whetstone strokes; tales play over this loop)
   whetstone: cc("whetstone", 11, 210, true, 0, [500, 210, 210, 210, 210, 210, 210, 210, 210, 210, 550]),
-  // the YouTube moment: guitar + Artsiv hovering
+  // the YouTube moment: guitar + Artsiv hovering. Getting there is a ritual:
+  // the sword crumbles into violet motes (hand-painted, tip first), then he
+  // lifts the guitar and the eagle takes off. Both play REVERSED on the way out.
+  swordaway: cc("swordaway", 9, 130, false, 8, [150, 130, 130, 130, 130, 130, 140, 160, 220]),
+  guitartake: cc("guitartake", 9, 150, false, 8, [170, 150, 150, 150, 150, 160, 170, 190, 240]),
   guitar: cc("guitar", 11, 160, true),
   // power charge (blade ignition, peak holds ~0.9 s)
   charge: cc("charge", 15, 200, false, 14, [450, 200, 200, 200, 190, 180, 170, 300, 340, 300, 180, 170, 180, 200, 520]),

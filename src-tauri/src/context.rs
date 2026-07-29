@@ -217,6 +217,7 @@ fn spawn_typing(app: AppHandle) {
                             "night" => "demo_night",
                             "chapter" => "demo_chapter",
                             "tale" => "demo_tale",
+                            "ritual" => "demo_ritual",
                             "scan" => "demo_scan",
                             "fly" => "demo_fly",
                             _ => "",

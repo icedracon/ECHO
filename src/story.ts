@@ -34,6 +34,8 @@ interface StoryState {
   // The 100-chapter novel (novel.ts): strictly sequential, told after long
   // typing sessions. Restarts from chapter 1 when the book ends.
   novel?: { ch: number; lastAt?: number };
+  // Daily ritual: the dateKey of the last day he greeted you (once per day).
+  lastRitualDay?: string;
 }
 
 export const dateKey = (t = Date.now()) => {
