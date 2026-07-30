@@ -880,6 +880,12 @@ function onContext(kind: string) {
   if (kind === "demo_vigil") return void vigilScene();
   if (kind === "demo_execution") return void executionScene();
   if (kind === "demo_guitar") return void guitarScene(12000);
+  if (kind === "quiet_hour") {
+    quietUntil = Date.now() + 60 * 60_000;
+    showBubble(isCorvin() ? "Час тишины. Я на посту." : "Понял. Час молчу.", PRIO.NOTABLE);
+    dbg("quiet hour engaged");
+    return;
+  }
   if (kind === "demo_night") return void nightSongScene();
   // ALT+S (global hotkey): the song on demand — Corvin plays the guitar,
   // Dante raises the плакат. Same busy-gate as demos: never mid-scene.
@@ -1035,8 +1041,21 @@ let lastMediaDance = Date.now() - MEDIA_DANCE_EVERY + 90_000;
 void mediaUntil; // session window (kept for future mood weighting)
 const gamingActive = () => Date.now() < gamingUntil;
 
+// Quiet hour (tray item): he mutes every optional beat until it expires.
+// Rituals honour it too — a "don't disturb" that actually means it.
+let quietUntil = 0;
+const quietNow = () => Date.now() < quietUntil;
 function beatReady(): boolean {
-  return !!home && !gagActive && !showcasing && !away && !returning && !wandering && !committed();
+  return (
+    !!home &&
+    !gagActive &&
+    !showcasing &&
+    !away &&
+    !returning &&
+    !wandering &&
+    !committed() &&
+    !quietNow()
+  );
 }
 
 // Sword combo joins the gaming rotation the moment its art exists
@@ -1719,7 +1738,8 @@ function scheduleMidnight() {
     if (!home) return;
     const now = new Date();
     const h = now.getHours();
-    const busy = gagActive || showcasing || introActive || wandering || away || returning;
+    const busy =
+      gagActive || showcasing || introActive || wandering || away || returning || quietNow();
     if (busy) return;
     // The 23:40 requiem owns the last twenty minutes of the day; every other
     // ritual keeps its ten-minute window at the top of its hour.
@@ -2408,7 +2428,8 @@ function corvinIdleTick() {
         wandering ||
         away ||
         returning ||
-        gamingActive()
+        gamingActive() ||
+        quietNow()
       ) {
         return; // corvinIdleCycle() (next setState idle) restarts the chain
       }
@@ -3980,7 +4001,8 @@ function startBreathing() {
   sprite.parentElement!.insertBefore(wrap, sprite);
   wrap.appendChild(sprite);
   const step = (now: number) => {
-    const busy = gagActive || showcasing || introActive || wandering || away || returning;
+    const busy =
+      gagActive || showcasing || introActive || wandering || away || returning || quietNow();
     if (busy) {
       wrap.style.transform = "";
     } else {

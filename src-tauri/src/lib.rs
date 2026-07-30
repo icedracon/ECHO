@@ -230,6 +230,114 @@ fn fe_log(line: String) {
     }
 }
 
+/// The tray menu — the whole product with a mouse, for people who will never
+/// open a terminal (user-directed). Every item just emits the same
+/// context-events the `echo <word> > ~/.echo/demo` path uses, so the frontend
+/// needs nothing new.
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::tray::TrayIconBuilder;
+    use tauri::Emitter;
+
+    let item = |id: &str, label: &str| MenuItemBuilder::with_id(id, label);
+
+    let characters = SubmenuBuilder::new(app, "Персонаж")
+        .item(&item("ev:demo_be_corvin", "🦅  Корвин — Страж").build(app)?)
+        .item(&item("ev:demo_be_dante", "🔴  Данте — охотник").build(app)?)
+        .build()?;
+    let corvin_scenes = SubmenuBuilder::new(app, "Сцены Корвина")
+        .item(&item("ev:demo_corvin", "Полный показ (1 мин)").build(app)?)
+        .item(&item("ev:demo_fly", "Полёт Арцива по экрану").build(app)?)
+        .item(&item("ev:demo_tale", "Рассказать байку").build(app)?)
+        .item(&item("ev:demo_chapter", "Глава романа").build(app)?)
+        .item(&item("ev:demo_night", "Ночная песня").build(app)?)
+        .item(&item("ev:demo_breach", "Прорыв (большой бой)").build(app)?)
+        .item(&item("ev:demo_requiem", "Реквием").build(app)?)
+        .build()?;
+    let dante_scenes = SubmenuBuilder::new(app, "Сцены Данте")
+        .item(&item("ev:demo_devil", "Devil Trigger").build(app)?)
+        .item(&item("ev:demo_sword", "Огненный меч").build(app)?)
+        .item(&item("ev:demo_poster", "Плакат с песней").build(app)?)
+        .item(&item("ev:demo_pizza", "Пицца").build(app)?)
+        .build()?;
+    let menu = MenuBuilder::new(app)
+        .item(&characters)
+        .separator()
+        .item(&corvin_scenes)
+        .item(&dante_scenes)
+        .separator()
+        .item(&item("ev:hotkey_song", "🎸  Сыграть песню  (ALT+S)").build(app)?)
+        .item(&item("ev:quiet_hour", "🤫  Тихий час — не отвлекать").build(app)?)
+        .separator()
+        .item(&item("open_media", "📁  Мои песни и постеры").build(app)?)
+        .item(&item("quit", "Выход").build(app)?)
+        .build()?;
+
+    TrayIconBuilder::with_id("echo-tray")
+        .icon(app.default_window_icon().cloned().expect("icon"))
+        .tooltip("ECHO — твой компаньон")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            let id = event.id().0.as_str();
+            if let Some(kind) = id.strip_prefix("ev:") {
+                clog_tray(kind);
+                // Scene/switch items route through the demo file — the same
+                // path `echo <word> > ~/.echo/demo` fans already use, so the
+                // frontend needs zero new handlers for them.
+                let word = match kind {
+                    "demo_be_corvin" => Some("corvin"),
+                    "demo_be_dante" => Some("dante"),
+                    "demo_corvin" => Some("reel"),
+                    "demo_fly" => Some("fly"),
+                    "demo_tale" => Some("tale"),
+                    "demo_chapter" => Some("chapter"),
+                    "demo_night" => Some("night"),
+                    "demo_breach" => Some("breach"),
+                    "demo_requiem" => Some("requiem"),
+                    "demo_devil" => Some("devil"),
+                    "demo_sword" => Some("sword"),
+                    "demo_poster" => Some("poster"),
+                    "demo_pizza" => Some("pizza"),
+                    _ => None,
+                };
+                if let (Some(w), Some(home)) = (word, dirs::home_dir()) {
+                    let _ = std::fs::write(home.join(".echo").join("demo"), w);
+                }
+                if kind == "hotkey_song" {
+                    let _ = app.emit("context-event", context::ContextEvent { kind: "hotkey_song" });
+                }
+                if kind == "quiet_hour" {
+                    let _ = app.emit("context-event", context::ContextEvent { kind: "quiet_hour" });
+                }
+            } else if id == "open_media" {
+                if let Some(home) = dirs::home_dir() {
+                    let dir = home.join(".echo").join("media");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                }
+            } else if id == "quit" {
+                std::process::exit(0);
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+fn clog_tray(kind: &str) {
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".echo");
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("echo.log")) {
+            use std::io::Write;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "{ts}\ttray\t{kind}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -254,6 +362,7 @@ pub fn run() {
 
             watcher::spawn(app.handle().clone(), store, phrases);
             context::spawn(app.handle().clone()); // typing / media / gaming awareness
+            build_tray(app.handle())?; // the mouse-only control panel by the clock
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
