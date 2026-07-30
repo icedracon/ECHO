@@ -105,6 +105,36 @@ export const CORVIN = {
     [400, 260, 300, 340, 300, 260, 300, 340, 300, 280, 700]),
   // Artsiv's dive — wings folded, talons forward. Flown by the sky window.
   artsivdive: cc("artsivdive", 11, 90, true),
+  // ---- Links: seams between poses (director set 1) ----
+  // Almost every one is pinned back to the base stance, so the director can
+  // slot them between ANY two scenes without a teleport.
+  turnleft: cc("turnleft", 7, 160, false, 6, [420, 150, 150, 150, 160, 180, 400]),
+  turnback: cc("turnback", 7, 160, false, 6, [180, 150, 150, 150, 160, 180, 420]),
+  stepright: cc("stepright", 9, 170, false, 8, [420, 170, 160, 160, 170, 160, 160, 180, 420]),
+  shiftweight: cc("shiftweight", 7, 210, false, 6, [420, 200, 220, 240, 220, 200, 420]),
+  leanwall: cc("leanwall", 9, 220, false, 8, [420, 180, 180, 190, 200, 220, 260, 300, 700]),
+  leanoff: cc("leanoff", 7, 190, false, 6, [300, 190, 180, 170, 170, 180, 420]),
+  crouchcheck: cc("crouchcheck", 9, 220, false, 8, [420, 180, 170, 170, 300, 420, 200, 190, 420]),
+  swordshoulder: cc("swordshoulder", 7, 190, false, 6, [420, 180, 170, 170, 180, 200, 500]),
+  swordplant: cc("swordplant", 7, 180, false, 6, [300, 170, 160, 160, 170, 190, 420]),
+  stretch2: cc("stretch2", 9, 250, false, 8, [420, 220, 240, 260, 280, 260, 240, 220, 420]),
+  glanceback: cc("glanceback", 7, 230, false, 6, [420, 140, 130, 420, 260, 200, 420]),
+  crouchrest: cc("crouchrest", 9, 300, false, 8, [420, 200, 190, 200, 600, 700, 240, 220, 420]),
+  // ---- Micro-reactions: his fine motor life, 0.5-1.5 s each ----
+  flinch: cc("flinch", 5, 130, false, 4, [400, 70, 90, 160, 400]),
+  coatdust: cc("coatdust", 7, 160, false, 6, [400, 160, 150, 150, 160, 180, 400]),
+  nodself: cc("nodself", 5, 250, false, 4, [400, 220, 300, 240, 400]),
+  lookarm: cc("lookarm", 7, 280, false, 6, [400, 200, 260, 500, 400, 240, 400]),
+  breathfog: cc("breathfog", 7, 300, false, 6, [400, 260, 320, 420, 320, 260, 400]),
+  knuckle: cc("knuckle", 7, 170, false, 6, [400, 160, 150, 200, 180, 180, 400]),
+  eaglelook: cc("eaglelook", 7, 280, false, 6, [400, 200, 220, 500, 420, 240, 400]),
+  hairwind: cc("hairwind", 7, 160, false, 6, [400, 120, 110, 140, 180, 220, 400]),
+  // ---- Daily life: the low-energy scenes (sleep is enter/loop/exit) ----
+  sleepdown: cc("sleepdown", 11, 260, false, 10, [420, 220, 220, 230, 240, 260, 280, 300, 340, 400, 700]),
+  sleeploop: cc("sleeploop", 7, 550, true),
+  sleepup: cc("sleepup", 9, 200, false, 8, [500, 180, 170, 170, 180, 190, 200, 220, 420]),
+  feedeagle: cc("feedeagle", 11, 240, false, 10, [420, 200, 190, 190, 200, 260, 300, 280, 240, 220, 420]),
+  flask: cc("flask", 11, 280, false, 10, [420, 200, 190, 200, 240, 420, 500, 300, 240, 220, 420]),
   // ---- THE BREACH: 96 frames, six parts, one unbroken fight ----
   // Something comes through the Door and he loses the tempo before he wins it.
   // The pacing is the whole point: the exchange is fast, being knocked down is

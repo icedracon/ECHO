@@ -6,6 +6,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
 import { Story, dateKey } from "./story";
 import { CORVIN, corvinClipTotal, type CorvinClip } from "./corvin";
+import { Director, type Situation } from "./director";
 import {
   pickIdle,
   type IdleUrge,
@@ -2256,46 +2257,120 @@ function corvinSetQuiet(pose: string) {
     afterClip = null;
   }
 }
-// Fixed clocks for his daily animations (user-directed: hard timing, not a
-// dice roll). Each move has its own period and fires when it's the most
-// overdue — so every one of them is guaranteed to show up, on schedule.
-// The Steam-only moves (cleave, Unchained) and the YouTube-only move (guitar)
-// are deliberately NOT here: those belong to their triggers alone.
-const CORVIN_CLOCKS: Array<{ name: string; every: number; last: number; run: () => void }> = [
-  { name: "scan", every: 6 * 60_000, last: 0, run: () => void magicscanScene() },
-  { name: "artsiv", every: 10 * 60_000, last: 0, run: () => void artsivCycleScene() },
-  { name: "aura", every: 8 * 60_000, last: 0, run: () => void auraScene() },
-  { name: "tale", every: 12 * 60_000, last: 0, run: () => void whetstoneTaleScene() },
-  { name: "bow", every: 20 * 60_000, last: 0, run: () => void corvinScene(() => playCorvin(CORVIN.bow)) },
-  // The quiet ones. Long clocks on purpose — they stop meaning anything the
-  // moment they become frequent.
-  { name: "road", every: 25 * 60_000, last: 0, run: () => void roadScene() },
-  { name: "rain", every: 40 * 60_000, last: 0, run: () => void rainScene() },
-];
-// Staggered from boot so the first hour doesn't fire them all at once:
-// scan 2:00, aura 4:00, artsiv 6:00, tale 8:00, bow 15:00.
-function armCorvinClocks() {
-  const now = Date.now();
-  const firstAt: Record<string, number> = { scan: 2, aura: 4, artsiv: 6, tale: 8, bow: 15 };
-  for (const c of CORVIN_CLOCKS) c.last = now - c.every + firstAt[c.name] * 60_000;
+// ---- The Director (src/director.ts): the local brain --------------------------
+// Replaces the fixed urge clocks: every tick it scores the whole repertoire
+// against the current situation and picks what FITS — or picks silence. Fully
+// local, learns from your reaction, state persisted in story.json.
+const director = new Director(story.s.director);
+function saveDirector() {
+  story.s.director = director.st;
+  story.save();
 }
+
+function currentSituation(): Situation {
+  const now = Date.now();
+  return {
+    hour: new Date().getHours(),
+    workMinutes: Math.round((now - Math.max(BOOT_AT, lastActivity - 60 * 60_000)) / 60_000),
+    typing: now < typingUntil,
+    present: now - Math.max(lastActivity, lastTypingEventAt) < 5 * 60_000,
+    gaming: gamingActive(),
+    errStreak,
+    winStreak,
+    sinceSceneSec: Math.round((now - lastSceneAt) / 1000),
+  };
+}
+
+// A committed one-shot: the small/micro clips play inline, no gag needed.
+function playMicro(c: CorvinClip) {
+  commitFor(corvinClipTotal(c) * paceMul() + 250);
+  curClip = c as Clip;
+  frameIdx = 0;
+  afterClip = null;
+}
+
+// Pose spells: enter, hold a while, exit — committed the whole way.
+async function poseSpell(enter: CorvinClip, exit: CorvinClip, holdMs: number) {
+  await corvinScene(async () => {
+    await playCorvin(enter);
+    commitFor(holdMs + 500);
+    await sleep(holdMs);
+    await playCorvin(exit);
+  });
+}
+
+// Sleep: enter, breathe until you come back (or 25 min), soldier's wake.
+async function sleepScene() {
+  await corvinScene(async () => {
+    const start = Date.now();
+    await playCorvin(CORVIN.sleepdown);
+    const loopMs = corvinClipTotal(CORVIN.sleeploop);
+    while (Date.now() - start < 25 * 60_000) {
+      commitFor(loopMs + 500);
+      await playCorvin(CORVIN.sleeploop);
+      const active = Date.now() - Math.max(lastActivity, lastTypingEventAt) < 15_000;
+      if (active) break; // you're back — he feels it
+    }
+    await playCorvin(CORVIN.sleepup);
+  });
+}
+
+// Feedback probe: if your typing spikes right after a BIG scene started, it
+// was in the way; calm continuation means it landed well.
+function watchReaction(id: string) {
+  const before = lastTypingEventAt;
+  window.setTimeout(() => {
+    const during = lastTypingEventAt > before && Date.now() - lastTypingEventAt < 12_000;
+    director.feedback(id, !during ? true : false);
+    saveDirector();
+  }, 15_000);
+}
+
 function runCorvinClock() {
-  // The grief scenes outrank every clock: their cadences are measured in weeks
-  // and months, so they must never lose a slot to a routine urge.
+  // Grief outranks everything: weeks/months cadences never lose to routine.
   const grief = griefUrge();
   if (grief) {
     void grief();
     return;
   }
-  const now = Date.now();
-  const due = CORVIN_CLOCKS.filter((c) => now - c.last >= c.every).sort(
-    (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
-  );
-  if (!due.length) return; // nothing owed yet — he just keeps his watch
-  const c = due[0];
-  c.last = now;
-  dbg(`clock(corvin) ${c.name} (every ${Math.round(c.every / 60_000)}m)`);
-  c.run();
+  const s = currentSituation();
+  const allowBig = sceneAllowed();
+  const a = director.pick(s, allowBig);
+  saveDirector();
+  if (!a) return; // silence is a choice too
+  dbg(`director: ${a.id} (${a.kind})`);
+  switch (a.id) {
+    // micro
+    case "flinch": playMicro(CORVIN.flinch); break;
+    case "coatdust": playMicro(CORVIN.coatdust); break;
+    case "nodself": playMicro(CORVIN.nodself); break;
+    case "lookarm": playMicro(CORVIN.lookarm); break;
+    case "breathfog": playMicro(CORVIN.breathfog); break;
+    case "knuckle": playMicro(CORVIN.knuckle); break;
+    case "eaglelook": playMicro(CORVIN.eaglelook); break;
+    case "hairwind": playMicro(CORVIN.hairwind); break;
+    case "shiftweight": playMicro(CORVIN.shiftweight); break;
+    case "glanceback": playMicro(CORVIN.glanceback); break;
+    case "stretch2": playMicro(CORVIN.stretch2); break;
+    case "crouchcheck": playMicro(CORVIN.crouchcheck); break;
+    // poses
+    case "stepright": playMicro(CORVIN.stepright); break;
+    case "crouchrest": playMicro(CORVIN.crouchrest); break;
+    case "turnpair": void poseSpell(CORVIN.turnleft, CORVIN.turnback, 2500 + Math.random() * 4000); break;
+    case "leanspell": void poseSpell(CORVIN.leanwall, CORVIN.leanoff, 9000 + Math.random() * 12000); break;
+    case "swordcarry": void poseSpell(CORVIN.swordshoulder, CORVIN.swordplant, 7000 + Math.random() * 9000); break;
+    // big — the scenes he already owns, now competed for
+    case "tale": watchReaction(a.id); void whetstoneTaleScene(); break;
+    case "aura": watchReaction(a.id); void auraScene(); break;
+    case "scan": watchReaction(a.id); void magicscanScene(); break;
+    case "artsiv": watchReaction(a.id); void artsivCycleScene(); break;
+    case "bow": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.bow)); break;
+    case "road": watchReaction(a.id); void roadScene(); break;
+    case "rain": watchReaction(a.id); void rainScene(); break;
+    case "feedeagle": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.feedeagle)); break;
+    case "flask": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.flask)); break;
+    case "sleep": void sleepScene(); break;
+  }
 }
 
 let corvinTickArmed = false;
@@ -2353,7 +2428,10 @@ function corvinIdleTick() {
         // Straight to an urge on a slightly slower clock (~45-120 s).
         if (corvinQuietRuns >= 2) {
           corvinQuietRuns = 0;
-          runCorvinClock(); // same fixed clocks while you work
+          runCorvinClock(); // the director decides (or stays silent)
+          // Micro actions don't end in setState("idle"), so the chain must
+          // re-arm itself here — a big scene's re-arm just replaces this timer.
+          corvinIdleTick();
           return;
         }
         corvinIdleTick();
@@ -2362,8 +2440,9 @@ function corvinIdleTick() {
       if (corvinQuietRuns >= 1 + Math.floor(Math.random() * 2)) {
         // a big urge earned by a few quiet rotations
         corvinQuietRuns = 0;
-        runCorvinClock(); // fixed clocks, not a dice roll (user-directed)
-        return; // the scene's setState("idle") re-arms the cycle
+        runCorvinClock(); // the director decides (or stays silent)
+        corvinIdleTick(); // survive micro actions — see the workish branch
+        return;
       }
       const next = pickWeighted(
         (
@@ -3925,8 +4004,7 @@ async function main() {
   void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
   startBreathing(); // M1.5: the constant tier — he's never a statue again
   scheduleMidnight(); // Corvin's 00:00 guitar + the MIDNIGHT arc
-  scheduleDanteBeats(); // fixed clocks: spin 6m/20m, coin 3h, pizza 3.5h, shrug
-  armCorvinClocks(); // and Corvin's: scan 6m, aura 8m, artsiv 10m, tale 12m, bow 20m
+  scheduleDanteBeats(); // fixed clocks: spin 6/20m, coin 12/25m, pizza 18/60m, shrug
   initTts(); // system voices — the fallback under the pre-rendered pack
   void initCorvinVoice(); // his real, neural voice (public/voice/corvin)
 

@@ -42,6 +42,8 @@ interface StoryState {
   novel?: { ch: number; lastAt?: number };
   // Daily ritual: the dateKey of the last day he greeted you (once per day).
   lastRitualDay?: string;
+  // The director's learned weights and per-action cooldown history.
+  director?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
 }
 
 export const dateKey = (t = Date.now()) => {
