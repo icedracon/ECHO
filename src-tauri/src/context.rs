@@ -121,6 +121,38 @@ fn any_typing_key_down() -> bool {
     false
 }
 
+/// ALT+S -> song, ALT+B -> story: a global, focus-independent hotkey poll (Windows only, via
+/// GetAsyncKeyState). Edge-triggered with a 5 s cooldown (tracked in `hotkey_at`) so holding the
+/// combo fires once. No-op on other platforms — GetAsyncKeyState is Win32-only.
+#[cfg(windows)]
+fn poll_song_hotkeys(app: &AppHandle, hotkey_at: &mut Option<Instant>) {
+    const VK_MENU: i32 = 0x12;
+    const VK_S: i32 = 0x53;
+    const VK_B: i32 = 0x42;
+    let alt = (unsafe { GetAsyncKeyState(VK_MENU) } as u16 & 0x8000) != 0;
+    let cooled = hotkey_at
+        .map(|t| t.elapsed() > Duration::from_secs(5))
+        .unwrap_or(true);
+    if !(alt && cooled) {
+        return;
+    }
+    let kind = if (unsafe { GetAsyncKeyState(VK_S) } as u16 & 0x8000) != 0 {
+        Some(("hotkey_song", "ALT+S -> song"))
+    } else if (unsafe { GetAsyncKeyState(VK_B) } as u16 & 0x8000) != 0 {
+        Some(("hotkey_story", "ALT+B -> story"))
+    } else {
+        None
+    };
+    if let Some((k, label)) = kind {
+        *hotkey_at = Some(Instant::now());
+        clog(&format!("hotkey {label}"));
+        let _ = app.emit("context-event", ContextEvent { kind: k });
+    }
+}
+
+#[cfg(not(windows))]
+fn poll_song_hotkeys(_app: &AppHandle, _hotkey_at: &mut Option<Instant>) {}
+
 fn spawn_typing(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_emit = ago(60);
@@ -128,6 +160,7 @@ fn spawn_typing(app: AppHandle) {
         let mut ticks: u64 = 0;
         let mut seen_any = false;
         let mut last_zone: u8 = 0;
+        let mut hotkey_at: Option<Instant> = None;
         clog("typing watcher started (win32)");
         loop {
             std::thread::sleep(Duration::from_millis(120));
@@ -139,31 +172,9 @@ fn spawn_typing(app: AppHandle) {
             if key_now {
                 last_key = Instant::now();
             }
-            // Global hotkey ALT+S (user-directed): the midnight song on demand.
-            // Edge-triggered with a 5 s cooldown so holding it fires once.
-            unsafe {
-                const VK_MENU: i32 = 0x12;
-                const VK_S: i32 = 0x53;
-                const VK_B: i32 = 0x42;
-                static mut HOTKEY_AT: Option<Instant> = None;
-                let alt = GetAsyncKeyState(VK_MENU) as u16 & 0x8000 != 0;
-                let cooled = HOTKEY_AT.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
-                if alt && cooled {
-                    // ALT+S — the song. ALT+B — a story (user-directed).
-                    let kind = if GetAsyncKeyState(VK_S) as u16 & 0x8000 != 0 {
-                        Some(("hotkey_song", "ALT+S -> song"))
-                    } else if GetAsyncKeyState(VK_B) as u16 & 0x8000 != 0 {
-                        Some(("hotkey_story", "ALT+B -> story"))
-                    } else {
-                        None
-                    };
-                    if let Some((k, label)) = kind {
-                        HOTKEY_AT = Some(Instant::now());
-                        clog(&format!("hotkey {label}"));
-                        let _ = app.emit("context-event", ContextEvent { kind: k });
-                    }
-                }
-            }
+            // Global hotkey ALT+S -> song, ALT+B -> story (user-directed). Windows-only poll;
+            // a no-op on other platforms (GetAsyncKeyState is Win32).
+            poll_song_hotkeys(&app, &mut hotkey_at);
             let active =
                 key_now || (last_key.elapsed() < Duration::from_secs(2) && idle_ms() < 700);
             if active {
