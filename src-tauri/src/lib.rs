@@ -11,6 +11,40 @@ use phrases::Phrases;
 use serde::Serialize;
 use tauri::Manager;
 
+// Borderless games repaint above an already-TOPMOST window, and tao's
+// set_always_on_top(true) no-ops when the flag hasn't changed — so the pet
+// stays buried behind the game. An unconditional SetWindowPos re-raise is the
+// only thing that actually wins the z-order fight, once per gaming heartbeat.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn raise_topmost(window: tauri::WebviewWindow) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowPos(
+            hwnd: isize,
+            insert_after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+    }
+    const HWND_TOPMOST: isize = -1;
+    const SWP_NOMOVE_NOSIZE_NOACTIVATE: u32 = 0x1 | 0x2 | 0x10;
+    if let Ok(h) = window.hwnd() {
+        unsafe {
+            SetWindowPos(h.0 as isize, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE_NOSIZE_NOACTIVATE);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn raise_topmost(window: tauri::WebviewWindow) {
+    let _ = window.set_always_on_top(true);
+}
+
 /// Persisted progress. Day 1: just stars.
 #[derive(Default)]
 pub struct Store {
@@ -374,7 +408,8 @@ pub fn run() {
             story_load,
             story_save,
             character_load,
-            character_save
+            character_save,
+            raise_topmost
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

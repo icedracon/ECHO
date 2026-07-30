@@ -113,6 +113,9 @@ export const CORVIN = {
   stepright: cc("stepright", 9, 170, false, 8, [420, 170, 160, 160, 170, 160, 160, 180, 420]),
   shiftweight: cc("shiftweight", 7, 210, false, 6, [420, 200, 220, 240, 220, 200, 420]),
   leanwall: cc("leanwall", 9, 220, false, 8, [420, 180, 180, 190, 200, 220, 260, 300, 700]),
+  // the lean on the tall stone cairn: ease in, a long rest mid-clip while the
+  // coat sways, push off, settle — first/last frames match, so it loops home
+  leanstone: cc("leanstone", 13, 220, false, 8, [380, 190, 190, 200, 240, 420, 600, 600, 420, 260, 210, 200, 520]),
   leanoff: cc("leanoff", 7, 190, false, 6, [300, 190, 180, 170, 170, 180, 420]),
   crouchcheck: cc("crouchcheck", 9, 220, false, 8, [420, 180, 170, 170, 300, 420, 200, 190, 420]),
   swordshoulder: cc("swordshoulder", 7, 190, false, 6, [420, 180, 170, 170, 180, 200, 500]),

@@ -239,6 +239,8 @@ fn spawn_typing(app: AppHandle) {
                             "ritual" => "demo_ritual",
                             "scan" => "demo_scan",
                             "fly" => "demo_fly",
+                            "stone" => "demo_stone",
+                            "flask" => "demo_flask",
                             _ => "",
                         };
                         if !kind.is_empty() {

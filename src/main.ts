@@ -740,7 +740,20 @@ const PRELOADED: HTMLImageElement[] = [];
 // by the same scene budget so a long session doesn't spam.
 function onContext(kind: string) {
   dbg(`context ${kind}`);
-  lastActivity = Date.now(); // you're active on the machine, so he stays present
+  // Only REAL activity keeps him present: typing, media, a game, a demo word,
+  // or the mouse actually on him. The cursor_far/heartbeat noise used to stamp
+  // this too, so "15 min without work -> he leaves" could never fire.
+  if (
+    kind === "typing" ||
+    kind === "media" ||
+    kind === "media_active" ||
+    kind === "gaming" ||
+    kind === "gaming_active" ||
+    kind === "game_start" ||
+    kind === "cursor_near" ||
+    kind.startsWith("demo_")
+  )
+    lastActivity = Date.now();
   if (!home || gagActive || showcasing || returning || wandering || away) return;
   if (kind === "typing") {
     // Never mid-walk-in, and only once he's home in his corner.
@@ -911,6 +924,8 @@ function onContext(kind: string) {
   if (kind === "demo_road") return void roadScene();
   if (kind === "demo_rain") return void rainScene();
   if (kind === "demo_cairn") return void cairnScene();
+  if (kind === "demo_stone") return void corvinScene(() => playCorvin(CORVIN.leanstone));
+  if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
   if (kind === "demo_ritual") {
@@ -931,9 +946,10 @@ function onContext(kind: string) {
     // real, and typing should recover FAST once it ends (a 3-min tail read as
     // "typing randomly broken" after closing a game).
     gamingUntil = Date.now() + 60 * 1000;
-    // Borderless games repaint above us unless TOPMOST is re-asserted; do it
-    // on the heartbeat so he rides on top of the game, not behind it.
-    void getCurrentWindow().setAlwaysOnTop(true).catch(() => {});
+    // Borderless games repaint above us unless TOPMOST is re-asserted. tao
+    // no-ops set_always_on_top when the flag is unchanged, so go through the
+    // Rust command that calls SetWindowPos unconditionally every heartbeat.
+    void invoke("raise_topmost").catch(() => {});
     return;
   }
   if (kind === "game_start") {
@@ -1749,6 +1765,7 @@ function scheduleMidnight() {
     if (!isCorvin()) {
       const slot = DANTE_DAILY_HOURS.find((s) => s.h === h);
       if (slot) {
+        if (gamingActive()) return; // in a game the session clocks own the stage
         const key = `${dateKey()}-${h}`;
         if (story.s.gags.lastHourSlot === key) return;
         const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
@@ -1771,6 +1788,7 @@ function scheduleMidnight() {
     // The rest of the repertoire, one move per fixed hour (user-directed).
     const slot = DAILY_HOURS.find((s) => s.h === h);
     if (slot) {
+      if (gamingActive()) return; // the hunt owns the stage during a game
       const key = `${dateKey()}-${h}`;
       if (story.s.gags.lastHourSlot === key) return; // already run today
       // Only when you're actually there (user-directed): no performances to an
@@ -2389,6 +2407,7 @@ function runCorvinClock() {
     case "rain": watchReaction(a.id); void rainScene(); break;
     case "feedeagle": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.feedeagle)); break;
     case "flask": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.flask)); break;
+    case "leanstone": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.leanstone)); break;
     case "sleep": void sleepScene(); break;
   }
 }
@@ -2636,6 +2655,9 @@ const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 20, name: "cleave", run: () => void cleaveScene() },
   { h: 21, name: "combo", run: () => void comboFlowScene() },
   { h: 22, name: "artsiv-strike", run: () => void artsivStrikeScene() },
+  // the evening sip before the requiem — otherwise flask only wins the
+  // director's lottery once in a blue moon and nobody ever sees it
+  { h: 23, name: "flask", run: () => void corvinScene(() => playCorvin(CORVIN.flask)) },
 ];
 function armHuntClocks() {
   const now = Date.now();
@@ -3215,7 +3237,7 @@ async function lightError() {
 
 // Presence: after AWAY_AFTER_MS of no AI activity he wanders off; the next real
 // event brings him back. lastActivity is refreshed on every agent-event.
-const AWAY_AFTER_MS = 10 * 60 * 1000; // 10 min of silence -> he leaves
+const AWAY_AFTER_MS = 15 * 60 * 1000; // 15 min of silence -> he leaves (user-directed)
 const AWAY_RETURN_MS = 10 * 60 * 1000; // then ~10 min later he comes back on his own
 let lastActivity = Date.now();
 let away = false;
