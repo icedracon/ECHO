@@ -65,6 +65,9 @@ export const ACTIONS: DirectorAction[] = [
   { id: "flask", kind: "big", cooldownSec: 2100, base: (s) => (s.workMinutes > 40 ? 1.3 : 0.8) },
   // the stone lean: a resting beat for quiet stretches — never while you type
   { id: "leanstone", kind: "big", cooldownSec: 1800, base: (s) => (s.typing ? 0.2 : s.sinceSceneSec > 600 ? 1.4 : 0.9) },
+  // the cairn rest (user-directed): sits on the ground against the stones and
+  // stays a while — an evening/night beat for long quiet stretches
+  { id: "stonerest", kind: "big", cooldownSec: 10800, base: (s) => (s.typing ? 0 : s.hour >= 17 || s.hour < 2 ? 1.5 : 0.6) },
   { id: "sleep", kind: "big", cooldownSec: 5400, base: (s) => (!s.present && night(s) ? 2.5 : !s.present ? 1 : 0) },
   // --- существующие сцены: теперь и они в конкурсе ---
   { id: "tale", kind: "big", cooldownSec: 1500, base: (s) => (evening(s) || night(s) ? 1.5 : 0.9) },

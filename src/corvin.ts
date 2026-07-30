@@ -116,6 +116,10 @@ export const CORVIN = {
   // the lean on the tall stone cairn: ease in, a long rest mid-clip while the
   // coat sways, push off, settle — first/last frames match, so it loops home
   leanstone: cc("leanstone", 13, 220, false, 8, [380, 190, 190, 200, 240, 420, 600, 600, 420, 260, 210, 200, 520]),
+  // the rest at the cairn (user-directed): plants the sword, sits on the
+  // ground, back against the stones, eagle hops to the top — played forward
+  // to settle in, REV to rise
+  sitstone: cc("sitstone", 13, 210, false, 12, [340, 220, 210, 200, 200, 200, 210, 220, 240, 260, 300, 380, 700]),
   // THE DOOR FIGHT (user-directed): the monitor's right edge cracks open (the
   // rift overlay), a demon walks in, he wins, THE ARM triggers — demon for a
   // breath — then the man again. Six chained parts, ~78 frames.

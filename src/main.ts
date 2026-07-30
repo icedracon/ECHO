@@ -954,7 +954,7 @@ function onContext(kind: string) {
   if (kind === "demo_road") return void roadScene();
   if (kind === "demo_rain") return void rainScene();
   if (kind === "demo_cairn") return void cairnScene();
-  if (kind === "demo_stone") return void corvinScene(() => playCorvin(CORVIN.leanstone));
+  if (kind === "demo_stone") return void stoneRestScene(18_000);
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
   if (kind === "demo_door") { if (isCorvin()) void doorFightScene(); return; }
   if (kind === "demo_boss") { if (!isCorvin()) void bossFightScene(); return; }
@@ -1979,6 +1979,22 @@ async function artsivStrikeScene() {
   });
 }
 
+// The rest at the cairn (user-directed): he sits on the ground against the
+// stones and just breathes with the wind for a while, then rises the same way.
+async function stoneRestScene(holdMs = 30_000) {
+  await corvinScene(async () => {
+    const stopWind = playWind();
+    try {
+      await playCorvin(CORVIN.sitstone);
+      commitFor(holdMs + 600);
+      await sleep(holdMs);
+      await playCorvin(REV(CORVIN.sitstone));
+    } finally {
+      stopWind();
+    }
+  });
+}
+
 async function rainScene(ms = 22_000) {
   await corvinScene(async () => {
     const stopWind = playWind();
@@ -2451,6 +2467,7 @@ function runCorvinClock() {
     case "feedeagle": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.feedeagle)); break;
     case "flask": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.flask)); break;
     case "leanstone": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.leanstone)); break;
+    case "stonerest": watchReaction(a.id); void stoneRestScene(25_000 + Math.random() * 20_000); break;
     case "sleep": void sleepScene(); break;
   }
 }
@@ -4091,7 +4108,9 @@ async function bossFightScene() {
     document.documentElement.style.setProperty("--accent", ACCENT.error);
     await standUp();
     // His boss comes through the same screen-edge rift, tinted crimson.
-    void riftGlow(15_000, { demon: true, dwalk: 300, datk: 3200, ddie: 8800, tint: "red" });
+    // The boss is AGGRESSIVE: charges in during the alarm, strikes through the
+    // clash — that's what throws Dante flat — and dies on the DT finish.
+    void riftGlow(15_000, { demon: true, dwalk: 200, datk: 2600, ddie: 9200, tint: "red" });
     await playDante(BOSS_ALARM);
     await playDante(BOSS_CLASH, 2);
     await playDante(BOSS_THROWN);
@@ -4133,7 +4152,11 @@ async function doorFightScene() {
   await corvinScene(async () => {
     // The Door glows the whole fight; its demon walks in during the brace,
     // claws through the clash, dies on the finishing strike.
-    void riftGlow(27_000, { demon: true, dwalk: 900, datk: 6100, ddie: 11200 });
+    // Timings measured against the sprite chain (sense 2.3s, brace 3.6s,
+    // clash 5.1s, win-blow ~11.8s) minus ~0.6s rift-window boot latency:
+    // the demon walks in WHILE Corvin braces, looms a beat, strikes when the
+    // clash starts, and dies exactly on the finishing blow.
+    void riftGlow(27_000, { demon: true, dwalk: 1650, datk: 5300, ddie: 11200 });
     await playCorvin(CORVIN.doorsense);
     await playCorvin(CORVIN.demonout);
     await playCorvin(CORVIN.doorfight, 2);
@@ -4354,25 +4377,44 @@ function riftMain(q: URLSearchParams) {
     document.body.appendChild(dimg);
     const x0 = W + 40; // born inside the edge — he comes out of the Door
     const x1 = W - 205 - 165; // stops just left of the pet's corner window
-    let phase: "wait" | "walk" | "attack" | "death" | "gone" = "wait";
+    // Physics + psychology (user-directed): a heavy thing ACCELERATES slowly
+    // and stomps to a halt; a predator pauses to size you up before striking.
+    // walk = eased approach with a step-bob; menace = a still beat at arrival;
+    // death = a backward lurch, then the collapse into embers.
+    let phase: "wait" | "walk" | "menace" | "attack" | "death" | "gone" = "wait";
     let fi = 0;
     let frameAt = 0;
+    const arriveAt = datk - 700; // he is THERE before he strikes — and waits
+    const easeWalk = (p: number) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
     const t0 = performance.now();
     const dtick = (now: number) => {
       const t = now - t0;
       if (phase === "gone") return;
       const want: typeof phase =
-        t >= ddie ? "death" : t >= datk ? "attack" : t >= dwalk ? "walk" : "wait";
+        t >= ddie ? "death"
+        : t >= datk ? "attack"
+        : t >= arriveAt ? "menace"
+        : t >= dwalk ? "walk"
+        : "wait";
       if (want !== phase) {
         phase = want;
         fi = 0;
         frameAt = now;
+        if (phase === "menace") dimg.src = `/pixel/demon_attack/frame_0.png?v=1`; // coiled, still
+        if (phase === "death") dimg.style.transition = "left 260ms ease-out";
       }
       if (phase === "walk") {
-        const p = Math.min(1, (t - dwalk) / (datk - dwalk - 400));
-        dimg.style.left = `${x0 + (x1 - x0) * p}px`;
+        const p = Math.min(1, (t - dwalk) / (arriveAt - dwalk));
+        dimg.style.left = `${x0 + (x1 - x0) * easeWalk(p)}px`;
+        // heavy step-bob: the mass lands twice per stride
+        dimg.style.bottom = `${46 + Math.abs(Math.sin(p * 22)) * 4}px`;
+      } else {
+        dimg.style.bottom = "46px";
       }
-      if (phase !== "wait") {
+      if (phase === "death" && fi === 0 && now - frameAt < 40) {
+        dimg.style.left = `${parseFloat(dimg.style.left) + 14}px`; // the blow lands — he reels back
+      }
+      if (phase === "walk" || phase === "attack" || phase === "death") {
         const [dir, n, fms] = SETS[phase === "walk" ? "walk" : phase === "attack" ? "attack" : "death"];
         if (now - frameAt >= fms) {
           frameAt = now;
