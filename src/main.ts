@@ -1178,7 +1178,56 @@ function initTts() {
   load();
   window.speechSynthesis?.addEventListener?.("voiceschanged", load);
 }
-function speakLine(text: string): Promise<void> {
+// Corvin's voice is PRE-RENDERED with a neural TTS (scripts/gen_voice_corvin.py)
+// and shipped in public/voice/corvin: every line he owns is fixed text, so the
+// robot system voice is only ever a fallback for something unrecorded.
+const corvinVoice = new Map<string, string>(); // sha1(text) -> file
+async function initCorvinVoice() {
+  try {
+    const r = await fetch("/voice/corvin/index.json");
+    if (!r.ok) return;
+    const idx = (await r.json()) as Record<string, { f: string }>;
+    for (const [k, v] of Object.entries(idx)) corvinVoice.set(k, `/voice/corvin/${v.f}`);
+    dbg(`corvin voice: ${corvinVoice.size} clips`);
+  } catch {
+    /* no pack -> system voice */
+  }
+}
+// Same hash the renderer used (SHA-1, first 16 hex chars).
+async function voiceKey(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
+}
+async function playVoiceClip(text: string): Promise<boolean> {
+  if (!corvinVoice.size) return false;
+  const url = corvinVoice.get(await voiceKey(text));
+  if (!url) return false;
+  return new Promise<boolean>((res) => {
+    const a = new Audio(url);
+    a.volume = 0.95;
+    let done = false;
+    const fin = (ok: boolean) => {
+      if (!done) {
+        done = true;
+        res(ok);
+      }
+    };
+    a.onended = () => fin(true);
+    a.onerror = () => fin(false);
+    void a.play().catch(() => fin(false));
+    window.setTimeout(() => fin(true), 30_000); // hard cap
+  });
+}
+
+async function speakLine(text: string): Promise<void> {
+  if (isCorvin() && (await playVoiceClip(text))) return; // the real voice
+  return speakLineSystem(text);
+}
+
+function speakLineSystem(text: string): Promise<void> {
   return new Promise((res) => {
     const synth = window.speechSynthesis;
     if (!synth) {
@@ -3849,7 +3898,8 @@ async function main() {
   scheduleMidnight(); // Corvin's 00:00 guitar + the MIDNIGHT arc
   scheduleDanteBeats(); // fixed clocks: spin 6m/20m, coin 3h, pizza 3.5h, shrug
   armCorvinClocks(); // and Corvin's: scan 6m, aura 8m, artsiv 10m, tale 12m, bow 20m
-  initTts(); // system voices for the storyteller (ru + en)
+  initTts(); // system voices — the fallback under the pre-rendered pack
+  void initCorvinVoice(); // his real, neural voice (public/voice/corvin)
 
   // Character pack: ~/.echo/character decides who walks in (default Dante).
   try {
