@@ -1701,9 +1701,21 @@ async function nightSongScene() {
 
 // Fires within the first minutes of the new day; one gag flag per night. If he
 // is mid-scene at 00:00 sharp, the next minute's check catches it.
+// Dante's daily hour table (user-directed: the fan build must show the beats
+// without waiting hours) — same mechanics as Corvin's: once per day per hour,
+// presence-gated, remembered in story.json.
+const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
+  { h: 12, name: "coinflip", run: () => void coinFlourish() },
+  { h: 14, name: "swordspin", run: () => void demoSpin() },
+  { h: 15, name: "pizza", run: () => demoSeated(PIZZA, "Finally.") },
+  { h: 17, name: "sword move", run: () => void demoSword() },
+  { h: 19, name: "devil trigger", run: () => devilTriggerScene() },
+  { h: 21, name: "dance", run: () => danceScene() },
+];
+
 function scheduleMidnight() {
   window.setInterval(() => {
-    if (!isCorvin() || !home) return;
+    if (!home) return;
     const now = new Date();
     const h = now.getHours();
     const busy = gagActive || showcasing || introActive || wandering || away || returning;
@@ -1711,6 +1723,22 @@ function scheduleMidnight() {
     // The 23:40 requiem owns the last twenty minutes of the day; every other
     // ritual keeps its ten-minute window at the top of its hour.
     if (now.getMinutes() >= 10 && !(h === 23 && now.getMinutes() >= 40)) return;
+    // Dante's day: the hour table is all he needs — the rituals below are
+    // Corvin's alone.
+    if (!isCorvin()) {
+      const slot = DANTE_DAILY_HOURS.find((s) => s.h === h);
+      if (slot) {
+        const key = `${dateKey()}-${h}`;
+        if (story.s.gags.lastHourSlot === key) return;
+        const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
+        if (Date.now() - seen > 30 * 60_000) return; // nobody's watching
+        story.s.gags.lastHourSlot = key;
+        story.save();
+        dbg(`dante daily hour ${h}:00 -> ${slot.name}`);
+        slot.run();
+      }
+      return;
+    }
     // 17:00 — the Breach, hard (user-directed). The day's one real fight.
     if (h === 17) {
       const last = story.s.gags.lastBreachAt ?? 0;
@@ -2357,37 +2385,38 @@ function corvinIdleTick() {
   );
 }
 
-// ---- Dante's fixed-clock beats (user-directed timings) -----------------------
-// ALL anchored to the GAME-SESSION start (the Steam shoot burst is minute 0):
-// swordspin at 6:00 then every 20 min; sword move at 7:00 then every 10 min
-// (the gaming loop owns that one); coinflip at +3 h then every 3 h; pizza at
-// +3.5 h then every 3.5 h. Until the first game launch these clocks are silent.
+// ---- Dante's fixed-clock beats (user-directed: hard, frequent, no LLM) ------
+// Steam session table, anchored to the real game launch (minute 0 = burst):
+//   spin 6:00 /20m · sword 7:00 /10m (gaming loop) · coin 12:00 /25m ·
+//   pizza 18:00 /60m — the old 3h/3.5h waits meant most fans never saw them.
+// Outside games the DAILY hour table below covers the same beats.
 // Shrug: 20 min of doing nothing at all (no typing, no gaming), any time.
-// Checked every 30 s; a busy moment defers to the next tick, never skips.
 const BOOT_AT = Date.now();
+const DANTE_COIN_EVERY = 25 * 60_000;
+const DANTE_PIZZA_EVERY = 60 * 60_000;
 let lastDanteSpin = 0; // 0 = unarmed until a game session starts
 let lastDanteCoin = 0;
 let lastDantePizza = 0;
 let lastDanteShrug = BOOT_AT;
 function armDanteClocks() {
   lastDanteSpin = Date.now() - 20 * 60_000 + 6 * 60_000; // -> first spin at 6:00
-  lastDanteCoin = Date.now(); // -> coin at +3 h
-  lastDantePizza = Date.now(); // -> pizza at +3.5 h
-  dbg("dante clocks armed: spin@6:00/20m, coin@3h, pizza@3.5h");
+  lastDanteCoin = Date.now() - DANTE_COIN_EVERY + 12 * 60_000; // -> coin at 12:00
+  lastDantePizza = Date.now() - DANTE_PIZZA_EVERY + 18 * 60_000; // -> pizza at 18:00
+  dbg("dante clocks armed: spin@6:00/20m, coin@12:00/25m, pizza@18:00/60m");
 }
 function scheduleDanteBeats() {
   window.setInterval(() => {
     if (isCorvin() || !home || !beatReady()) return;
     const now = Date.now();
-    if (lastDantePizza && now - lastDantePizza > 3.5 * 3_600_000) {
+    if (lastDantePizza && now - lastDantePizza > DANTE_PIZZA_EVERY) {
       lastDantePizza = now;
-      dbg("dante beat: pizza (3.5h clock)");
+      dbg("dante beat: pizza (game 18:00 + 60m clock)");
       demoSeated(PIZZA, "Finally.");
       return;
     }
-    if (lastDanteCoin && now - lastDanteCoin > 3 * 3_600_000) {
+    if (lastDanteCoin && now - lastDanteCoin > DANTE_COIN_EVERY) {
       lastDanteCoin = now;
-      dbg("dante beat: coinflip (game +3h clock)");
+      dbg("dante beat: coinflip (game 12:00 + 25m clock)");
       void coinFlourish();
       return;
     }
