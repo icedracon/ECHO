@@ -31,6 +31,7 @@ interface StoryState {
     lastCairnAt?: number; // the cairn — once a month
     lastBreachAt?: number; // the Breach — the big fight
     lastRequiemAt?: number; // the 23:40 requiem — the whole grief line
+    lastDoorAt?: number; // the Door fight — the monitor-edge boss scene
     lastHourSlot?: string; // "YYYY-MM-DD-H" of the last daily-hour move
   };
   unlocks: string[];

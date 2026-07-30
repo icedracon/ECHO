@@ -116,6 +116,15 @@ export const CORVIN = {
   // the lean on the tall stone cairn: ease in, a long rest mid-clip while the
   // coat sways, push off, settle — first/last frames match, so it loops home
   leanstone: cc("leanstone", 13, 220, false, 8, [380, 190, 190, 200, 240, 420, 600, 600, 420, 260, 210, 200, 520]),
+  // THE DOOR FIGHT (user-directed): the monitor's right edge cracks open (the
+  // rift overlay), a demon walks in, he wins, THE ARM triggers — demon for a
+  // breath — then the man again. Six chained parts, ~78 frames.
+  doorsense: cc("c_doorsense", 11, 150, false, 10, [90, 80, 110, 130, 150, 160, 180, 200, 240, 300, 620]),
+  demonout: cc("c_demonout", 15, 190, false, 14, [340, 220, 200, 190, 190, 180, 180, 180, 180, 190, 200, 220, 250, 300, 560]),
+  doorfight: cc("c_doorfight", 17, 140, false, 16, [150, 120, 110, 100, 110, 120, 100, 110, 120, 130, 110, 120, 140, 160, 190, 240, 420]),
+  doorwin: cc("c_doorwin", 13, 170, false, 12, [200, 150, 110, 90, 260, 480, 220, 200, 210, 220, 260, 320, 640]),
+  armtrigger: cc("c_armtrigger", 15, 160, false, 14, [260, 180, 140, 120, 110, 110, 110, 120, 140, 170, 200, 260, 340, 440, 700]),
+  armcalm: cc("c_armcalm", 13, 200, false, 12, [420, 260, 220, 200, 190, 190, 190, 200, 220, 260, 320, 420, 700]),
   leanoff: cc("leanoff", 7, 190, false, 6, [300, 190, 180, 170, 170, 180, 420]),
   crouchcheck: cc("crouchcheck", 9, 220, false, 8, [420, 180, 170, 170, 300, 420, 200, 190, 420]),
   swordshoulder: cc("swordshoulder", 7, 190, false, 6, [420, 180, 170, 170, 180, 200, 500]),

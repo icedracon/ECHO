@@ -448,6 +448,19 @@ const voiceFiles = new Map<string, string>();
 // Ask the backend which custom voice clips exist and cache their asset URLs.
 async function initVoiceFiles() {
   if (!isTauri) return;
+  // The bundled pack first (public/voice/dante — ships in every exe, so fans
+  // hear the real voice, not the blips)...
+  try {
+    const r = await fetch("/voice/dante/index.json");
+    if (r.ok) {
+      const idx = (await r.json()) as Record<string, { f: string }>;
+      for (const [slug, v] of Object.entries(idx)) voiceFiles.set(slug, `/voice/dante/${v.f}`);
+      dbg(`dante voice pack: ${Object.keys(idx).length} clips`);
+    }
+  } catch {
+    /* no bundled pack */
+  }
+  // ...then ~/.echo/voice overrides — drop your own takes in, they win.
   try {
     const list = await invoke<Array<[string, string]>>("voice_clips");
     for (const [name, url] of list) voiceFiles.set(name, url);
@@ -685,6 +698,23 @@ const IDLE_MS: Record<string, number> = {
   // M5 living behaviours.
   lookout: 170,
   cleansword: 200,
+  // Dante polish batch — micro/links/daily (see planner URGES).
+  d_neckroll: 190,
+  d_jacketflick: 160,
+  d_fingerguns: 150,
+  d_knuckles: 170,
+  d_hairswipe: 180,
+  d_sigh: 210,
+  d_bootswing: 150,
+  d_glanceover: 170,
+  d_layback: 220,
+  d_sitedge: 200,
+  d_coffee: 210,
+  d_phone: 200,
+};
+// Frame counts for the non-standard clips (the API returns requested+1).
+const IDLE_COUNT: Record<string, number> = {
+  d_layback: 11, d_coffee: 11, d_phone: 11,
 };
 const idleClipCache: Record<string, Clip> = {};
 function idleClip(name: string): Clip {
@@ -697,7 +727,7 @@ function idleClip(name: string): Clip {
       const seq = [0, 1, ...wipe, ...wipe, ...wipe, 9, 10].map((i) => base[i]);
       idleClipCache[name] = { frames: seq, ms: 200, loop: false, settle: 0 };
     } else {
-      idleClipCache[name] = clip(name, IDLE_MS[name] ?? 200, false);
+      idleClipCache[name] = clip(name, IDLE_MS[name] ?? 200, false, 0, IDLE_COUNT[name] ?? 9);
     }
   }
   return idleClipCache[name];
@@ -926,6 +956,9 @@ function onContext(kind: string) {
   if (kind === "demo_cairn") return void cairnScene();
   if (kind === "demo_stone") return void corvinScene(() => playCorvin(CORVIN.leanstone));
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
+  if (kind === "demo_door") { if (isCorvin()) void doorFightScene(); return; }
+  if (kind === "demo_boss") { if (!isCorvin()) void bossFightScene(); return; }
+  if (kind === "demo_form") { if (!isCorvin()) void devilFormScene(); return; }
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
   if (kind === "demo_ritual") {
@@ -1754,7 +1787,9 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 15, name: "pizza", run: () => demoSeated(PIZZA, "Finally.") },
   { h: 17, name: "sword move", run: () => void demoSword() },
   { h: 19, name: "devil trigger", run: () => devilTriggerScene() },
+  { h: 20, name: "boss fight", run: () => void bossFightScene() },
   { h: 21, name: "dance", run: () => danceScene() },
+  { h: 22, name: "devil form", run: () => void devilFormScene() },
 ];
 
 function scheduleMidnight() {
@@ -2659,7 +2694,8 @@ const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   },
   { h: 16, name: "artsiv-flight", run: () => void artsivCycleScene() },
   { h: 18, name: "execution", run: () => void executionScene() },
-  { h: 19, name: "aura", run: () => void auraScene() },
+  // 19:00 — the Door fight (the aura still lives on level-ups + the director)
+  { h: 19, name: "door", run: () => void doorFightScene() },
   { h: 20, name: "cleave", run: () => void cleaveScene() },
   { h: 21, name: "combo", run: () => void comboFlowScene() },
   { h: 22, name: "artsiv-strike", run: () => void artsivStrikeScene() },
@@ -2813,7 +2849,10 @@ function playIdleCycle() {
     afterClip = () => playIdleCycle();
     return;
   }
-  curUrge = pickIdle(life, lastIdleClip);
+  curUrge = pickIdle(life, lastIdleClip, director.st.weights);
+  // Dante learns like Corvin: the new poses feed the reaction watcher — kept
+  // working = the pose earns weight, grabbed the mouse = it fades.
+  if (curUrge.clip.startsWith("d_")) watchReaction(curUrge.clip);
   // M5, user-tuned: sword care roughly once per 2 days — when the cooldown
   // holds, the urge quietly becomes leg-swinging instead.
   if (curUrge.clip === "cleansword") {
@@ -4022,6 +4061,92 @@ async function devilTriggerScene() {
   }
 }
 
+// ---- The two headline fights (user-directed) --------------------------------
+// Sequential Dante clip playback: set the clip, wait out its real duration.
+const danteClipTotal = (c: Clip): number =>
+  (c.msSeq ? c.msSeq.reduce((a, b) => a + b, 0) : c.frames.length * c.ms) * paceMul();
+async function playDante(c: Clip, plays = 1): Promise<void> {
+  for (let i = 0; i < plays; i++) {
+    curClip = c;
+    frameIdx = 0;
+    afterClip = null;
+    await sleep(danteClipTotal(c) + 80);
+  }
+}
+const BOSS_ALARM = clip("d_bossalarm", 150, false, 8, 13);
+const BOSS_CLASH = clip("d_bossclash", 120, false, 8, 15);
+const BOSS_THROWN = clip("d_bossthrown", 170, false, 8, 15);
+const BOSS_FINISH = clip("d_bossfinish", 150, false, 8, 17);
+const DEVIL_RISE = clip("d_devilrise", 160, false, 8, 15);
+const DEVIL_BURN = clip("d_devilburn", 140, true, 0, 11);
+const DEVIL_CALM = clip("d_devilcalm", 180, false, 8, 15);
+
+// Dante's Boss Fight — his own Breach: snaps alert, a furious flurry, blasted
+// flat, then the Devil Trigger finish and the smug hair flick.
+async function bossFightScene() {
+  if (!home || gagActive || isCorvin()) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.error);
+    await standUp();
+    // His boss comes through the same screen-edge rift, tinted crimson.
+    void riftGlow(15_000, { demon: true, dwalk: 300, datk: 3200, ddie: 8800, tint: "red" });
+    await playDante(BOSS_ALARM);
+    await playDante(BOSS_CLASH, 2);
+    await playDante(BOSS_THROWN);
+    await sleep(500); // the beat on the ground — he takes it, then rises
+    levelUpFlash();
+    void sayDemonJackpot();
+    await playDante(BOSS_FINISH);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// The full Devil Form — the beautiful one: eruption, the winged demon burning
+// in place, then a graceful return to the man.
+async function devilFormScene() {
+  if (!home || gagActive || isCorvin()) return;
+  gagActive = true;
+  try {
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.error);
+    await standUp();
+    await sleep(400); // stillness before the power
+    levelUpFlash();
+    await playDante(DEVIL_RISE);
+    void sayDemonJackpot();
+    await playDante(DEVIL_BURN, 3);
+    await playDante(DEVIL_CALM);
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// Corvin's Door Fight — the monitor's right edge IS the Door (user-directed):
+// the rift overlay opens along the screen edge, the demon walks in from it,
+// he wins, THE ARM triggers — a demon for a breath — then the man again.
+async function doorFightScene() {
+  await corvinScene(async () => {
+    // The Door glows the whole fight; its demon walks in during the brace,
+    // claws through the clash, dies on the finishing strike.
+    void riftGlow(27_000, { demon: true, dwalk: 900, datk: 6100, ddie: 11200 });
+    await playCorvin(CORVIN.doorsense);
+    await playCorvin(CORVIN.demonout);
+    await playCorvin(CORVIN.doorfight, 2);
+    await playCorvin(CORVIN.doorwin);
+    await sleep(500); // the win settles — then the ARM decides otherwise
+    await playCorvin(CORVIN.armtrigger);
+    await sleep(700); // the demon breathes
+    await playCorvin(CORVIN.armcalm);
+  }, "#a852ff");
+  story.s.gags.lastDoorAt = Date.now();
+  story.save();
+}
+
 // M1.5: breathing — a 1px sine on a wrapper div so it never fights the
 // sprite's own transforms (facing flip, scene keyframes). Pauses when a scene
 // owns the stage; the period stretches when his energy is low.
@@ -4197,6 +4322,143 @@ async function posterMain() {
   window.setTimeout(reveal, 1200);
 }
 
+// ?rift=1 -> THE DOOR: the right edge of the monitor cracks open. A violet
+// glow band + a bright crack line along the edge — opens, breathes, seals.
+// Pure code, no sprites; the fight itself happens in Corvin's own window.
+function riftMain(q: URLSearchParams) {
+  const ms = Math.max(6000, Number(q.get("ms")) || 20000);
+  document.body.innerHTML = "";
+  document.body.style.cssText = "margin:0;background:transparent;overflow:hidden";
+  // The demon of the Door: steps OUT of the screen edge, stalks to the pet's
+  // corner, claws at him through the fight, dies into embers on cue.
+  // Timings (ms from window open): dwalk -> start walking, datk -> attacking,
+  // ddie -> death. tint=red re-colours him for Dante's boss fight.
+  if (q.has("demon")) {
+    const W = window.innerWidth;
+    const dwalk = Number(q.get("dwalk")) || 800;
+    const datk = Number(q.get("datk")) || 6000;
+    const ddie = Number(q.get("ddie")) || 11000;
+    const red = q.get("tint") === "red";
+    const SETS: Record<string, [string, number, number]> = {
+      walk: ["demon_walk", 11, 150],
+      attack: ["demon_attack", 11, 130],
+      death: ["demon_death", 13, 170],
+    };
+    for (const [dir, n] of Object.values(SETS).map((s) => [s[0], s[1]] as const))
+      for (let i = 0; i < n; i++) new Image().src = `/pixel/${dir}/frame_${i}.png?v=1`;
+    const dimg = document.createElement("img");
+    dimg.style.cssText =
+      "position:fixed;bottom:46px;width:170px;image-rendering:pixelated;pointer-events:none;" +
+      `filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5))${red ? " hue-rotate(105deg) saturate(1.3)" : ""};` +
+      `left:${W + 40}px;`;
+    document.body.appendChild(dimg);
+    const x0 = W + 40; // born inside the edge — he comes out of the Door
+    const x1 = W - 205 - 165; // stops just left of the pet's corner window
+    let phase: "wait" | "walk" | "attack" | "death" | "gone" = "wait";
+    let fi = 0;
+    let frameAt = 0;
+    const t0 = performance.now();
+    const dtick = (now: number) => {
+      const t = now - t0;
+      if (phase === "gone") return;
+      const want: typeof phase =
+        t >= ddie ? "death" : t >= datk ? "attack" : t >= dwalk ? "walk" : "wait";
+      if (want !== phase) {
+        phase = want;
+        fi = 0;
+        frameAt = now;
+      }
+      if (phase === "walk") {
+        const p = Math.min(1, (t - dwalk) / (datk - dwalk - 400));
+        dimg.style.left = `${x0 + (x1 - x0) * p}px`;
+      }
+      if (phase !== "wait") {
+        const [dir, n, fms] = SETS[phase === "walk" ? "walk" : phase === "attack" ? "attack" : "death"];
+        if (now - frameAt >= fms) {
+          frameAt = now;
+          if (phase === "death" && fi >= n - 1) {
+            phase = "gone";
+            dimg.remove();
+            return;
+          }
+          fi = (fi + 1) % n;
+        }
+        dimg.src = `/pixel/${dir}/frame_${fi}.png?v=1`;
+      }
+      requestAnimationFrame(dtick);
+    };
+    requestAnimationFrame(dtick);
+  }
+  const band = document.createElement("div");
+  band.style.cssText =
+    "position:fixed;top:0;right:0;height:100vh;width:110px;pointer-events:none;" +
+    "background:linear-gradient(to left, rgba(140,60,255,0.55), rgba(140,60,255,0.18) 45%, transparent);" +
+    "opacity:0;filter:blur(2px);";
+  const crack = document.createElement("div");
+  crack.style.cssText =
+    "position:fixed;top:0;right:0;height:100vh;width:4px;pointer-events:none;" +
+    "background:linear-gradient(to bottom, transparent, #e2b0ff 12%, #a852ff 50%, #e2b0ff 88%, transparent);" +
+    "box-shadow:0 0 18px 6px rgba(168,82,255,0.8);opacity:0;";
+  document.body.appendChild(band);
+  document.body.appendChild(crack);
+  const t0 = performance.now();
+  const openMs = ms * 0.16;
+  const sealAt = ms * 0.82;
+  const tick = () => {
+    const t = performance.now() - t0;
+    if (t >= ms) {
+      void getCurrentWindow().close();
+      return;
+    }
+    let k: number;
+    if (t < openMs) k = t / openMs;
+    else if (t < sealAt) k = 1;
+    else k = Math.max(0, 1 - (t - sealAt) / (ms - sealAt));
+    const pulse = 0.82 + 0.18 * Math.sin(t / 260); // the Door breathes
+    band.style.opacity = String(0.9 * k * pulse);
+    crack.style.opacity = String(k);
+    crack.style.width = `${2 + 3 * k * pulse}px`;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  window.setTimeout(() => void getCurrentWindow().close().catch(() => {}), ms + 1500);
+}
+
+// Opens the rift overlay for `ms` — fire-and-forget; it seals and closes itself.
+// opts.demon walks the Door's demon across the screen on the given timings.
+async function riftGlow(
+  ms: number,
+  opts?: { demon?: boolean; dwalk?: number; datk?: number; ddie?: number; tint?: string },
+): Promise<void> {
+  try {
+    const mon = await currentMonitor();
+    if (!mon) return;
+    const sf = mon.scaleFactor || window.devicePixelRatio || 1;
+    const extra = opts?.demon
+      ? `&demon=1&dwalk=${opts.dwalk ?? 800}&datk=${opts.datk ?? 6000}&ddie=${opts.ddie ?? 11000}` +
+        (opts.tint ? `&tint=${opts.tint}` : "")
+      : "";
+    const win = new WebviewWindow("rift", {
+      url: `index.html?rift=1&ms=${ms}${extra}`,
+      width: Math.round(mon.size.width / sf),
+      height: Math.round(mon.size.height / sf),
+      x: Math.round(mon.position.x / sf),
+      y: Math.round(mon.position.y / sf),
+      visible: true,
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focus: false,
+      shadow: false,
+    });
+    win.once("tauri://created", () => void win.setIgnoreCursorEvents(true).catch(() => {}));
+  } catch (e) {
+    dbg(`rift failed: ${e}`);
+  }
+}
+
 // ?skyfly=1 -> this window IS the sky: a transparent monitor-sized layer where
 // Artsiv launches from Corvin's corner, flies two grand laps and returns.
 function skyflyMain(q: URLSearchParams) {
@@ -4295,4 +4557,5 @@ function skyflyMain(q: URLSearchParams) {
 const bootQ = new URLSearchParams(location.search);
 if (bootQ.has("poster")) posterMain();
 else if (bootQ.has("skyfly")) skyflyMain(bootQ);
+else if (bootQ.has("rift")) riftMain(bootQ);
 else main();

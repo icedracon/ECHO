@@ -241,6 +241,9 @@ fn spawn_typing(app: AppHandle) {
                             "fly" => "demo_fly",
                             "stone" => "demo_stone",
                             "flask" => "demo_flask",
+                            "door" => "demo_door",
+                            "boss" => "demo_boss",
+                            "form" => "demo_form",
                             _ => "",
                         };
                         if !kind.is_empty() {

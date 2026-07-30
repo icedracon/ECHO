@@ -43,7 +43,28 @@ const URGES: UrgeDef[] = [
   // M5: quiet sword care in focused moments — rare, and Partner-chapter only
   // (gated in playIdleCycle; the planner doesn't know the story).
   { clip: "cleansword", plays: 1, hold: [6000, 12000], weight: (l) => 1.5 + l.v.focus * 4 },
+  // Dante polish batch (parity with Corvin's micro set) — seated micro-beats,
+  // all anchored back to the seated pose so they slot into the rotation.
+  { clip: "d_neckroll", plays: 1, hold: [8000, 16000], weight: (l) => 4 + (1 - l.v.energy) * 6 },
+  { clip: "d_jacketflick", plays: 1, hold: [6000, 14000], weight: (l) => 3 + l.v.cockiness * 8 },
+  { clip: "d_fingerguns", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.cockiness * 10 },
+  { clip: "d_knuckles", plays: 1, hold: [6000, 14000], weight: (l) => 3 + l.v.confidence * 6 },
+  { clip: "d_hairswipe", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.cockiness * 7 },
+  { clip: "d_sigh", plays: 1, hold: [8000, 18000], weight: (l) => 2 + l.v.boredom * 8 + (1 - l.v.energy) * 4 },
+  { clip: "d_bootswing", plays: 2, hold: [8000, 18000], weight: (l) => 5 + l.v.boredom * 6 },
+  { clip: "d_glanceover", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.curiosity * 8 },
+  { clip: "d_layback", plays: 1, hold: [30000, 60000], weight: (l) => 4 + l.v.confidence * 8 },
+  { clip: "d_sitedge", plays: 1, hold: [20000, 45000], weight: (l) => 3 + l.v.focus * 6 },
+  // Daily life: an espresso through the working day, doomscrolling when bored.
+  { clip: "d_coffee", plays: 1, hold: [10000, 20000], weight: (l) => coffeeGate() * (3 + (1 - l.v.energy) * 10) },
+  { clip: "d_phone", plays: 1, hold: [15000, 30000], weight: (l) => 2 + l.v.boredom * 12 },
 ];
+
+// Espresso belongs to the waking day — not at 3 a.m.
+function coffeeGate(): number {
+  const hr = new Date().getHours();
+  return hr >= 10 && hr < 20 ? 1 : 0.1;
+}
 
 // Naps only really happen when he's genuinely low / it's night.
 function napGate(l: Life): number {
@@ -52,11 +73,19 @@ function napGate(l: Life): number {
   return l.v.energy < 0.4 ? night : 0.15;
 }
 
-/** Pick the next idle urge — weighted by mood, never repeating `lastClip`. */
-export function pickIdle(life: Life, lastClip: string | null): IdleUrge {
+/** Pick the next idle urge — weighted by mood, never repeating `lastClip`.
+ *  `learned` is the director's reaction memory (story.json): poses you kept
+ *  working through drift up, poses that made you grab the mouse drift down. */
+export function pickIdle(
+  life: Life,
+  lastClip: string | null,
+  learned?: Record<string, number>,
+): IdleUrge {
   const pool = URGES.filter((u) => u.clip !== lastClip);
   const list = pool.length ? pool : URGES;
-  const weights = list.map((u) => Math.max(0.01, u.weight(life)));
+  const weights = list.map((u) =>
+    Math.max(0.01, u.weight(life) * Math.min(2.5, Math.max(0.3, learned?.[u.clip] ?? 1))),
+  );
   const total = weights.reduce((a, b) => a + b, 0);
   let r = Math.random() * total;
   for (let i = 0; i < list.length; i++) {
