@@ -18,6 +18,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "ECHO"
 path = "src/main.rs"
 
+# Without custom-protocol a build LOADS THE DEV SERVER (localhost:1420) instead
+# of the embedded dist — a blank window on any machine that isn't running vite.
+# Default it on so a plain `cargo build --release` produces a shippable exe;
+# `tauri dev` still disables defaults itself.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
