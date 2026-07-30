@@ -969,7 +969,10 @@ function onContext(kind: string) {
     // While it's on, he breaks into a 15 s dance every ~10 min — but it shares
     // the one scene budget, so it can't stack against Jackpot & co.
     if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY) {
-      if (beatReady() && sceneAllowed()) {
+      // Same relaxed spacing as the media wish: watching a video is a user
+      // context — behind the full 3-min gap this beat starved forever on a
+      // machine with an active AI session (payoffs grab every open window).
+      if (beatReady() && Date.now() - lastSceneAt >= 45_000) {
         lastMediaDance = Date.now();
         mediaWanted = 0; // the wish is served
         markScene();
@@ -1480,7 +1483,12 @@ function serviceMediaWish() {
     mediaWanted = 0; // stale — you've moved on
     return;
   }
-  if (!beatReady() || !sceneAllowed()) return; // try again on the next heartbeat
+  // You OPENING YouTube is a deliberate act — it outranks the ambient scene
+  // budget. Behind the full 3-min sceneAllowed() gap the wish always lost the
+  // race to AI-event payoff scenes on a busy machine (they grab every slot the
+  // moment it opens) and expired unserved. 45 s of spacing is enough to not
+  // cut into a running scene's tail; beatReady() already blocks mid-scene.
+  if (!beatReady() || Date.now() - lastSceneAt < 45_000) return;
   mediaWanted = 0;
   lastMediaDance = Date.now();
   markScene();
@@ -3309,7 +3317,9 @@ function applyEvent(e: AgentEvent) {
     story.today().errors += 1;
     // Frustration comes from the Life vector now: low patience -> he snaps sooner.
     const snap = life.v.patience < 0.35 ? 2 : 3;
-    if (errStreak >= snap && sceneAllowed() && sceneBudgetOk("breakdown")) {
+    // During a game the hunt clocks own the stage (and grab every open scene
+    // window otherwise) — AI payoffs degrade to bubbles until the game ends.
+    if (errStreak >= snap && !gamingActive() && sceneAllowed() && sceneBudgetOk("breakdown")) {
       errStreak = 0;
       markScene();
       budgetScene("breakdown");
@@ -3349,7 +3359,7 @@ function applyEvent(e: AgentEvent) {
       scheduleIdle();
       return;
     }
-    if (leveledUp && sceneBudgetOk("devil")) {
+    if (leveledUp && !gamingActive() && sceneBudgetOk("devil")) {
       winStreak = 0;
       markScene();
       budgetScene("devil");
@@ -3361,13 +3371,13 @@ function applyEvent(e: AgentEvent) {
         window.setTimeout(() => showBubble("Level 5. The sword comes out now.", PRIO.NOTABLE), 4000);
       if (lastLevel >= 10 && story.first("lv10"))
         window.setTimeout(() => showBubble("Double digits. Just warming up.", PRIO.NOTABLE), 4000);
-    } else if (crossedMilestone && sceneAllowed() && sceneBudgetOk("dance")) {
+    } else if (crossedMilestone && !gamingActive() && sceneAllowed() && sceneBudgetOk("dance")) {
       winStreak = 0;
       markScene();
       budgetScene("dance");
       if (isCorvin()) void nuzzleScene(); // 25★ -> the eagle's rare approval
       else danceScene(); // 25★ milestone -> dance
-    } else if (winStreak >= 3 && sceneAllowed() && sceneBudgetOk("jackpot")) {
+    } else if (winStreak >= 3 && !gamingActive() && sceneAllowed() && sceneBudgetOk("jackpot")) {
       winStreak = 0;
       markScene();
       budgetScene("jackpot");
