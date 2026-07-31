@@ -76,6 +76,9 @@ export const ACTIONS: DirectorAction[] = [
   { id: "artsiv", kind: "big", cooldownSec: 2200, base: (s) => (s.present ? 1.2 : 0.6) },
   { id: "bow", kind: "big", cooldownSec: 3600, base: () => 0.5 },
   { id: "road", kind: "big", cooldownSec: 2600, base: (s) => (evening(s) || night(s) ? 1.3 : 0.6) },
+  // THE DOOR: the headline fight — rare, evening-leaning, only for a present
+  // viewer. The scene itself enforces a 4h floor on top of this cooldown.
+  { id: "door", kind: "big", cooldownSec: 6 * 3600, base: (s) => (!s.present || s.typing ? 0 : evening(s) || night(s) ? 1.2 : 0.6) },
   { id: "rain", kind: "big", cooldownSec: 3200, base: (s) => (night(s) ? 1.1 : 0.5) },
 ];
 

@@ -1277,7 +1277,7 @@ function onContext(kind: string) {
   if (kind === "demo_cairn") return void cairnScene();
   if (kind === "demo_stone") return void stoneRestScene(18_000);
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
-  if (kind === "demo_door") { if (isCorvin()) void doorFightScene(); return; }
+  if (kind === "demo_door") { if (isCorvin()) void doorFightScene(true); return; }
   if (kind === "demo_form") { if (!isCorvin()) void devilFormScene(); return; }
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
@@ -2875,6 +2875,7 @@ function runCorvinClock() {
     case "artsiv": watchReaction(a.id); void artsivCycleScene(); break;
     case "bow": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.bow)); break;
     case "road": watchReaction(a.id); void roadScene(); break;
+    case "door": watchReaction(a.id); void doorFightScene(); break;
     case "rain": watchReaction(a.id); void rainScene(); break;
     case "feedeagle": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.feedeagle)); break;
     case "flask": watchReaction(a.id); void corvinScene(() => playCorvin(CORVIN.flask)); break;
@@ -3148,6 +3149,9 @@ const HUNT_CLOCKS: Array<{
   { name: "unchained", firstAt: 3, every: 10 * 60_000, last: 0, run: () => unchainedScene() },
   { name: "cleave", firstAt: 7, every: 10 * 60_000, last: 0, run: () => cleaveScene() },
   { name: "breach", firstAt: 10, every: 10 * 60_000, last: 0, run: () => breachScene() },
+  // The DOOR joins the hunt at 15:00 into the session (user-directed) and
+  // returns each half hour; the 4h guard inside the scene keeps it special.
+  { name: "door", firstAt: 15, every: 30 * 60_000, last: 0, run: () => doorFightScene() },
 ];
 
 // ---- The day's hour table (user-directed) ----------------------------------
@@ -4701,7 +4705,10 @@ async function dantePoseScene(c: Clip, holdMs: number) {
 
 // Corvin's Door scene: the monitor's right edge opens and one monstrous arm
 // reaches through. Corvin retreats, blocks, and drives it back with his own arm.
-async function doorFightScene() {
+async function doorFightScene(force = false) {
+  // The scheduled paths (hunt clock, 19:00 slot, director) share one rule:
+  // the Door opens at most once every 4 hours. The demo word bypasses it.
+  if (!force && Date.now() - (story.s.gags.lastDoorAt ?? 0) < 4 * 3_600_000) return;
   await corvinScene(async () => {
     // THE DOOR, single-arm cut (user-directed): a slow epic opening, ONE
     // monstrous arm forcing its way out, two guarded steps back, the sword
@@ -4709,7 +4716,7 @@ async function doorFightScene() {
     // Character clock: sense 0-2.26, retreat 2.26-5.14, block 5.44-6.19,
     // plant 6.54-8.87, arm rise 8.87-11.12, infection 11.12-14.60,
     // struggle 14.60-19.19, recovery 19.19-22.67, sword/home to ~25.8 s.
-    void riftGlow(22_500, { fight: "door" });
+    void riftGlow(26_900, { fight: "door" }); // seal begins at scene 22.66s — the SLAM sound
     // Anchor on the CORNER, never on lastX — if anything nudged the window,
     // the duel still fights (and ends) at his post.
     const homeX = home!.cornerX;
@@ -5015,11 +5022,11 @@ function riftMain(q: URLSearchParams) {
       const LUNGE_REACH = 18; // the sword can meet it; Corvin's body cannot
       const EMERGE0 = 1450; // claws punch through during his sense-turn
       const EMERGE1 = 4700; // full emergence stretches across the backstep
-      const LASH = 5050; // lunge peak rides the parry's block frame
+      const LASH = 4870; // lunge peak lands exactly on the block frame (scene 5.65s)
       const CLING = 11550; // the wrist root appears as corruption begins spreading
-      const CONTACT = 13660; // tentacles touch the claw = the half-demon form completes
+      const CONTACT = 14000; // touch = the half-demon form completes (scene 14.60s)
       const PUSH0 = CONTACT;
-      const GONE = 18250; // pushed through across the whole monsterhold struggle
+      const GONE = 18590; // pushed through exactly as the struggle ends (scene 19.19s)
       // World-space position of the screen-left demon arm beneath Artsiv after
       // the backstep. The bridge has one wrist-sized root at its left centre.
       // Rooted in the RAISED demonic hand (user-directed): the stream leaves
