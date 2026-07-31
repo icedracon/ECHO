@@ -79,6 +79,19 @@ export const ACTIONS: DirectorAction[] = [
   { id: "rain", kind: "big", cooldownSec: 3200, base: (s) => (night(s) ? 1.1 : 0.5) },
 ];
 
+// Dante has his own repertoire and memory. His director favours small lived-in
+// beats, with the headline scenes kept rare; fixed daily/game clocks still own
+// their exact appointments.
+export const DANTE_ACTIONS: DirectorAction[] = [
+  { id: "d_standlean", kind: "pose", cooldownSec: 900, base: (s) => (s.present ? 1.1 : 0.5) },
+  { id: "d_crouchpeer", kind: "pose", cooldownSec: 1100, base: (s) => (s.typing ? 0.3 : 1) },
+  { id: "coin", kind: "small", cooldownSec: 1200, base: (s) => (s.winStreak > 0 ? 1.5 : 0.8) },
+  { id: "swordspin", kind: "small", cooldownSec: 1500, base: (s) => (s.present ? 1 : 0.4) },
+  { id: "pizza", kind: "big", cooldownSec: 7200, base: (s) => (s.workMinutes > 45 ? 1.7 : 0) },
+  { id: "dance", kind: "big", cooldownSec: 5400, base: (s) => (evening(s) ? 1.5 : 0.35) },
+  { id: "devilform", kind: "big", cooldownSec: 14400, base: (s) => (night(s) && s.present ? 1.5 : 0) },
+];
+
 export interface DirectorState {
   weights: Record<string, number>; // обучение: 0.3 .. 2.5
   lastPlayed: Record<string, number>; // когда действие играло в последний раз
@@ -86,9 +99,11 @@ export interface DirectorState {
 
 export class Director {
   st: DirectorState;
+  private readonly actions: DirectorAction[];
 
-  constructor(saved?: Partial<DirectorState>) {
+  constructor(saved?: Partial<DirectorState>, actions: DirectorAction[] = ACTIONS) {
     this.st = { weights: {}, lastPlayed: {}, ...saved };
+    this.actions = actions;
   }
 
   // Выбор следующего действия. null — сейчас лучше ничего не делать.
@@ -96,7 +111,7 @@ export class Director {
     const now = Date.now();
     let total = 0;
     const scored: Array<[DirectorAction, number]> = [];
-    for (const a of ACTIONS) {
+    for (const a of this.actions) {
       if (a.kind === "big" && !allowBig) continue;
       const last = this.st.lastPlayed[a.id] ?? 0;
       const since = (now - last) / 1000;

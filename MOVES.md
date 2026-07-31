@@ -3,12 +3,12 @@
 Everything Dante does right now, with the trigger, timing, position, sound, and
 the exact knob to change it. All in `src/main.ts` unless noted. Times in ms.
 
-> Current v0.2.0 note: this catalogue now covers ECHO's shared engine plus
-> Corvin. Dante sections are historical/current for the Dante pack; Corvin's
-> active clip catalogue is in `src/corvin.ts`.
+> Current v0.2.0 note: this catalogue covers the shared engine and Corvin.
+> The exact current Dante durations, Director cooldowns and fixed clocks are in
+> [`DANTE_TIMINGS.md`](DANTE_TIMINGS.md).
 
-> This is the CURRENT behaviour. The autonomous "Life Model" (moods / free-will
-> urges) is designed in DESIGN.md §6b but **not built yet**.
+> The Life Model and separate learned directors for Dante and Corvin are active.
+> Fixed daily and gaming appointments outrank autonomous choices.
 
 ---
 
@@ -16,24 +16,24 @@ the exact knob to change it. All in `src/main.ts` unless noted. Times in ms.
 | Step | Clip | Timing | Where | Voice |
 |---|---|---|---|---|
 | Walk in from off-screen left | `sidewalk` | ~150 px/s until corner | left edge → corner | — |
-| Stand tall, arms crossed | `sit` | 1× (~9×200) | corner, standing | — |
-| Sit down onto panel | `sitpanel` | 1× (~9×190) | corner, drops to seat | — |
-| Then → showcase reel (demos every move once) | — | ~20 s | corner | captions only |
+| Look around and settle | `sit` | ~2.7 s | corner, standing | — |
+| Arrival stagger | `stagger` | 0.865 s + 0.12 s hold | corner | — |
+| Sit down onto panel | `sitpanel` | 1.74 s | corner, drops to seat | — |
 
-Change: `runIntro()`. Walk pace `slideWindow(cornerX, 150)`. To skip the reel,
-remove the `showcase()` call at the end of `runIntro()`.
+Change: `runIntro()`. Walk pace `slideWindow(cornerX, 150)`. The showcase is QA-only.
 
 ---
 
 ## B. Idle rotation (seated, loops forever when nothing's happening)
-Plays a pose, then **holds still** a random time, then shifts. Line ~500 `IDLE_SEQ`.
+Plays a pose, then **holds still** a random time, then shifts. The full list of
+25 poses and holds is in `DANTE_TIMINGS.md`; selection weights live in `planner.ts`.
 
 | Pose | Clip | Plays | Holds still | Meaning |
 |---|---|---|---|---|
-| Swing legs | `sitswing` | 3× | 0.7–1.8 s | default fidget |
-| Arms crossed | `sitcross` | 1× | **7–12 s** | resting |
-| Ponder | `sitthink` | 1× | 5–9 s | thinking to himself |
-| Check watch | `checkwatch` | 1× | 4–7 s | impatient |
+| Swing legs | `sitswing` | 3× | 18–50 s | default fidget |
+| Arms crossed | `sitcross` | 1× | 35–75 s | resting |
+| Ponder | `sitthink` | 1× | 15–40 s | thinking to himself |
+| Check watch | `checkwatch` | 1× | 8–15 s | impatient |
 
 Change: edit the `hold: [min,max]` per row. Bigger = calmer/stiller.
 
@@ -57,8 +57,8 @@ Change clips/speeds in `ANIMS`. "Hmm" gate: `state==="thinking"` block ~line 430
 ## D. Small reactions (every win / error)
 | Event | What | Clip/FX | Voice |
 |---|---|---|---|
-| 1–2 wins | `lightWin` | ding + smirk bubble + chuckle | only if silent ≥60 s |
-| 1–2 errors | `lightError` | thud + tiny shake + shrug bubble | only if silent ≥60 s |
+| 1–2 wins | `lightWin` | ding + smirk bubble + chuckle | only if silent ≥4 min |
+| 1–2 errors | `lightError` | thud + tiny shake + shrug bubble | only if silent ≥4 min |
 
 Change: `lightWin()` / `lightError()` (~line 535). Lines: `WIN_LINES`, `SHRUG_LINES`.
 
@@ -67,10 +67,11 @@ Change: `lightWin()` / `lightError()` (~line 535). Lines: `WIN_LINES`, `SHRUG_LI
 ## E. Big scenes (rare, rate-limited — ≥3 min apart, `SCENE_MIN_GAP`)
 | Trigger | Scene | Clip | FX + Voice | ~Length |
 |---|---|---|---|---|
-| **3 wins in a row** | Jackpot | `shoot` → `gunspin`/`taunt` | single gunshot, muzzle slow-mo, shake, "Jackpot!" | ~3 s |
-| **25★ milestone** | Dance | `dance` ×3 | beat shakes, "Too easy." | ~3 s |
-| **3 errors in a row** | Breakdown | `falling` → `climb` | thud, shake, "falling!" → "...saw nothing." | ~4 s |
-| **Level up** | Devil Trigger | `devil` | red vignette, aura hum, shake, "Devil Trigger!" | ~2 s |
+| **3 wins in a row** | Jackpot | `shoot` → `gunspin`/`taunt` | single gunshot, muzzle slow-mo, shake, "Jackpot!" | 2.61-3.34 s |
+| **25★ milestone** | Dance | `headbang`/`dance` ×3 | beat shake, "Too easy." | 4.02-4.61 s |
+| **3 errors in a row** | Breakdown | `falling` → `climb` | thud, shake, "falling!" → "...saw nothing." | 4.45-4.59 s |
+| **Level up** | Devil Trigger | `devil` | red vignette, aura hum, shake, "Devil Trigger!" | 2.65-2.80 s |
+| **Director / 22:00** | Full Devil Form | `d_devilrise` → `d_devilburn` → `d_devilcalm` | red aura, demon voice | ~10.97 s |
 
 Streak thresholds: `winStreak >= 3` / `errStreak >= 3` (~lines 637, 660) — set to
 `2` for more frequent, `4` for rarer. Milestone every `STAR_MILESTONE = 25` (line 524).
@@ -81,10 +82,10 @@ Gap between any two big scenes: `SCENE_MIN_GAP = 180000` (line 460).
 ## F. Presence (comes & goes)
 | Trigger | What | Clip |
 |---|---|---|
-| **No AI activity 10 min** | stand, arms crossed, a line, walk off left | `sit` → `sidewalk` off |
+| **No AI activity 15 min** | stand, arms crossed, a line, walk off left | `sit` → `sidewalk` off |
 | **Next AI event after leaving** | walk back in, sit down | `sidewalk` → `sitpanel` |
 
-Change: `AWAY_AFTER_MS = 10*60*1000` (line 578). Lines: `LEAVE_LINES`, `RETURN_LINES`.
+Change: `AWAY_AFTER_MS`. Lines: `LEAVE_LINES`, `RETURN_LINES`.
 
 ---
 
@@ -104,9 +105,8 @@ Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.
 | Trigger | What | Clips | Knob |
 |---|---|---|---|
 | **You type** (Win32 keys) | laptop OUT once → typing loop while you type → laptop AWAY (reversed) | `typing` (one-shot) → `typetap` (4-frame loop) | session extend 9 s/keystroke, `typingUntil` |
-| **Video/music opens** | 15 s dance | `dance` | `danceScene(15000)` |
-| **…and stays open** | dance repeats | `dance` | `MEDIA_DANCE_EVERY` = 10 min |
-| **Game launches** | 3-shot burst + playful mood | `shoot` | gaming beats every ~1–3.5 min, hourly special |
+| **Video/music opens** | poster + song + dance | `dance`/`headbang` | 15 s, then every 10 min while media stays open |
+| **Game launches** | 3-shot burst + playful mood | `shoot` | Devil 3 min, spin 6, sword 7, coin 12, pizza 18 |
 
 ## I. Position on the taskbar
 | Knob | Value | Effect | Line |
@@ -119,12 +119,12 @@ Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.
 ---
 
 ### Quick "make him calmer" recipe
-Raise `IDLE_SEQ` holds, raise `winStreak/errStreak` to 4, raise `SCENE_MIN_GAP` to
+Raise `URGES` holds, raise `winStreak/errStreak` to 4, raise `SCENE_MIN_GAP` to
 300000, lower `AMBIENT_BUBBLE_CHANCE` to 0.08, raise `AWAY_AFTER_MS`.
 
 ### Quick "make him livelier" recipe
 Lower streak thresholds to 2, lower `SCENE_MIN_GAP` to 90000, raise
-`AMBIENT_BUBBLE_CHANCE` to 0.4, shorten `IDLE_SEQ` holds.
+`AMBIENT_BUBBLE_CHANCE` to 0.4, shorten `URGES` holds.
 
 ---
 
@@ -169,12 +169,13 @@ sparks and tendrils.
 |---|---|---|---|
 | Sense | `c_doorsense` | 2260 | he turns and raises guard before movement |
 | Retreat | `c_backstep` + `stepWindowX()` | 2880 | window moves in short footfall bursts, not a glide |
-| Parry | `parry` | 750 | capped hand lunge meets the blade, burst FX fires |
+| Parry | `doorparry` | 750 | exact guarded-pose recoil; no old-model flash |
 | Sword plant | `c_swordplant2` | 2330 | begins from pinned `c_backstep/frame_12` continuity |
-| Arm rise | `c_armup` | 2250 | cursed arm becomes the source point |
-| Octopus grip | `c_armoctopus` + overlay tendril | 2150 | tendril width is recomputed from Corvin's raised arm to the hand |
-| Push | `armgrip` loop | 3 passes | hand is pushed back with smoothstep resistance |
-| Calm / return | `c_armcalm`, `c_swordtake`, `slideWindow()` | 3790 + 2290 | Corvin returns to his corner |
+| Demon rise | `c_armup` | 2250 | the screen-left arm turns demonic; only a little corruption reaches the body |
+| Corruption | `c_infect` | 3480 | corruption grows from the raised left arm to the half-demon contact pose |
+| Push | `c_monsterhold` loop | 4590 | the same transformed pose holds while the rooted tendrils force the claw back |
+| Retract / calm | overlay retract + reversed `c_infect` | 3480 | tentacles retract into the palm while the same model changes back |
+| Sword / return | `c_swordtake` + `slideWindow()` | ~2790 | Corvin takes the sword and returns to his corner |
 
 Knobs: `BACKSTEP_WINDOW_BEATS`, `stepWindowX()`, and the Door `REACH`,
 `LUNGE_REACH`, `EMERGE0`, `EMERGE1`, `LASH`, `CLING`, `PUSH0`, `GONE` constants

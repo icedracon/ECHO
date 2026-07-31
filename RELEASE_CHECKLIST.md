@@ -37,9 +37,14 @@ Use this before publishing a GitHub release.
    - character switch starts from a clean idle frame;
    - Corvin's Door backstep reads as stepping, not sliding;
    - demon hand emerges slowly and never reaches Corvin;
-   - octopus tendrils originate from Corvin's raised arm;
+   - Corvin becomes only partly demonic before the octopus attack;
+   - corruption grows gradually until the tentacles physically contact the Door hand;
+   - three octopus tentacles visibly grow from and retract into the screen-left demon arm beneath Artsiv;
+   - no tentacle appears behind Corvin's back, around his legs or from the ground;
+   - the lower demon claw never touches Corvin, including at maximum lunge;
    - return walk lands back on the taskbar corner.
-   - choosing a scene for the other character switches packs first and starts at frame 0;
+   - the normal tray contains no manual scene buttons;
+   - a QA demo trigger for the other character switches packs first and starts at frame 0;
    - Corvin's story text remains visible until the spoken line ends;
    - Corvin's chapter title and first line use the same voice at 1.5x speed without overlap.
 

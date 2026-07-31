@@ -92,9 +92,14 @@ export const CORVIN = {
   // Rain: the downpour is hand-drawn over the frames, so it loops seamlessly.
   rain: cc("rain", 16, 110, true),
   // The same road, in the rain (user-directed): when he turns his back on you
-  // to watch for someone, it should be pouring.
+  // to watch for someone, it should be pouring. The tail holds are SHORT now —
+  // rain is baked into these frames, so a long hold froze the downpour; the
+  // long watch lives in the roadrainhold loop below instead.
   roadrain: cc("roadrain", 13, 300, false, 12,
-    [500, 240, 230, 230, 230, 240, 260, 300, 420, 600, 900, 1200, 1600]),
+    [500, 240, 230, 230, 230, 240, 260, 300, 360, 380, 400, 400, 400]),
+  // The watch itself: his final back-turned frame with the rain repainted at
+  // 8 wrapped phases — a seamless loop, the downpour never freezes.
+  roadrainhold: cc("roadrainhold", 8, 120, true),
   // The cairn: the old Warden's grave, which he dug himself.
   cairn: cc("cairn", 13, 400, false, 12,
     [500, 280, 260, 260, 260, 280, 300, 340, 420, 900, 1600, 1200, 900]),
@@ -122,8 +127,8 @@ export const CORVIN = {
   // to settle in, REV to rise
   sitstone: cc("sitstone", 13, 210, false, 12, [340, 220, 210, 200, 200, 200, 210, 220, 240, 260, 300, 380, 700]),
   // THE DOOR FIGHT (user-directed): the monitor's right edge cracks open (the
-  // rift overlay), a demon walks in, he wins, THE ARM triggers — demon for a
-  // breath — then the man again. Six chained parts, ~78 frames.
+  // rift overlay), a demon walks in, he wins, THE ARM triggers — partial demon
+  // corruption for a breath — then the man again. Six chained parts, ~78 frames.
   doorsense: cc("c_doorsense", 11, 150, false, 10, [90, 80, 110, 130, 150, 160, 180, 200, 240, 300, 620]),
   demonout: cc("c_demonout", 15, 190, false, 14, [340, 220, 200, 190, 190, 180, 180, 180, 180, 190, 200, 220, 250, 300, 560]),
   doorfight: cc("c_doorfight", 17, 140, false, 16, [150, 120, 110, 100, 110, 120, 100, 110, 120, 130, 110, 120, 140, 160, 190, 240, 420]),
@@ -147,17 +152,40 @@ export const CORVIN = {
   // THE CONNECTED DOOR CHAIN (user-directed): one continuous generated flow —
   // each part starts on the previous part's last frame, the finale pins idle.
   backstep: cc("c_backstep", 13, 180, false, 12, [260, 180, 170, 230, 280, 150, 160, 240, 300, 160, 170, 220, 360]),
+  // Door-only impact recoil. It reuses the final guarded backstep frames in a
+  // short out-and-back pulse, so the block starts and ends on the exact same
+  // model/pose instead of flashing through the older generic parry artwork.
+  doorparry: {
+    frames: [12, 11, 10, 11, 12].map((i) => `/pixel/corvin/c_backstep/frame_${i}.png?v=1`),
+    ms: 150,
+    msSeq: [120, 90, 100, 90, 350] as number[],
+    loop: false,
+    settle: 4,
+  },
   doorplant: cc("c_swordplant2", 11, 170, false, 10, [200, 170, 160, 160, 170, 180, 190, 200, 220, 260, 420]),
+  // The planted sword stays at screen-right while the screen-left arm beneath
+  // Artsiv turns demonic. Only a little corruption reaches Corvin's body. The
+  // overlay owns every tentacle and pins its wrist-sized root to that arm.
   armup: cc("c_armup", 11, 170, false, 10, [220, 190, 170, 160, 160, 160, 170, 180, 200, 240, 400]),
-  armoctopus: cc("c_armoctopus", 13, 160, false, 12, [180, 140, 120, 110, 110, 120, 140, 160, 170, 180, 190, 210, 320]),
-  // the writhing peak of the octopus, looped while the claws are forced back
+  // Corruption continues one measured step at a time while the tentacles grow;
+  // the last two frames hold the strongest partial-monster form at contact.
+  armoctopus: cc("c_armoctopus", 8, 230, false, 7, [260, 230, 230, 230, 230, 230, 260, 380]),
+  // The contact pose loops while the claws are forced back.
   armgrip: {
-    frames: [7, 8, 9, 10, 11].map((i) => `/pixel/corvin/c_armoctopus/frame_${i}.png?v=1`),
-    ms: 160,
+    frames: [6, 7].map((i) => `/pixel/corvin/c_armoctopus/frame_${i}.png?v=1`),
+    ms: 340,
     loop: true,
     settle: 0,
   },
+  armretract: cc("c_armretract", 8, 190, false, 7, [180, 170, 160, 160, 170, 190, 240, 370]),
   swordtake: cc("c_swordtake", 11, 170, false, 10, [220, 190, 180, 170, 170, 170, 180, 190, 200, 240, 380]),
+  // THE TRANSFORMATION (user-directed): the corruption creeps SLOWLY from the
+  // raised arm over the shoulder and half the face — the partial monster form
+  // completes exactly when the tentacles reach the claw. Reversed on the way
+  // back (REV), so victory literally unwinds the infection.
+  infect: cc("c_infect", 15, 220, false, 14,
+    [260, 220, 210, 200, 200, 200, 200, 210, 210, 220, 220, 230, 240, 260, 400]),
+  monsterhold: cc("c_monsterhold", 9, 170, true),
   leanoff: cc("leanoff", 7, 190, false, 6, [300, 190, 180, 170, 170, 180, 420]),
   crouchcheck: cc("crouchcheck", 9, 220, false, 8, [420, 180, 170, 170, 300, 420, 200, 190, 420]),
   swordshoulder: cc("swordshoulder", 7, 190, false, 6, [420, 180, 170, 170, 180, 200, 500]),

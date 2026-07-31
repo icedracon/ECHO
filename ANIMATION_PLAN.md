@@ -5,8 +5,13 @@
 This file began as the Dante animation plan. The current build is now ECHO with
 both Dante and Corvin. Corvin's Door chain is live in `public/pixel/corvin/`:
 `c_doorsense`, `c_backstep`, `parry`, `c_swordplant2`, `c_armup`,
-`c_armoctopus`, `c_armcalm`, `c_swordtake`, plus the overlay FX under
+`c_armoctopus`, `c_armretract`, `c_armcalm`, `c_swordtake`, plus the overlay FX under
 `public/pixel/demon_*` and `public/pixel/fx_*`.
+
+`c_armoctopus` and `c_armretract` contain only Corvin's clean partial-demon strain.
+The nine-frame `fx_tendril` bundle owns all three tentacles, keeps one wrist-sized
+root pinned to the screen-left arm beneath Artsiv, and never draws behind his back
+or around his legs.
 
 The Door backstep was regenerated for stronger leg motion. Its last frame is
 pinned to `c_swordplant2/frame_0.png` so the scene remains one continuous chain.

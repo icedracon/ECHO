@@ -92,6 +92,11 @@ for (const match of main.matchAll(/(\w+)\.msSeq\s*=\s*\[([^\]]+)\]/g)) {
   const count = (values.match(/[\d_]+/g) || []).length;
   check(count === clip.count, `Dante ${match[1]} (${clip.dir}): msSeq has ${count}, clip has ${clip.count}`);
 }
+for (const name of folders.keys()) {
+  if (name.startsWith("d_")) {
+    check(main.includes(`"${name}"`) || read("src/planner.ts").includes(`"${name}"`), `Unused Dante clip folder: ${name}`);
+  }
+}
 
 function stringSet(source, name) {
   const body = source.match(new RegExp(`const ${name} = new Set\\(\\[([\\s\\S]*?)\\]\\);`));
@@ -119,9 +124,9 @@ for (const event of trayEvents) {
   );
 }
 
-const { ACTIONS } = loadTsModule("src/director.ts");
+const { ACTIONS, DANTE_ACTIONS } = loadTsModule("src/director.ts");
 const directorStart = main.indexOf("function runCorvinClock()");
-const directorEnd = main.indexOf("let corvinTickArmed", directorStart);
+const directorEnd = main.indexOf("function runDanteClock()", directorStart);
 const directorBody = directorStart >= 0 && directorEnd > directorStart
   ? main.slice(directorStart, directorEnd)
   : "";
@@ -129,6 +134,17 @@ const directorCases = new Set(
   [...directorBody.matchAll(/case\s+"([^"]+)"/g)].map((match) => match[1]),
 );
 for (const action of ACTIONS) check(directorCases.has(action.id), `Director action ${action.id} is not dispatched`);
+const danteDirectorStart = directorEnd;
+const danteDirectorEnd = main.indexOf("function scheduleDanteDirector()", danteDirectorStart);
+const danteDirectorBody = danteDirectorStart >= 0 && danteDirectorEnd > danteDirectorStart
+  ? main.slice(danteDirectorStart, danteDirectorEnd)
+  : "";
+const danteDirectorCases = new Set(
+  [...danteDirectorBody.matchAll(/case\s+"([^"]+)"/g)].map((match) => match[1]),
+);
+for (const action of DANTE_ACTIONS) {
+  check(danteDirectorCases.has(action.id), `Dante director action ${action.id} is not dispatched`);
+}
 
 function decodeStrings(block) {
   return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) =>
@@ -166,7 +182,7 @@ for (const entry of Object.values(voiceIndex)) {
 
 notes.push(`${folders.size} animation folders, ${[...folders.values()].reduce((n, v) => n + v.length, 0)} PNG frames`);
 notes.push(`${Object.keys(CORVIN).length} Corvin clips, ${declaredClips.size} named Dante clips`);
-notes.push(`${backendDemos.size} demo triggers, ${ACTIONS.length} director actions`);
+notes.push(`${backendDemos.size} demo triggers, ${ACTIONS.length + DANTE_ACTIONS.length} director actions`);
 notes.push(`${spoken.size} Corvin story lines, ${Object.keys(voiceIndex).length} voice files`);
 
 if (failures.length) {

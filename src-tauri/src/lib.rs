@@ -284,10 +284,8 @@ fn fe_log(line: String) {
     }
 }
 
-/// The tray menu — the whole product with a mouse, for people who will never
-/// open a terminal (user-directed). Every item just emits the same
-/// context-events the `echo <word> > ~/.echo/demo` path uses, so the frontend
-/// needs nothing new.
+/// The tray is intentionally not a scene console. It keeps only character and
+/// comfort controls; scenes belong to triggers, hotkeys, directors and clocks.
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     use tauri::tray::TrayIconBuilder;
@@ -299,28 +297,9 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .item(&item("ev:demo_be_corvin", "🦅  Корвин — Страж").build(app)?)
         .item(&item("ev:demo_be_dante", "🔴  Данте — охотник").build(app)?)
         .build()?;
-    let corvin_scenes = SubmenuBuilder::new(app, "Сцены Корвина")
-        .item(&item("ev:demo_corvin", "Полный показ (1 мин)").build(app)?)
-        .item(&item("ev:demo_fly", "Полёт Арцива по экрану").build(app)?)
-        .item(&item("ev:demo_tale", "Рассказать байку").build(app)?)
-        .item(&item("ev:demo_chapter", "Глава романа").build(app)?)
-        .item(&item("ev:demo_night", "Ночная песня").build(app)?)
-        .item(&item("ev:demo_breach", "Прорыв (большой бой)").build(app)?)
-        .item(&item("ev:demo_requiem", "Реквием").build(app)?)
-        .build()?;
-    let dante_scenes = SubmenuBuilder::new(app, "Сцены Данте")
-        .item(&item("ev:demo_devil", "Devil Trigger").build(app)?)
-        .item(&item("ev:demo_sword", "Огненный меч").build(app)?)
-        .item(&item("ev:demo_poster", "Плакат с песней").build(app)?)
-        .item(&item("ev:demo_pizza", "Пицца").build(app)?)
-        .build()?;
     let menu = MenuBuilder::new(app)
         .item(&characters)
         .separator()
-        .item(&corvin_scenes)
-        .item(&dante_scenes)
-        .separator()
-        .item(&item("ev:hotkey_song", "🎸  Сыграть песню  (ALT+S)").build(app)?)
         .item(&item("ev:quiet_hour", "🤫  Тихий час — не отвлекать").build(app)?)
         .separator()
         .item(&item("help", "Как управлять ECHO").build(app)?)

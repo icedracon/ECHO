@@ -16,18 +16,25 @@
 - One-time first-run hint and a permanent **Как управлять ECHO** tray item.
 - Corvin Door scene chain: sense, backstep, parry, sword plant, arm raise, octopus grip, calm and sword return.
 - New Door assets: demon hand, hand emergence, burst FX and tendril FX.
+- Dante has a separate learned director for his own ambient repertoire.
 
 ### Changed
 
 - Corvin's story, tale and grief voice now plays 1.5x faster.
-- Character-specific tray scenes now switch to the correct character before starting at frame 0.
+- Scene triggers switch to the correct character before starting at frame 0.
 - Dante scene waits now use the real per-frame timing sequence instead of average frame time.
+- Dante clip changes repaint frame 0 immediately, preventing gliding starts and clipped endings.
+- Busy scene triggers now wait in an ordered queue instead of expiring after 25 seconds.
+- The tray is intentionally limited to character and comfort controls; scenes are autonomous.
 - Main window size is now `260x420`, with a dedicated speech area above the character.
 - Character switching resets scene state cleanly, so Dante scenes do not leak into Corvin and Corvin starts from the beginning.
 - Door backstep now uses footfall-based window movement instead of a continuous glide.
 - Demon hand emergence is slower and synced across Corvin's sense/backstep sequence.
 - Demon hand lunge distance is capped so it does not enter Corvin's interaction zone.
-- Octopus tendrils now originate from Corvin's raised arm and stay attached to the demon hand.
+- Three octopus tentacles now share one wrist-sized root on Corvin's screen-left demon arm and stay attached to the Door hand.
+- Corvin now becomes only partially demonic before using the Door tentacles: his screen-left arm beneath Artsiv transforms while the sword stays planted at screen-right.
+- Partial corruption now grows slowly with the tentacles and reaches its strongest frame only when they contact the Door hand.
+- The Door claw is lower and has a shorter reach/lunge, leaving visible space between it and Corvin.
 - The Door's demon arm stays rooted behind the screen edge during emergence, lunge and pushback.
 - Release versions are aligned across `package.json`, `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
 - Package lock was cleaned of unused Three.js/Rapier-era dependencies.

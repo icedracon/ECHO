@@ -45,6 +45,7 @@ interface StoryState {
   lastRitualDay?: string;
   // The director's learned weights and per-action cooldown history.
   director?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
+  danteDirector?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
 }
 
 export const dateKey = (t = Date.now()) => {

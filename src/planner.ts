@@ -63,7 +63,7 @@ const URGES: UrgeDef[] = [
 // Espresso belongs to the waking day — not at 3 a.m.
 function coffeeGate(): number {
   const hr = new Date().getHours();
-  return hr >= 10 && hr < 20 ? 1 : 0.1;
+  return hr >= 10 && hr < 20 ? 1 : 0;
 }
 
 // Naps only really happen when he's genuinely low / it's night.

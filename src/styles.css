@@ -105,7 +105,10 @@ body {
 
 #bubble {
   position: absolute;
-  top: 8px;
+  /* Anchored just above his head, NOT the window top — the window grew to
+     420px for the tall scenes and a top-pinned bubble floated far off him. */
+  top: auto;
+  bottom: 200px;
   right: 10px;
   width: calc(100% - 20px);
   max-width: 240px;
