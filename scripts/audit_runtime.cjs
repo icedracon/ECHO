@@ -150,6 +150,18 @@ check(
     main.includes("}, 5_000);"),
   "Corvin's fixed hunt beats must reserve the stage and poll on a hard clock",
 );
+check(
+  /function beatReady\(\)[\s\S]*?!introActive[\s\S]*?\n}/.test(main),
+  "Fixed beats must wait for the startup walk-in instead of being consumed",
+);
+check(
+  main.includes("function setState(state: State, force = false)") &&
+    main.includes('finishSceneIdle("corvin scene")') &&
+    main.includes('finishSceneIdle("media watch")') &&
+    main.includes('setState("idle", true)') &&
+    main.includes("committedUntil = 0"),
+  "Finished Corvin and media scenes must not freeze on a protected transition frame",
+);
 const backendDemos = new Set([...context.matchAll(/=>\s*"(demo_[a-z_]+)"/g)].map((match) => match[1]));
 const handledDemos = new Set([...main.matchAll(/kind\s*===\s*"(demo_[a-z_]+)"/g)].map((match) => match[1]));
 const danteDemos = stringSet(main, "DANTE_DEMOS");

@@ -1,6 +1,6 @@
 [package]
 name = "agent-companion"
-version = "0.2.2"
+version = "0.2.3"
 description = "A living pixel-art desktop companion"
 authors = ["you"]
 edition = "2021"

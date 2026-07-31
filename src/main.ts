@@ -1490,6 +1490,7 @@ function beatReady(): boolean {
     !!home &&
     !gagActive &&
     !showcasing &&
+    !introActive &&
     !away &&
     !returning &&
     !wandering &&
@@ -1617,7 +1618,7 @@ async function demoCorvin() {
   } finally {
     stage.dataset.facing = "right";
     gagActive = false;
-    setState("idle");
+    finishSceneIdle("corvin showcase");
   }
 }
 
@@ -1802,7 +1803,7 @@ async function corvinScene(body: () => Promise<void>, accent?: string) {
     await body();
   } finally {
     gagActive = false;
-    setState("idle");
+    finishSceneIdle("corvin scene");
   }
 }
 
@@ -1986,7 +1987,7 @@ async function mediaWatchScene() {
     mediaWatching = false;
     mediaDemoUntil = 0;
     gagActive = false;
-    setState("idle");
+    finishSceneIdle("media watch");
     dbg("media watch ended");
   }
 }
@@ -3662,17 +3663,17 @@ let bubbleTimer: number | undefined;
 const WORK_POSES = ["gunspin", "sit", "taunt"];
 let workIdx = 0;
 
-function setState(state: State) {
+function setState(state: State, force = false) {
   // While YOU are typing, the laptop stays out — ambient AI poses don't
   // interrupt it (scenes still can, they run through their own path).
-  if (Date.now() < typingUntil && state !== "success" && state !== "error") {
+  if (!force && Date.now() < typingUntil && state !== "success" && state !== "error") {
     stage.dataset.state = state;
     document.documentElement.style.setProperty("--accent", ACCENT[state]);
     return;
   }
   // A committed one-shot (pizza, sword care, laugh) FINISHES: ambient work
   // chatter updates the accent but must not yank the clip mid-bite.
-  if (committed() && state !== "success" && state !== "error") {
+  if (!force && committed() && state !== "success" && state !== "error") {
     stage.dataset.state = state;
     document.documentElement.style.setProperty("--accent", ACCENT[state]);
     return;
@@ -3713,6 +3714,15 @@ function setState(state: State) {
     startClip(ANIMS[state] ?? ANIMS.idle);
   }
   posture(state); // sit on the panel for thinking, stand for the rest
+}
+
+function finishSceneIdle(source: string) {
+  // The final playCorvin() intentionally protects its settle frame for 300 ms.
+  // Once the scene's own `finally` runs that protection is stale; letting the
+  // normal setState guards see it leaves the transition frame frozen forever.
+  committedUntil = 0;
+  setState("idle", true);
+  dbg(`${source} end -> idle`);
 }
 
 // ---- Attention budget -------------------------------------------------

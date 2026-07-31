@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 - 2026-08-01
+## 0.2.3 - 2026-08-01
 
 ### Added
 
@@ -46,6 +46,8 @@
 
 ### Fixed
 
+- Corvin scene and media-watch cleanup now forcibly releases the final protected frame instead of freezing side-on after the animation ends.
+- A fixed game beat due during the startup walk-in now waits instead of being marked as played and refused.
 - Steam's 15-minute Door fight no longer resets when returning to a fullscreen game after Alt+Tab.
 - Active game-session clocks survive quick ECHO restarts and resume from their original minute.
 - Individual hunt appointments persist too, preventing old 3/7/10-minute fights from replaying as a burst after restart.
