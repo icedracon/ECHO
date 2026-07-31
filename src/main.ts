@@ -723,6 +723,12 @@ const ANIMS: Record<State, Clip> = {
   success: clip("cheer", 90, false), // once -> idle
   error: clip("stagger", 80, false), // once -> idle
 };
+// Shared-screen media mode. Dante is already seated at his normal taskbar
+// height; these clips rotate his whole body toward the monitor and keep him
+// there with only a restrained breathing motion.
+const DANTE_WATCH_TURN = clip("d_watchturn", 220, false, 12, 13);
+DANTE_WATCH_TURN.msSeq = [220, 180, 170, 170, 180, 190, 200, 210, 220, 240, 260, 300, 450];
+const DANTE_WATCH_LOOP = clip("d_watchloop", 380, true, 0, 9);
 // ---- Character packs ---------------------------------------------------------
 // "dante" (default) or "corvin" — read from ~/.echo/character at boot, switched
 // live with `echo be corvin > ~/.echo/demo`. Corvin swaps the state clips and
@@ -1018,14 +1024,16 @@ preloadClips([
   STAGGER,
   TYPING,
   TYPETAP,
+  DANTE_WATCH_TURN,
+  DANTE_WATCH_LOOP,
   // The whole Corvin pack too — an unloaded frame on a clip switch flashes the
   // broken-image icon mid-scene (caught by the capture rig, twice per reel).
   ...Object.values(CORVIN),
 ]);
 
 // Context awareness (from the Rust context watcher): you typing -> he types;
-// opening video/music -> a dance; launching a game -> he shoots. Rate-limited
-// by the same scene budget so a long session doesn't spam.
+// opening video/music -> he turns and watches with you; launching a game -> he
+// enters the gaming mood. Long scenes stay serialized by the same busy gate.
 const contextQueue: string[] = [];
 let contextDrainTimer = 0;
 const isManualContext = (kind: string) =>
@@ -1074,6 +1082,18 @@ function onContext(kind: string) {
     kind.startsWith("demo_")
   )
     lastActivity = Date.now();
+  // Session clocks are bookkeeping, so update them even while another scene
+  // owns the stage. Media heartbeats arrive every 10 s; a 45 s grace absorbs a
+  // missed poll without leaving him seated minutes after the video is closed.
+  if (kind === "media" || kind === "media_active") {
+    mediaUntil = Date.now() + MEDIA_HEARTBEAT_GRACE;
+    mediaWanted = Date.now();
+  }
+  // A real game always outranks passive watching. If one opens mid-turn or
+  // mid-loop, the watch scene finishes its current transition and exits cleanly.
+  if (kind === "gaming" || kind === "gaming_active" || kind === "game_start") {
+    if (Date.now() >= mediaDemoUntil) mediaUntil = 0;
+  }
   if (!home || gagActive || showcasing || returning || wandering || away || introActive) {
     // The stage is busy — but STATE must not be lost while it is (these were
     // all silently dropped here before, per the hard review):
@@ -1084,18 +1104,13 @@ function onContext(kind: string) {
     }
     if (kind === "gaming") gamingUntil = Date.now() + 3 * 60 * 1000;
     if (kind === "gaming_active") {
-      gamingUntil = Date.now() + 60 * 1000;
+      noteGamingHeartbeat();
       void invoke("raise_topmost").catch(() => {}); // stay above the game
     }
     if (kind === "game_start") {
       // Arming clocks is pure bookkeeping — a session that starts while he's
       // mid-scene must still get its 3:00/7:00/10:00 schedule.
-      lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
-      lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
-      lastGamingSpecial = Date.now();
-      armHuntClocks();
-      armDanteClocks();
-      dbg("game_start (mid-scene) -> clocks armed");
+      startGamingSession("game_start (mid-scene)");
       return;
     }
     // User commands wait for the current scene instead of expiring after 25 s.
@@ -1230,6 +1245,13 @@ function onContext(kind: string) {
     void demoCorvin();
     return;
   }
+  if (kind === "demo_watch") {
+    mediaDemoUntil = Date.now() + 25_000;
+    mediaUntil = mediaDemoUntil;
+    mediaWanted = Date.now();
+    serviceMediaWish();
+    return;
+  }
   // Character pack switch (live, persisted): `echo be corvin > ~/.echo/demo`.
   if (kind === "demo_be_corvin" || kind === "demo_be_dante") {
     switchCharacter(kind === "demo_be_corvin" ? "corvin" : "dante");
@@ -1298,18 +1320,7 @@ function onContext(kind: string) {
     // Short tail: heartbeats arrive every ~10 s while the game/fullscreen is
     // real, and typing should recover FAST once it ends (a 3-min tail read as
     // "typing randomly broken" after closing a game).
-    gamingUntil = Date.now() + 60 * 1000;
-    // Booted INTO a running game (no game_start edge): the clocks sat at
-    // epoch 0, so the whole hunt repertoire fired as an instant salvo. Arm
-    // them properly on the first heartbeat instead.
-    if (HUNT_CLOCKS[0].last === 0) {
-      lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
-      lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
-      lastGamingSpecial = Date.now();
-      armHuntClocks();
-      armDanteClocks();
-      dbg("gaming_active with unarmed clocks -> session armed from heartbeat");
-    }
+    noteGamingHeartbeat();
     // Borderless games repaint above us unless TOPMOST is re-asserted. tao
     // no-ops set_always_on_top when the flag is unchanged, so go through the
     // Rust command that calls SetWindowPos unconditionally every heartbeat.
@@ -1320,51 +1331,28 @@ function onContext(kind: string) {
     // The REAL game launch edge (Steam RunningAppID 0->N or a fullscreen flip):
     // anchor the fixed schedule here — devil at 3:00, sword at 7:00, then each
     // every 10 min. The Steam client window alone must not arm these.
-    lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
-    lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
-    lastGamingSpecial = Date.now();
-    armHuntClocks(); // Corvin's full repertoire, one beat per minute mark
-    armDanteClocks(); // spin@6:00, coin@12:00, pizza@18:00 from session zero
-    dbg("game_start -> beat clocks armed (devil@3:00, sword@7:00)");
+    startGamingSession("game_start");
     return;
   }
   if (kind === "media_active") {
-    mediaUntil = Date.now() + 3 * 60 * 1000; // video/music still playing
-    serviceMediaWish(); // a queued "you opened YouTube" moment gets its chance
-    // While it's on, he breaks into a 15 s dance every ~10 min — but it shares
-    // the one scene budget, so it can't stack against Jackpot & co.
-    if (Date.now() - lastMediaDance > MEDIA_DANCE_EVERY) {
-      // Same relaxed spacing as the media wish: watching a video is a user
-      // context — behind the full 3-min gap this beat starved forever on a
-      // machine with an active AI session (payoffs grab every open window).
-      if (beatReady() && Date.now() - lastSceneAt >= 45_000) {
-        lastMediaDance = Date.now();
-        mediaWanted = 0; // the wish is served
-        markScene();
-        dbg("media session poster (15s)");
-        if (isCorvin()) void guitarScene(15000); // he plays along instead
-        else posterScene(15000); // the плакат every time, not just on open
-      } else {
-        // Name the guard that vetoed it — silent skips are undebuggable.
-        dbg(
-          `media poster blocked: gag=${gagActive} show=${showcasing} away=${away} ` +
-            `ret=${returning} wand=${wandering} com=${committed()} sceneOk=${sceneAllowed()}`,
-        );
-      }
-    }
+    serviceMediaWish();
     return;
   }
   if (kind === "media") {
-    // You opened music/video — that's deliberate: he holds up his плакат
-    // (poster gif + song from ~/.echo/media) and dances beside it.
-    // The edge fires ONCE (Rust throttles it), so a busy moment must not eat
-    // it: queue instead, and only burn the 10-minute clock once it really ran.
-    mediaWanted = Date.now();
+    // The edge fires once and the heartbeat keeps the session alive. If another
+    // scene is finishing, the wish waits and starts as soon as the stage is free.
     serviceMediaWish();
   } else if (kind === "gaming") {
     // Mood only — the devil/sword clocks are armed by "game_start" (the real
     // launch edge), never by DNS hits or the Steam client window.
     gamingUntil = Date.now() + 3 * 60 * 1000;
+    if (gameSessionStartedAt) {
+      // DNS/window activity repeats while the same Steam session is alive. It
+      // must not consume the global scene gap or replay the opening scan every
+      // two minutes; fixed clocks and the gaming Director already own the stage.
+      dbg("gaming edge folded into active session");
+      return;
+    }
     lastGamingSpecial = Date.now();
     markScene();
     if (isCorvin()) void magicscanScene(); // the hunt opens with a perimeter scan
@@ -1417,13 +1405,80 @@ function tickTyping() {
 
 let gamingUntil = 0;
 let lastGamingSpecial = 0;
-// Media session: while a video/music window is open he dances periodically.
+const GAME_SESSION_START_KEY = "echo.gameSessionStartedAt";
+const GAME_SESSION_HEARTBEAT_KEY = "echo.gameSessionHeartbeatAt";
+const GAME_SESSION_CLOCKS_KEY = "echo.gameSessionClocks";
+const GAME_SESSION_RESUME_GAP = 10 * 60_000;
+let gameSessionStartedAt = 0;
+
+function startGamingSession(source: string) {
+  const now = Date.now();
+  gamingUntil = now + 60_000;
+  if (gameSessionStartedAt > 0) {
+    localStorage.setItem(GAME_SESSION_HEARTBEAT_KEY, String(now));
+    dbg(
+      `${source} ignored: session already ${Math.floor((now - gameSessionStartedAt) / 60_000)}m old`,
+    );
+    return;
+  }
+
+  const savedStart = Number(localStorage.getItem(GAME_SESSION_START_KEY) || 0);
+  const savedHeartbeat = Number(localStorage.getItem(GAME_SESSION_HEARTBEAT_KEY) || 0);
+  const canResume =
+    savedStart > 0 &&
+    savedStart <= now &&
+    savedHeartbeat >= savedStart &&
+    now - savedHeartbeat <= GAME_SESSION_RESUME_GAP;
+  gameSessionStartedAt = canResume ? savedStart : now;
+  localStorage.setItem(GAME_SESSION_START_KEY, String(gameSessionStartedAt));
+  localStorage.setItem(GAME_SESSION_HEARTBEAT_KEY, String(now));
+
+  if (canResume) {
+    restoreGamingClocks(gameSessionStartedAt, now);
+  } else {
+    localStorage.removeItem(GAME_SESSION_CLOCKS_KEY);
+    lastGamingDevil = gameSessionStartedAt - GAMING_DEVIL_EVERY + 3 * 60_000;
+    lastGamingSword = gameSessionStartedAt - GAMING_SWORD_EVERY + 7 * 60_000;
+    armHuntClocks(gameSessionStartedAt);
+    armDanteClocks(gameSessionStartedAt);
+  }
+  lastGamingSpecial = now;
+  saveGamingClocks();
+  dbg(
+    `game session ${canResume ? "resumed" : "started"}: source=${source} ` +
+      `elapsed=${Math.floor((now - gameSessionStartedAt) / 1000)}s`,
+  );
+}
+
+function noteGamingHeartbeat() {
+  if (!gameSessionStartedAt) {
+    startGamingSession("heartbeat");
+    return;
+  }
+  const now = Date.now();
+  gamingUntil = now + 60_000;
+  localStorage.setItem(GAME_SESSION_HEARTBEAT_KEY, String(now));
+}
+
+function clearGamingSession() {
+  if (!gameSessionStartedAt) return;
+  dbg(`game session ended after ${Math.floor((Date.now() - gameSessionStartedAt) / 60_000)}m`);
+  gameSessionStartedAt = 0;
+  localStorage.removeItem(GAME_SESSION_START_KEY);
+  localStorage.removeItem(GAME_SESSION_HEARTBEAT_KEY);
+  localStorage.removeItem(GAME_SESSION_CLOCKS_KEY);
+  for (const c of HUNT_CLOCKS) c.last = 0;
+  lastGamingDevil = 0;
+  lastGamingSword = 0;
+  lastDanteSpin = 0;
+  lastDanteCoin = 0;
+  lastDantePizza = 0;
+}
+// Media session: stay turned toward the monitor while video/music is detected.
 let mediaUntil = 0;
-const MEDIA_DANCE_EVERY = 10 * 60 * 1000; // every ~10 min
-// If music/video is already open when he boots, the first poster beat comes
-// ~90 s in (not instantly, not never); after that the normal 10-min rhythm.
-let lastMediaDance = Date.now() - MEDIA_DANCE_EVERY + 90_000;
-void mediaUntil; // session window (kept for future mood weighting)
+const MEDIA_HEARTBEAT_GRACE = 45_000;
+let mediaWatching = false;
+let mediaDemoUntil = 0;
 const gamingActive = () => Date.now() < gamingUntil;
 
 // Quiet hour (tray item): he mutes every optional beat until it expires.
@@ -1867,31 +1922,73 @@ async function whetstoneTaleScene() {
   });
 }
 
-// ---- Media wish queue (user-directed "youtube trigger fix") ------------------
-// The "media" edge fires once when you open YouTube/Spotify — the backend then
-// throttles it for two minutes. If he happened to be mid-scene, the moment used
-// to be DROPPED and nothing played until you reopened the tab. Now the wish is
-// remembered and served the second he's free (it expires after 3 min so it
-// can't surprise you long after the fact).
+// ---- Shared-screen media watch -----------------------------------------------
+// The edge is remembered if another scene is running. Once free, the companion
+// sits, turns toward the centre of the monitor, and remains in a subtle loop for
+// as long as Rust keeps sending media heartbeats. Closing media plays the turn
+// backwards; no menu or CLI action is required from ordinary users.
 let mediaWanted = 0;
 function serviceMediaWish() {
-  if (!mediaWanted) return;
-  if (Date.now() - mediaWanted > 3 * 60_000) {
-    mediaWanted = 0; // stale — you've moved on
+  if (!mediaWanted || mediaWatching) return;
+  if (Date.now() >= mediaUntil) {
+    mediaWanted = 0;
     return;
   }
-  // You OPENING YouTube is a deliberate act — it outranks the ambient scene
-  // budget. Behind the full 3-min sceneAllowed() gap the wish always lost the
-  // race to AI-event payoff scenes on a busy machine (they grab every slot the
-  // moment it opens) and expired unserved. 45 s of spacing is enough to not
-  // cut into a running scene's tail; beatReady() already blocks mid-scene.
-  if (!beatReady() || Date.now() - lastSceneAt < 45_000) return;
+  const forcedDemo = Date.now() < mediaDemoUntil;
+  if (!beatReady() || (gamingActive() && !forcedDemo)) return;
   mediaWanted = 0;
-  lastMediaDance = Date.now();
   markScene();
-  dbg("media wish served");
-  if (isCorvin()) void guitarScene(15000);
-  else posterScene(15000);
+  dbg("media watch served");
+  void mediaWatchScene();
+}
+
+async function mediaWatchScene() {
+  const forcedDemo = Date.now() < mediaDemoUntil;
+  if (!home || gagActive || mediaWatching || (gamingActive() && !forcedDemo)) return;
+  const watchingCorvin = isCorvin();
+  mediaWatching = true;
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    document.documentElement.style.setProperty("--accent", ACCENT.idle);
+
+    if (watchingCorvin) {
+      // Corvin's seated clips are bottom-anchored inside the normal standing
+      // window, so only the sprite moves; the desktop window never glides.
+      await playCorvin(CORVIN.sit);
+      await playCorvin(CORVIN.watchturn);
+      startClip(CORVIN.watchloop as Clip);
+    } else {
+      posture("idle", true);
+      if (home && Math.abs(home.lastY - home.sitY) > 4) await sleep(820);
+      await playDante(DANTE_WATCH_TURN);
+      startClip(DANTE_WATCH_LOOP);
+    }
+
+    while (
+      Date.now() < mediaUntil &&
+      (forcedDemo || !gamingActive()) &&
+      isCorvin() === watchingCorvin
+    ) {
+      commitFor(1500);
+      await sleep(1000);
+    }
+
+    if (watchingCorvin) {
+      await playCorvin(REV(CORVIN.watchturn));
+      await playCorvin(REV(CORVIN.sit));
+    } else {
+      await playDante(reversedClip(DANTE_WATCH_TURN));
+    }
+  } finally {
+    mediaWatching = false;
+    mediaDemoUntil = 0;
+    gagActive = false;
+    setState("idle");
+    dbg("media watch ended");
+  }
 }
 
 // ---- Daily life (user-directed: more than YouTube and Steam) -----------------
@@ -2160,6 +2257,15 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 21, name: "dance", run: () => danceScene() },
   { h: 22, name: "devil form", run: () => void devilFormScene() },
 ];
+
+function requiemPendingNow(at = new Date()) {
+  return (
+    isCorvin() &&
+    at.getHours() === 23 &&
+    at.getMinutes() >= 40 &&
+    Date.now() - (story.s.gags.lastRequiemAt ?? 0) >= 12 * 3_600_000
+  );
+}
 
 function scheduleMidnight() {
   window.setInterval(() => {
@@ -2835,15 +2941,17 @@ function watchReaction(id: string, brain: Director = director) {
   }, 15_000);
 }
 
-function runCorvinClock() {
+function runCorvinClock(allowBigScenes = true) {
   // Grief outranks everything: weeks/months cadences never lose to routine.
-  const grief = griefUrge();
-  if (grief) {
-    void grief();
-    return;
+  if (allowBigScenes) {
+    const grief = griefUrge();
+    if (grief) {
+      void grief();
+      return;
+    }
   }
   const s = currentSituation();
-  const allowBig = sceneAllowed();
+  const allowBig = allowBigScenes && sceneAllowed();
   const a = director.pick(s, allowBig);
   saveDirector();
   if (!a) return; // silence is a choice too
@@ -2944,9 +3052,9 @@ function corvinIdleTick() {
   corvinIdleTimer = window.setTimeout(
     () => {
       corvinTickArmed = false;
-      // gamingActive: during a hunt the 3:00/7:00/hourly beats OWN the stage —
-      // random urges must not steal their windows (they were: beat skipped
-      // gag=true while a tale played over the game).
+      // During a hunt, fixed headline beats own the big-scene lane. The local
+      // Director still supplies small and pose animations between appointments,
+      // otherwise Corvin collapses into one endless huntwatch loop.
       if (
         !isCorvin() ||
         gagActive ||
@@ -2955,13 +3063,18 @@ function corvinIdleTick() {
         wandering ||
         away ||
         returning ||
-        gamingActive() ||
+        requiemPendingNow() ||
         quietNow()
       ) {
         // Re-arm OURSELVES: relying on the next setState("idle") left the
         // chain dead for hours when a quiet hour / game tail expired with no
         // scene running to call it (hard review). clearTimeout in the arming
         // makes the double-arm case safe.
+        corvinIdleTick();
+        return;
+      }
+      if (gamingActive()) {
+        if (!committed() && !huntBeatDueSoon()) runCorvinClock(false);
         corvinIdleTick();
         return;
       }
@@ -3030,10 +3143,10 @@ let lastDanteSpin = 0; // 0 = unarmed until a game session starts
 let lastDanteCoin = 0;
 let lastDantePizza = 0;
 let lastDanteShrug = BOOT_AT;
-function armDanteClocks() {
-  lastDanteSpin = Date.now() - 20 * 60_000 + 6 * 60_000; // -> first spin at 6:00
-  lastDanteCoin = Date.now() - DANTE_COIN_EVERY + 12 * 60_000; // -> coin at 12:00
-  lastDantePizza = Date.now() - DANTE_PIZZA_EVERY + 18 * 60_000; // -> pizza at 18:00
+function armDanteClocks(startedAt = Date.now()) {
+  lastDanteSpin = startedAt - 20 * 60_000 + 6 * 60_000; // -> first spin at 6:00
+  lastDanteCoin = startedAt - DANTE_COIN_EVERY + 12 * 60_000; // -> coin at 12:00
+  lastDantePizza = startedAt - DANTE_PIZZA_EVERY + 18 * 60_000; // -> pizza at 18:00
   dbg("dante clocks armed: spin@6m, coin@12m, pizza@18m");
 }
 function scheduleDanteBeats() {
@@ -3050,18 +3163,21 @@ function scheduleDanteBeats() {
     }
     if (lastDantePizza && now - lastDantePizza > DANTE_PIZZA_EVERY) {
       lastDantePizza = now;
+      saveGamingClocks();
       dbg("dante beat: pizza (game 18:00 + 60m clock)");
       demoSeated(PIZZA, "Finally.");
       return;
     }
     if (lastDanteCoin && now - lastDanteCoin > DANTE_COIN_EVERY) {
       lastDanteCoin = now;
+      saveGamingClocks();
       dbg("dante beat: coinflip (game 12:00 + 25m clock)");
       void coinFlourish();
       return;
     }
     if (lastDanteSpin && now - lastDanteSpin > 20 * 60_000) {
       lastDanteSpin = now;
+      saveGamingClocks();
       dbg("dante beat: swordspin (game 6:00 + 20min clock)");
       void demoSpin();
       return;
@@ -3125,7 +3241,7 @@ async function gamingSpecial() {
 
 // Big gaming moments on fixed 10-min cadences: Devil Trigger at 3:00 into the
 // session, sword move at 7:00 (clocks armed in the "gaming" handler), then
-// every 10 min each. Checked every 20 s so beats land near their exact mark.
+// every 10 min each. Checked every 5 s so beats land near their exact mark.
 const GAMING_SWORD_EVERY = 10 * 60 * 1000;
 const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
 // The Breach joins the hunt on its own 10-minute clock (user-directed), first
@@ -3151,8 +3267,16 @@ const HUNT_CLOCKS: Array<{
   { name: "breach", firstAt: 10, every: 10 * 60_000, last: 0, run: () => breachScene() },
   // The DOOR joins the hunt at 15:00 into the session (user-directed) and
   // returns each half hour; the 4h guard inside the scene keeps it special.
-  { name: "door", firstAt: 15, every: 30 * 60_000, last: 0, run: () => doorFightScene() },
+  { name: "door", firstAt: 15, every: 30 * 60_000, last: 0, run: () => doorFightScene(true) },
 ];
+const HARD_BEAT_RESERVE_MS = 45_000;
+
+function huntBeatDueSoon(withinMs = HARD_BEAT_RESERVE_MS, now = Date.now()) {
+  return (
+    isCorvin() &&
+    HUNT_CLOCKS.some((clock) => clock.last > 0 && clock.last + clock.every - now <= withinMs)
+  );
+}
 
 // ---- The day's hour table (user-directed) ----------------------------------
 // Everything that isn't a hunt beat gets a fixed hour instead. One firing per
@@ -3183,10 +3307,82 @@ const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   // director's lottery once in a blue moon and nobody ever sees it
   { h: 23, name: "flask", run: () => void corvinScene(() => playCorvin(CORVIN.flask)) },
 ];
-function armHuntClocks() {
-  const now = Date.now();
-  for (const c of HUNT_CLOCKS) c.last = now - c.every + c.firstAt * 60_000;
+function armHuntClocks(startedAt = Date.now()) {
+  for (const c of HUNT_CLOCKS) c.last = startedAt - c.every + c.firstAt * 60_000;
   dbg(`hunt clocks armed: ${HUNT_CLOCKS.map((c) => `${c.name}@${c.firstAt}:00`).join(", ")}`);
+}
+
+function scheduledClockOnResume(
+  startedAt: number,
+  firstAtMinutes: number,
+  every: number,
+  now: number,
+  saved: number,
+) {
+  // An armed first appointment deliberately stores a timestamp before the
+  // session start (`start - cadence + firstAt`). Preserve that value: if ECHO
+  // restarts after the appointment, the overdue hard beat must still run.
+  if (saved >= startedAt - every && saved <= now) return saved;
+  const firstDue = startedAt + firstAtMinutes * 60_000;
+  if (now < firstDue) return startedAt - every + firstAtMinutes * 60_000;
+  // No saved per-beat state means this is the first build with persistence.
+  // Treat appointments before the restart as consumed instead of replaying a
+  // burst of 3/7/10-minute fights immediately on boot.
+  return firstDue + Math.floor((now - firstDue) / every) * every;
+}
+
+function restoreGamingClocks(startedAt: number, now: number) {
+  let saved: Record<string, number> = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(GAME_SESSION_CLOCKS_KEY) || "{}");
+  } catch {
+    /* repaired below from the session timeline */
+  }
+  for (const c of HUNT_CLOCKS) {
+    c.last = scheduledClockOnResume(startedAt, c.firstAt, c.every, now, Number(saved[c.name] || 0));
+  }
+  lastGamingDevil = scheduledClockOnResume(
+    startedAt,
+    3,
+    GAMING_DEVIL_EVERY,
+    now,
+    Number(saved.danteDevil || 0),
+  );
+  lastGamingSword = scheduledClockOnResume(
+    startedAt,
+    7,
+    GAMING_SWORD_EVERY,
+    now,
+    Number(saved.danteSword || 0),
+  );
+  lastDanteSpin = scheduledClockOnResume(startedAt, 6, 20 * 60_000, now, Number(saved.danteSpin || 0));
+  lastDanteCoin = scheduledClockOnResume(
+    startedAt,
+    12,
+    DANTE_COIN_EVERY,
+    now,
+    Number(saved.danteCoin || 0),
+  );
+  lastDantePizza = scheduledClockOnResume(
+    startedAt,
+    18,
+    DANTE_PIZZA_EVERY,
+    now,
+    Number(saved.dantePizza || 0),
+  );
+  dbg(`game clocks restored at ${Math.floor((now - startedAt) / 60_000)}m`);
+}
+
+function saveGamingClocks() {
+  const clocks: Record<string, number> = {
+    danteDevil: lastGamingDevil,
+    danteSword: lastGamingSword,
+    danteSpin: lastDanteSpin,
+    danteCoin: lastDanteCoin,
+    dantePizza: lastDantePizza,
+  };
+  for (const c of HUNT_CLOCKS) clocks[c.name] = c.last;
+  localStorage.setItem(GAME_SESSION_CLOCKS_KEY, JSON.stringify(clocks));
 }
 let nextGamingAmbience = 0;
 
@@ -3195,7 +3391,8 @@ function scheduleGamingBeat() {
   window.setTimeout(async () => {
     try {
       const now = Date.now();
-      if (gamingActive() && beatReady()) {
+      if (!gamingActive()) clearGamingSession();
+      if (gamingActive() && beatReady() && !requiemPendingNow()) {
         // Corvin's hunt runs off the clock TABLE below, so every move he owns
         // gets its own minute mark inside a session (user-directed: "all
         // animations on time in Steam"). Most-overdue wins when two are due.
@@ -3204,14 +3401,19 @@ function scheduleGamingBeat() {
               (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
             )
           : [];
-        if (due.length && sceneAllowed()) {
-          const c = due[0];
+        // The 15:00 Door is a fixed appointment, not an ambient suggestion.
+        // It wins over another overdue hunt beat and bypasses the generic
+        // three-minute scene gap; beatReady() above still prevents overlap.
+        const c = due.find((clock) => clock.name === "door") ?? due[0];
+        if (c) {
           c.last = now;
+          saveGamingClocks();
           markScene();
           dbg(`hunt ${c.name} (${c.firstAt}:00 + ${Math.round(c.every / 60_000)}m)`);
           await c.run();
         } else if (!isCorvin() && lastGamingDevil > 0 && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
           lastGamingDevil = now;
+          saveGamingClocks();
           markScene();
           dbg("gaming devil trigger (3:00 + 10min cadence)");
           devilTriggerScene();
@@ -3223,6 +3425,7 @@ function scheduleGamingBeat() {
           sceneAllowed()
         ) {
           lastGamingSword = now;
+          saveGamingClocks();
           markScene();
           dbg("gaming sword move (7:00 + 10min cadence)");
           await demoSword();
@@ -3235,11 +3438,15 @@ function scheduleGamingBeat() {
           lastGamingSpecial = now;
           dbg("gaming special (hourly)");
           await gamingSpecial();
-        } else if (now > nextGamingAmbience) {
-          // Small flourishes keep their own loose ~1.5-3.5 min rhythm so the
-          // 20 s cadence tick doesn't spam them.
+        } else if (now > nextGamingAmbience && !huntBeatDueSoon(HARD_BEAT_RESERVE_MS, now)) {
+          // Small flourishes keep their own loose ~1.5-3.5 min rhythm. Most are
+          // chosen by the learned Director; the old huntwatch remains only a
+          // rare quiet beat instead of becoming the whole gaming personality.
           nextGamingAmbience = now + 90_000 + Math.random() * 120_000;
-          if (isCorvin()) await huntwatchPass();
+          if (isCorvin()) {
+            if (Math.random() < 0.2) await huntwatchPass();
+            else runCorvinClock(false);
+          }
           else await gamingAmbience();
         }
       } else if (gamingActive() && now - lastBeatSkipLog > 60_000) {
@@ -3257,7 +3464,7 @@ function scheduleGamingBeat() {
     // The chain must survive a throwing beat — a dead timer means no sword
     // for the rest of the session.
     scheduleGamingBeat();
-  }, 20_000);
+  }, 5_000);
 }
 
 // M3 blink: closed-eye variants of the held idle frames (hand-pixel-edited,
@@ -4706,8 +4913,9 @@ async function dantePoseScene(c: Clip, holdMs: number) {
 // Corvin's Door scene: the monitor's right edge opens and one monstrous arm
 // reaches through. Corvin retreats, blocks, and drives it back with his own arm.
 async function doorFightScene(force = false) {
-  // The scheduled paths (hunt clock, 19:00 slot, director) share one rule:
-  // the Door opens at most once every 4 hours. The demo word bypasses it.
+  // Daily/director paths share the 4-hour rule. The demo word and Steam's hard
+  // 15-minute appointment pass force=true so a previous QA/daily fight cannot
+  // silently consume the session beat.
   if (!force && Date.now() - (story.s.gags.lastDoorAt ?? 0) < 4 * 3_600_000) return;
   await corvinScene(async () => {
     // THE DOOR, single-arm cut (user-directed): a slow epic opening, ONE

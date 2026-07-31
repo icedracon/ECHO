@@ -17,6 +17,8 @@
 - Corvin Door scene chain: sense, backstep, parry, sword plant, arm raise, octopus grip, calm and sword return.
 - New Door assets: demon hand, hand emergence, burst FX and tendril FX.
 - Dante has a separate learned director for his own ambient repertoire.
+- Automatic shared-screen watch mode for Dante and Corvin when video or music is open.
+- New seated turn and quiet watch-loop animations for both characters.
 
 ### Changed
 
@@ -38,9 +40,22 @@
 - The Door's demon arm stays rooted behind the screen edge during emergence, lunge and pushback.
 - Release versions are aligned across `package.json`, `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
 - Package lock was cleaned of unused Three.js/Rapier-era dependencies.
+- Media detection now keeps one serialized watch session alive with heartbeats instead of repeating poster or guitar scenes.
+- Games outrank media mode and make the companion leave the watch pose through its proper reverse animation.
 
 ### Fixed
 
+- Steam's 15-minute Door fight no longer resets when returning to a fullscreen game after Alt+Tab.
+- Active game-session clocks survive quick ECHO restarts and resume from their original minute.
+- Individual hunt appointments persist too, preventing old 3/7/10-minute fights from replaying as a burst after restart.
+- An overdue persisted fight now waits for the first free scene after restart instead of being marked as consumed.
+- The fixed Steam Door appointment now bypasses the four-hour daily-scene cooldown and generic scene gap.
+- Corvin's learned Director now continues choosing small and pose animations between fixed Steam fights.
+- Repeated Steam/DNS gaming signals no longer replay the opening scan or consume the hunt scene gap.
+- Huntwatch is now a rare gaming ambience instead of Corvin's dominant repeated animation.
+- The 3/7/10/15-minute Corvin hunt beats are mandatory once their appointment is due.
+- The 23:40 Requiem now explicitly outranks both Steam appointments and Director choices.
+- Corvin now reserves the stage for 45 seconds before fixed Steam fights and checks their clocks every 5 seconds.
 - Corvin's chapter titles now ship in the same local neural voice as every story line.
 - Story bubbles remain visible until Corvin finishes speaking and no longer add a generic voice blip over his real voice.
 - Voice timeout cleanup now stops the active source, preventing a late line from overlapping the next one.

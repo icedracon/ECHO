@@ -104,15 +104,58 @@ function stringSet(source, name) {
 }
 
 const context = read("src-tauri/src/context.rs");
+check(
+  context.includes("fullscreen_game && !had_fullscreen && !steam_game"),
+  "Steam fullscreen focus must not emit a second game_start",
+);
+check(
+  main.includes('{ name: "door", firstAt: 15') && main.includes("run: () => doorFightScene(true)"),
+  "Steam Door must remain a forced 15-minute appointment",
+);
+check(
+  main.includes("GAME_SESSION_START_KEY") &&
+    main.includes("GAME_SESSION_RESUME_GAP") &&
+    main.includes("GAME_SESSION_CLOCKS_KEY"),
+  "Game-session clocks must persist across quick ECHO restarts",
+);
+check(
+  main.includes("saved >= startedAt - every && saved <= now"),
+  "Armed and overdue game appointments must survive an ECHO restart",
+);
+check(
+  main.includes("if (gamingActive()) {") && main.includes("runCorvinClock(false)"),
+  "Corvin's small/pose Director must stay active during gaming",
+);
+check(
+  main.includes("gaming edge folded into active session"),
+  "Repeated gaming edges must not consume fixed hunt timing",
+);
+check(
+  main.includes("function requiemPendingNow(") &&
+    main.includes("gamingActive() && beatReady() && !requiemPendingNow()"),
+  "23:40 Requiem must outrank Steam and the Director",
+);
+check(
+  main.includes("const HARD_BEAT_RESERVE_MS = 45_000") &&
+    main.includes("!committed() && !huntBeatDueSoon()") &&
+    main.includes("!huntBeatDueSoon(HARD_BEAT_RESERVE_MS, now)") &&
+    main.includes("}, 5_000);"),
+  "Corvin's fixed hunt beats must reserve the stage and poll on a hard clock",
+);
 const backendDemos = new Set([...context.matchAll(/=>\s*"(demo_[a-z_]+)"/g)].map((match) => match[1]));
 const handledDemos = new Set([...main.matchAll(/kind\s*===\s*"(demo_[a-z_]+)"/g)].map((match) => match[1]));
 const danteDemos = stringSet(main, "DANTE_DEMOS");
 const corvinDemos = stringSet(main, "CORVIN_DEMOS");
+const sharedDemos = new Set(["demo_watch"]);
 for (const demo of backendDemos) {
   check(handledDemos.has(demo), `Backend trigger ${demo} has no frontend handler`);
   if (demo === "demo_be_corvin" || demo === "demo_be_dante") continue;
   const owners = Number(danteDemos.has(demo)) + Number(corvinDemos.has(demo));
-  check(owners === 1, `${demo}: expected exactly one character owner, found ${owners}`);
+  if (sharedDemos.has(demo)) {
+    check(owners === 0, `${demo}: shared trigger must preserve the active character`);
+  } else {
+    check(owners === 1, `${demo}: expected exactly one character owner, found ${owners}`);
+  }
 }
 
 const tray = read("src-tauri/src/lib.rs");
@@ -125,7 +168,7 @@ for (const event of trayEvents) {
 }
 
 const { ACTIONS, DANTE_ACTIONS } = loadTsModule("src/director.ts");
-const directorStart = main.indexOf("function runCorvinClock()");
+const directorStart = main.indexOf("function runCorvinClock(");
 const directorEnd = main.indexOf("function runDanteClock()", directorStart);
 const directorBody = directorStart >= 0 && directorEnd > directorStart
   ? main.slice(directorStart, directorEnd)

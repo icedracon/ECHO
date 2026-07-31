@@ -105,8 +105,13 @@ Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.
 | Trigger | What | Clips | Knob |
 |---|---|---|---|
 | **You type** (Win32 keys) | laptop OUT once → typing loop while you type → laptop AWAY (reversed) | `typing` (one-shot) → `typetap` (4-frame loop) | session extend 9 s/keystroke, `typingUntil` |
-| **Video/music opens** | poster + song + dance | `dance`/`headbang` | 15 s, then every 10 min while media stays open |
-| **Game launches** | 3-shot burst + playful mood | `shoot` | Devil 3 min, spin 6, sword 7, coin 12, pizza 18 |
+| **Video/music opens** | sits and turns toward the monitor centre; exact reverse on close | `d_watchturn` → `d_watchloop`, or `sit` → `c_watchturn` → `c_watchloop` | Dante in 2.99 s; Corvin in 3.76 s; 10 s heartbeat |
+| **Game launches** | persistent session clock; Alt+Tab does not reset it; Director keeps small/pose variety between fights | `shoot` / Corvin hunt table + learned Director | Unchained 3, cleave 7, breach 10, Door 15; Dante spin 6, sword 7, coin 12, pizza 18 |
+
+Hard priority order for Corvin: **23:40 Requiem** → a currently finishing clip →
+fixed Steam fights at 3/7/10/15 minutes → small/pose Director choices. Director
+reserves the stage for 45 seconds before a fixed fight, and the hunt clock is checked
+every 5 seconds. Director never replaces or reschedules a hard appointment.
 
 ## I. Position on the taskbar
 | Knob | Value | Effect | Line |
@@ -139,6 +144,8 @@ Demo reel: `echo corvin > ~/.echo/demo` plays the full showcase.
 | Walk-in | `walkin` | 9 | 1020/pass | over-shoulder sword carry |
 | Walk-out | `walkout` | 9 | 1020/pass | knight back-carry, mirror for exit |
 | Sit | `sit` | 9 | 1800 | sword across knees, settle=8 |
+| Media turn | `c_watchturn` | 6 | 1960 | seated turn toward monitor centre; reversed on exit |
+| Media watch | `c_watchloop` | 9 | 3780/pass | quiet breathing, sword stays across knees |
 | Bow | `bow` | 9 | 2030 | knightly, back bends 25–30° |
 | Meditate | `meditate` | 9 | 2920/pass | seated, loops |
 | Aura rise | `aurarise` | 9 | 1610 | FULL flare: pool -> engulf |

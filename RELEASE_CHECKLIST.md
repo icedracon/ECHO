@@ -29,6 +29,7 @@ Use this before publishing a GitHub release.
    Set-Content "$env:USERPROFILE\.echo\demo" "door"
    Set-Content "$env:USERPROFILE\.echo\demo" "dante"
    Set-Content "$env:USERPROFILE\.echo\demo" "devil"
+   Set-Content "$env:USERPROFILE\.echo\demo" "watch"
    ```
 
 5. Visual checks:
@@ -47,6 +48,19 @@ Use this before publishing a GitHub release.
    - a QA demo trigger for the other character switches packs first and starts at frame 0;
    - Corvin's story text remains visible until the spoken line ends;
    - Corvin's chapter title and first line use the same voice at 1.5x speed without overlap.
+   - opening supported video/music makes the active character sit and face the monitor centre without a menu command;
+   - Dante's watch turn keeps him seated and returns through the exact reverse frames;
+   - Corvin keeps the sword across his knees and Artsiv visible throughout the watch loop;
+   - closing media exits watch mode cleanly, while launching a game interrupts it with higher priority.
+   - Alt+Tab away from and back into a Steam game does not restart the 3/7/10/15-minute session clocks;
+   - restarting ECHO while the same game remains active resumes the session clock;
+   - restarting after a fight's due time queues that overdue fight instead of silently consuming it;
+   - Corvin's Door fight starts at the 15-minute Steam appointment even if a daily/demo Door ran within four hours.
+   - during Steam, Director logs and displays varied small/pose animations between fixed fights;
+   - no Director pose or huntwatch starts in the 45 seconds before Corvin's 3/7/10/15-minute fights;
+   - repeated `gaming` signals do not replay `magicscan` or postpone unchained/cleave/breach/Door;
+   - `huntwatch` appears only occasionally and never becomes the sole gaming loop.
+   - at 23:40, Requiem blocks new Director/Steam beats until the ritual starts, then plays once in full.
 
 ## GitHub release
 

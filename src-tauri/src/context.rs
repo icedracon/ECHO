@@ -266,6 +266,7 @@ fn spawn_typing(app: AppHandle) {
                             "flask" => "demo_flask",
                             "door" => "demo_door",
                             "form" => "demo_form",
+                            "watch" => "demo_watch",
                             _ => "",
                         };
                         if !kind.is_empty() {
@@ -619,14 +620,16 @@ fn spawn_dns(app: AppHandle) {
             // games; its 0->N edge is a real game launch -> shoot burst.
             // Fullscreen counts as gaming judged by TITLES only — background
             // music via SMTC must not cancel the gaming mood mid-match.
+            let steam_game = steam_running_app();
             let fullscreen_game = foreground_fullscreen() && !media_titles;
-            if fullscreen_game && !had_fullscreen {
+            if fullscreen_game && !had_fullscreen && !steam_game {
                 clog("fullscreen foreground -> gaming mood");
-                // A fullscreen flip is a real game starting (non-Steam path).
+                // A fullscreen flip is a launch edge only for non-Steam games.
+                // While Steam's RunningAppID is set, Alt+Tab back into the game
+                // must not restart every fixed session clock.
                 let _ = app.emit("context-event", ContextEvent { kind: "game_start" });
             }
             had_fullscreen = fullscreen_game;
-            let steam_game = steam_running_app();
             if steam_game && !had_steam_game {
                 clog("steam RunningAppID set -> game session");
                 fire_game = true;

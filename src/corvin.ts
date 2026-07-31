@@ -28,6 +28,10 @@ export const CORVIN = {
   walkin: cc("walkin", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   walkout: cc("walkout", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   sit: cc("sit", 9, 190, false, 8, [140, 150, 160, 175, 190, 205, 220, 240, 320]),
+  // Media watch: sit with the sword across his lap, turn toward the monitor,
+  // then hold a quiet breathing loop. The turn is reversed exactly on exit.
+  watchturn: cc("c_watchturn", 6, 280, false, 5, [260, 260, 280, 300, 340, 520]),
+  watchloop: cc("c_watchloop", 9, 420, true),
   bow: cc("bow", 9, 200, false, 8, [180, 190, 210, 240, 420, 240, 210, 190, 200]),
   meditate: cc("meditate", 9, 320, true, 0, [300, 320, 340, 360, 380, 360, 340, 320, 300]),
   // shadow aura (the FULL flare, three stitched stages)
