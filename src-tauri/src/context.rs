@@ -332,7 +332,7 @@ fn classify(domain: &str) -> Option<&'static str> {
 // Window TITLES do ("... - YouTube - Google Chrome"), so we read those too.
 const MEDIA_TITLES: &[&str] = &[
     "youtube", "spotify", "twitch", "netflix", "soundcloud", "vk видео", "vk video",
-    "кинопоиск", "rutube",
+    "кинопоиск", "rutube", "vlc", "mpv", "iina", "rhythmbox", "celluloid",
 ];
 const GAME_TITLES: &[&str] = &["steam", "epic games", "battle.net", "riot client"];
 
@@ -486,7 +486,59 @@ fn media_session_playing() -> bool {
     .unwrap_or(false)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn media_session_playing() -> bool {
+    // Most Linux browsers and players expose MPRIS. `playerctl` is the cleanest
+    // reader when installed; gdbus is the dependency-free fallback available
+    // on the GTK desktops required by Tauri.
+    let playerctl = command_stdout("playerctl", &["--all-players", "status"]);
+    if playerctl.lines().any(|line| line.trim().eq_ignore_ascii_case("playing")) {
+        return true;
+    }
+
+    let names = command_stdout(
+        "gdbus",
+        &[
+            "call", "--session", "--dest", "org.freedesktop.DBus",
+            "--object-path", "/org/freedesktop/DBus", "--method",
+            "org.freedesktop.DBus.ListNames",
+        ],
+    );
+    for name in names.split(|c: char| !(c.is_ascii_alphanumeric() || "._-".contains(c))) {
+        if !name.starts_with("org.mpris.MediaPlayer2.") {
+            continue;
+        }
+        let status = command_stdout(
+            "gdbus",
+            &[
+                "call", "--session", "--dest", name,
+                "--object-path", "/org/mpris/MediaPlayer2", "--method",
+                "org.freedesktop.DBus.Properties.Get",
+                "org.mpris.MediaPlayer2.Player", "PlaybackStatus",
+            ],
+        );
+        if status.contains("Playing") {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn media_session_playing() -> bool {
+    const SCRIPT: &str = r#"
+if application "Spotify" is running then
+  tell application "Spotify" to if player state is playing then return "playing"
+end if
+if application "Music" is running then
+  tell application "Music" to if player state is playing then return "playing"
+end if
+return "stopped"
+"#;
+    command_stdout("osascript", &["-e", SCRIPT]).trim() == "playing"
+}
+
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
 fn media_session_playing() -> bool {
     false
 }
@@ -552,8 +604,87 @@ fn window_titles() -> Vec<String> {
 }
 
 #[cfg(not(windows))]
+fn command_stdout(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn native_media_processes() -> Vec<String> {
+    const PLAYERS: &[&str] = &[
+        "spotify", "vlc", "mpv", "iina", "rhythmbox", "totem", "celluloid",
+    ];
+    command_stdout("ps", &["-Ao", "comm=,args="])
+        .lines()
+        .map(str::to_lowercase)
+        .filter(|line| PLAYERS.iter().any(|player| line.contains(player)))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
 fn window_titles() -> Vec<String> {
-    Vec::new()
+    let mut titles: Vec<String> = command_stdout("wmctrl", &["-l"])
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next()?; // window id
+            fields.next()?; // desktop
+            fields.next()?; // host
+            let title = fields.collect::<Vec<_>>().join(" ").to_lowercase();
+            (!title.is_empty()).then_some(title)
+        })
+        .collect();
+
+    // `wmctrl` is optional. xdotool is common on X11 and gives the same signal;
+    // MPRIS above covers Wayland playback where global title enumeration is
+    // intentionally restricted.
+    if titles.is_empty() {
+        for id in command_stdout("xdotool", &["search", "--onlyvisible", "--name", "."]).lines() {
+            let title = command_stdout("xdotool", &["getwindowname", id]);
+            if !title.trim().is_empty() {
+                titles.push(title.trim().to_lowercase());
+            }
+        }
+    }
+    titles.extend(native_media_processes());
+    titles
+}
+
+#[cfg(target_os = "macos")]
+fn window_titles() -> Vec<String> {
+    // System Events returns visible window captions (including browser tabs).
+    // If macOS privacy hides captions, native player process names still keep
+    // Spotify/VLC/IINA sessions observable without network access.
+    const SCRIPT: &str = r#"
+tell application "System Events"
+  set names to {}
+  repeat with p in (application processes whose visible is true)
+    try
+      repeat with w in windows of p
+        set end of names to name of w
+      end repeat
+    end try
+  end repeat
+  return names
+end tell
+"#;
+    let mut titles: Vec<String> = command_stdout("osascript", &["-e", SCRIPT])
+        .split(',')
+        .map(|title| title.trim().to_lowercase())
+        .filter(|title| !title.is_empty())
+        .collect();
+    titles.extend(native_media_processes());
+    titles
+}
+
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
+fn window_titles() -> Vec<String> {
+    native_media_processes()
 }
 
 fn spawn_dns(app: AppHandle) {

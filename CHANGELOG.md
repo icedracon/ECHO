@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 - 2026-08-01
+## 0.2.2 - 2026-08-01
 
 ### Added
 
@@ -41,6 +41,7 @@
 - Release versions are aligned across `package.json`, `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
 - Package lock was cleaned of unused Three.js/Rapier-era dependencies.
 - Media detection now keeps one serialized watch session alive with heartbeats instead of repeating poster or guitar scenes.
+- Linux media playback is detected through MPRIS/D-Bus with X11 title fallbacks; macOS uses local window/player state.
 - Games outrank media mode and make the companion leave the watch pose through its proper reverse animation.
 
 ### Fixed

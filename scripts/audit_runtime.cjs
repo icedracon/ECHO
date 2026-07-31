@@ -109,6 +109,14 @@ check(
   "Steam fullscreen focus must not emit a second game_start",
 );
 check(
+  context.includes('#[cfg(target_os = "linux")]\nfn media_session_playing()') &&
+    context.includes('command_stdout("playerctl"') &&
+    context.includes('org.mpris.MediaPlayer2.') &&
+    context.includes('#[cfg(target_os = "macos")]\nfn media_session_playing()') &&
+    context.includes('command_stdout("osascript"'),
+  "Linux and macOS must emit real media heartbeats for shared-screen watch mode",
+);
+check(
   main.includes('{ name: "door", firstAt: 15') && main.includes("run: () => doorFightScene(true)"),
   "Steam Door must remain a forced 15-minute appointment",
 );
