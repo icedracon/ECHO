@@ -70,7 +70,7 @@ Manual release:
 
 1. Open GitHub Actions.
 2. Run **Build Release**.
-3. Use tag `v0.2.0`.
+3. Use tag `v0.2.1`.
 4. Confirm the release contains only the friendly downloads below, without duplicate technical filenames:
 
    - `ECHO-Windows-Setup.exe`;
@@ -89,8 +89,8 @@ Manual release:
 Tag release:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 ## Notes

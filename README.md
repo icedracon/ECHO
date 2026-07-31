@@ -135,7 +135,7 @@ npm run verify   # кадры, тайминги, триггеры, голос, R
 
 ### Релиз
 
-Workflow `.github/workflows/build-unix.yml` собирает Windows (Setup/MSI/Portable/Corvin/Dante), Linux (AppImage/deb/rpm) и macOS (два .dmg). Запуск: GitHub Actions → **Build Release** → tag `v0.2.0`, или пушем тега `v*`. Перед публикацией — `CHANGELOG.md` и `RELEASE_CHECKLIST.md`.
+Workflow `.github/workflows/build-unix.yml` собирает Windows (Setup/MSI/Portable/Corvin/Dante), Linux (AppImage/deb/rpm) и macOS (два .dmg). Запуск: GitHub Actions → **Build Release** → tag `v0.2.1`, или пушем тега `v*`. Перед публикацией — `CHANGELOG.md` и `RELEASE_CHECKLIST.md`.
 
 </details>
 
