@@ -1,5 +1,19 @@
 # ECHO — Session Handoff (2026-07-26)
 
+## Handoff 2026-07-31 — v0.2 release polish
+
+- Version aligned to `0.2.0` in `package.json`, `package-lock.json`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src-tauri/tauri.conf.json`.
+- Release workflow now builds Windows, Linux and macOS, including Fedora-friendly
+  rpm, deb, AppImage, macOS arm64/x64 app/dmg, Windows MSI/setup and portable
+  aliases: `ECHO-windows-portable.exe`, `Echo-Corvin.exe`, `Echo-Dante.exe`.
+- README, changelog and release checklist are updated for the two-character
+  ECHO build.
+- Door scene visual/physics pass: regenerated `c_backstep`, footfall-based
+  `stepWindowX()`, slower hand emergence, capped lunge and raised-arm tendril
+  origin.
+- Verification command: `npm run verify`.
+
 Read this + `DESIGN.md` (architecture/plan) + `MOVES.md` (every move & its knob)
 before changing behaviour.
 

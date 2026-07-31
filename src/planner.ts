@@ -69,7 +69,9 @@ function coffeeGate(): number {
 // Naps only really happen when he's genuinely low / it's night.
 function napGate(l: Life): number {
   const hr = new Date().getHours();
-  const night = hr >= 1 && hr < 6 ? 1.6 : hr >= 22 ? 1.2 : 0.4;
+  // hour 0 belongs to the night too — it used to fall into the 0.4 "day"
+  // branch, suppressing naps exactly when energy bottoms out
+  const night = hr >= 1 && hr < 6 ? 1.6 : hr >= 22 || hr === 0 ? 1.2 : 0.4;
   return l.v.energy < 0.4 ? night : 0.15;
 }
 

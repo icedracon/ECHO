@@ -1,4 +1,8 @@
-# Dante Desktop Companion — Scene Design
+# ECHO Desktop Companion — Scene Design
+
+> Current v0.2.0 note: this older scene plan started with Dante. The shipped app
+> now includes Dante and Corvin. Corvin-specific choreography lives mostly in
+> `src/corvin.ts` and the Corvin scene blocks in `src/main.ts`.
 
 Dante lives on the taskbar and reacts to your Claude Code session. Two layers:
 **ambient** (subtle, state-driven) and **signature scenes** (short cinematic gags
@@ -9,6 +13,7 @@ Choreography primitives (window moves, already built or trivial):
 - `moveY` — sit down / stand up (raise/lower window) ✓
 - `diveY` — slide the window DOWN off the bottom (dive under the panel) ← new
 - glow/flash — CSS aura overlay ← trivial
+- `stepWindowX` — footfall-based retreat used by Corvin's Door backstep ✓
 
 ---
 

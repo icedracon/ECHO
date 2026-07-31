@@ -27,11 +27,16 @@ fn clog(msg: &str) {
     let Some(home) = dirs::home_dir() else { return };
     let dir = home.join(".echo");
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("echo.log"))
-    {
+    let path = dir.join("echo.log");
+    // Rotate here too: for users who never run Claude Code the watcher's
+    // rotation never fires, and the 6-second typing heartbeats alone would
+    // grow the file forever.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 256 * 1024 {
+            let _ = std::fs::rename(&path, dir.join("echo.log.1"));
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         use std::io::Write;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -196,7 +201,7 @@ fn spawn_typing(app: AppHandle) {
             }
             // M1.5: cursor proximity -> glance events, zone-crossings only.
             if ticks % 4 == 0 {
-                let z = cursor_zone(last_zone != 0);
+                let z = cursor_zone(last_zone);
                 if z != last_zone {
                     last_zone = z;
                     let kind = match z {
@@ -213,6 +218,13 @@ fn spawn_typing(app: AppHandle) {
                 if let Some(home) = dirs::home_dir() {
                     let p = home.join(".echo").join("demo");
                     if let Ok(s) = std::fs::read_to_string(&p) {
+                        // Shell `echo word > demo` is create-then-write: the
+                        // poll can land between the two and read "". Deleting
+                        // then would eat the word before it was written — only
+                        // consume the file once there is content in it.
+                        if s.trim().is_empty() {
+                            continue;
+                        }
                         let _ = std::fs::remove_file(&p);
                         let kind = match s.trim() {
                             "devil" => "demo_devil",
@@ -253,7 +265,6 @@ fn spawn_typing(app: AppHandle) {
                             "stone" => "demo_stone",
                             "flask" => "demo_flask",
                             "door" => "demo_door",
-                            "boss" => "demo_boss",
                             "form" => "demo_form",
                             _ => "",
                         };
@@ -345,7 +356,7 @@ extern "system" {
 /// "Him" is approximated as the bottom-right screen corner (his home spot).
 /// Hysteresis so the boundary never chatters.
 #[cfg(windows)]
-fn cursor_zone(was_near: bool) -> u8 {
+fn cursor_zone(last: u8) -> u8 {
     unsafe {
         let mut pt = [0i32; 2];
         if GetCursorPos(&mut pt) == 0 {
@@ -358,9 +369,13 @@ fn cursor_zone(was_near: bool) -> u8 {
         let dx = (pt[0] - hx) as f64;
         let dy = (pt[1] - hy) as f64;
         let dist = (dx * dx + dy * dy).sqrt();
-        let limit = if was_near { 470.0 } else { 390.0 };
+        let limit = if last != 0 { 470.0 } else { 390.0 };
         if dist > limit {
             0
+        } else if last != 0 && (pt[0] - hx).abs() < 24 {
+            // dead band astride the split: hovering at x ~ hx used to flip
+            // left/right every poll and made him twitch his head
+            last
         } else if pt[0] < hx {
             1
         } else {
@@ -370,7 +385,7 @@ fn cursor_zone(was_near: bool) -> u8 {
 }
 
 #[cfg(not(windows))]
-fn cursor_zone(_was_near: bool) -> u8 {
+fn cursor_zone(_last: u8) -> u8 {
     0
 }
 
@@ -545,18 +560,14 @@ fn spawn_dns(app: AppHandle) {
         // Seed with what's already there so we only react to NEW activity
         // (Steam already running at launch shouldn't trigger a shoot).
         let mut seen = read_dns();
-        let mut had_media = false;
-        let mut had_game = false;
+        let titles = window_titles();
+        let mut had_media = titles.iter().any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
+        let mut had_game = titles.iter().any(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
         let mut had_fullscreen = false;
         let mut had_steam_game = false;
         let mut had_battery = false;
         let mut last_media = ago(600);
         let mut last_game = ago(600);
-        {
-            let titles = window_titles();
-            had_media = titles.iter().any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
-            had_game = titles.iter().any(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
-        }
         loop {
             std::thread::sleep(Duration::from_secs(10));
             let mut fire_media = false;

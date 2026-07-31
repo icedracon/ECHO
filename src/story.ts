@@ -74,6 +74,19 @@ export class Story {
     } catch {
       /* fresh story */
     }
+    // There is no clean shutdown hook, so a truncated/hand-edited story.json
+    // must not brick the pipeline: repair every field whose shape we rely on.
+    const s = this.s as unknown as Record<string, unknown>;
+    if (!Array.isArray(this.s.firsts)) this.s.firsts = [];
+    if (!Array.isArray(this.s.unlocks)) this.s.unlocks = [];
+    if (typeof s.days !== "object" || s.days === null || Array.isArray(s.days)) this.s.days = {};
+    if (typeof s.gags !== "object" || s.gags === null) this.s.gags = fresh().gags;
+    if (this.s.novel) {
+      const ch = Number(this.s.novel.ch);
+      this.s.novel.ch = Number.isInteger(ch) && ch >= 0 ? ch : 0;
+    }
+    if (this.s.tales && (typeof this.s.tales.ptr !== "object" || this.s.tales.ptr === null))
+      this.s.tales.ptr = {};
     if (!this.s.installedAt) this.s.installedAt = Date.now();
   }
 

@@ -3,6 +3,10 @@
 Everything Dante does right now, with the trigger, timing, position, sound, and
 the exact knob to change it. All in `src/main.ts` unless noted. Times in ms.
 
+> Current v0.2.0 note: this catalogue now covers ECHO's shared engine plus
+> Corvin. Dante sections are historical/current for the Dante pack; Corvin's
+> active clip catalogue is in `src/corvin.ts`.
+
 > This is the CURRENT behaviour. The autonomous "Life Model" (moods / free-will
 > urges) is designed in DESIGN.md §6b but **not built yet**.
 
@@ -151,3 +155,27 @@ Demo reel: `echo corvin > ~/.echo/demo` plays the full showcase.
 | Takeoff | `takeoff` | 9 | 1620 | ends: Corvin alone |
 | Landing | `landing` | 9 | 1720 | glide + brake, ends at base |
 | Artsiv solo | `artsivfly` | 10 | 1400/pass | 84x37 flying sprite, engine-driven |
+
+---
+
+## K. Corvin — Door chain (v0.2.0)
+
+The Door scene is triggered from the tray or by `door` / `breach` demo words.
+It is a synchronized two-window scene: Corvin's main window plays the chained
+sprite clips while the rift overlay at the right monitor edge renders the hand,
+sparks and tendrils.
+
+| Beat | Clip / system | Timing | Physics / visual rule |
+|---|---|---|---|
+| Sense | `c_doorsense` | 2260 | he turns and raises guard before movement |
+| Retreat | `c_backstep` + `stepWindowX()` | 2880 | window moves in short footfall bursts, not a glide |
+| Parry | `parry` | 750 | capped hand lunge meets the blade, burst FX fires |
+| Sword plant | `c_swordplant2` | 2330 | begins from pinned `c_backstep/frame_12` continuity |
+| Arm rise | `c_armup` | 2250 | cursed arm becomes the source point |
+| Octopus grip | `c_armoctopus` + overlay tendril | 2150 | tendril width is recomputed from Corvin's raised arm to the hand |
+| Push | `armgrip` loop | 3 passes | hand is pushed back with smoothstep resistance |
+| Calm / return | `c_armcalm`, `c_swordtake`, `slideWindow()` | 3790 + 2290 | Corvin returns to his corner |
+
+Knobs: `BACKSTEP_WINDOW_BEATS`, `stepWindowX()`, and the Door `REACH`,
+`LUNGE_REACH`, `EMERGE0`, `EMERGE1`, `LASH`, `CLING`, `PUSH0`, `GONE` constants
+in `src/main.ts`.

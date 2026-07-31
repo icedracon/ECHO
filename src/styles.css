@@ -22,12 +22,12 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
 }
 
 #sprite {
+  position: absolute;
+  right: 0;
+  bottom: 0;
   width: auto;
   height: 190px;
   image-rendering: pixelated; /* crisp pixels, no blur */
@@ -105,10 +105,11 @@ body {
 
 #bubble {
   position: absolute;
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 180px;
+  top: 8px;
+  right: 10px;
+  width: calc(100% - 20px);
+  max-width: 240px;
+  max-height: 200px;
   padding: 5px 10px;
   background: rgba(20, 22, 30, 0.94);
   color: #f3f4f6;
@@ -117,6 +118,8 @@ body {
   font-size: 12px;
   line-height: 1.25;
   text-align: center;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   box-shadow: 0 3px 9px rgba(0, 0, 0, 0.45);
   opacity: 1;
   transition: opacity 0.25s ease;
@@ -126,8 +129,7 @@ body {
   content: "";
   position: absolute;
   bottom: -6px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 52px;
   border-width: 6px 6px 0 6px;
   border-style: solid;
   border-color: rgba(20, 22, 30, 0.94) transparent transparent transparent;

@@ -122,7 +122,10 @@ export class Director {
         return a;
       }
     }
-    return scored[scored.length - 1][0];
+    // float-edge fallback — must stamp the cooldown like every other pick
+    const last = scored[scored.length - 1][0];
+    this.st.lastPlayed[last.id] = now;
+    return last;
   }
 
   // Обучение: ok=true — пользователь спокойно продолжил (сцена уместна),

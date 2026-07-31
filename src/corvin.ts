@@ -1,7 +1,8 @@
 // Corvin, the Sentinel — clip catalogue for the first move sheet (DESIGN §12).
 // Every clip carries hand-tuned msSeq pacing: entrances ease in, holds sell the
 // weight, exits settle. These timings are the approved GIF previews, verbatim.
-// Frames live in public/pixel/corvin/<dir>/frame_N.png (203 frames, 20 moves).
+// Frames live in public/pixel/corvin/<dir>/frame_N.png. The runtime audit owns
+// the live frame/move totals so this catalogue cannot drift behind the assets.
 
 export interface CorvinClip {
   frames: string[];
@@ -115,7 +116,7 @@ export const CORVIN = {
   leanwall: cc("leanwall", 9, 220, false, 8, [420, 180, 180, 190, 200, 220, 260, 300, 700]),
   // the lean on the tall stone cairn: ease in, a long rest mid-clip while the
   // coat sways, push off, settle — first/last frames match, so it loops home
-  leanstone: cc("leanstone", 13, 220, false, 8, [380, 190, 190, 200, 240, 420, 600, 600, 420, 260, 210, 200, 520]),
+  leanstone: cc("leanstone", 13, 220, false, 12, [380, 190, 190, 200, 240, 420, 600, 600, 420, 260, 210, 200, 520]),
   // the rest at the cairn (user-directed): plants the sword, sits on the
   // ground, back against the stones, eagle hops to the top — played forward
   // to settle in, REV to rise
@@ -129,6 +130,34 @@ export const CORVIN = {
   doorwin: cc("c_doorwin", 13, 170, false, 12, [200, 150, 110, 90, 260, 480, 220, 200, 210, 220, 260, 320, 640]),
   armtrigger: cc("c_armtrigger", 15, 160, false, 14, [260, 180, 140, 120, 110, 110, 110, 120, 140, 170, 200, 260, 340, 440, 700]),
   armcalm: cc("c_armcalm", 13, 200, false, 12, [420, 260, 220, 200, 190, 190, 190, 200, 220, 260, 320, 420, 700]),
+  // sword guard held while he backs away from the Door — a real two-handed
+  // block, looped (the "moonwalk": the pose holds, the window glides back)
+  doorguard: cc("c_guard", 9, 200, true),
+  // THE ARM answers: dark energy erupts from it as writhing octopus
+  // tentacles (user-directed) — the force that pushes the Door's claws back
+  armblast: cc("c_armblast", 13, 150, false, 12, [200, 150, 120, 110, 110, 120, 130, 140, 160, 190, 220, 280, 520]),
+  // the sustained push: the blast's peak frames looped while the claws are
+  // slowly forced back through the portal
+  armpush: {
+    frames: [6, 7, 8, 9, 10, 11].map((i) => `/pixel/corvin/c_armblast/frame_${i}.png?v=1`),
+    ms: 150,
+    loop: true,
+    settle: 0,
+  },
+  // THE CONNECTED DOOR CHAIN (user-directed): one continuous generated flow —
+  // each part starts on the previous part's last frame, the finale pins idle.
+  backstep: cc("c_backstep", 13, 180, false, 12, [260, 180, 170, 230, 280, 150, 160, 240, 300, 160, 170, 220, 360]),
+  doorplant: cc("c_swordplant2", 11, 170, false, 10, [200, 170, 160, 160, 170, 180, 190, 200, 220, 260, 420]),
+  armup: cc("c_armup", 11, 170, false, 10, [220, 190, 170, 160, 160, 160, 170, 180, 200, 240, 400]),
+  armoctopus: cc("c_armoctopus", 13, 160, false, 12, [180, 140, 120, 110, 110, 120, 140, 160, 170, 180, 190, 210, 320]),
+  // the writhing peak of the octopus, looped while the claws are forced back
+  armgrip: {
+    frames: [7, 8, 9, 10, 11].map((i) => `/pixel/corvin/c_armoctopus/frame_${i}.png?v=1`),
+    ms: 160,
+    loop: true,
+    settle: 0,
+  },
+  swordtake: cc("c_swordtake", 11, 170, false, 10, [220, 190, 180, 170, 170, 170, 180, 190, 200, 240, 380]),
   leanoff: cc("leanoff", 7, 190, false, 6, [300, 190, 180, 170, 170, 180, 420]),
   crouchcheck: cc("crouchcheck", 9, 220, false, 8, [420, 180, 170, 170, 300, 420, 200, 190, 420]),
   swordshoulder: cc("swordshoulder", 7, 190, false, 6, [420, 180, 170, 170, 180, 200, 500]),

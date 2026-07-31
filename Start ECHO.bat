@@ -26,11 +26,7 @@ if not exist "%USERPROFILE%\.echo\media" mkdir "%USERPROFILE%\.echo\media" 2>nul
 for %%f in ("public\media\*.gif") do if /i not "%%~nxf"=="poster.gif" copy /y "%%f" "%USERPROFILE%\.echo\media\poster.gif" >nul
 if not exist "%USERPROFILE%\.echo\media\poster.gif" if exist "public\media\poster.gif" copy /y "public\media\poster.gif" "%USERPROFILE%\.echo\media\poster.gif" >nul
 if exist "public\media\song.mp3" if not exist "%USERPROFILE%\.echo\media\song.mp3" copy /y "public\media\song.mp3" "%USERPROFILE%\.echo\media\song.mp3" >nul
-if exist "public\media
-ightsong.mp3" if not exist "%USERPROFILE%\.echo\media
-ightsong.mp3" copy /y "public\media
-ightsong.mp3" "%USERPROFILE%\.echo\media
-ightsong.mp3" >nul
+if exist "public\media\nightsong.mp3" if not exist "%USERPROFILE%\.echo\media\nightsong.mp3" copy /y "public\media\nightsong.mp3" "%USERPROFILE%\.echo\media\nightsong.mp3" >nul
 
 rem ---- Prebuilt first. A normal user never compiles anything. ----
 if exist "ECHO.exe" (
@@ -51,7 +47,7 @@ if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
 
 rem ---- No exe anywhere: try the release download ----
 echo [*] First run - downloading ECHO...
-powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = ""$env:LOCALAPPDATA\ECHO""; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO.exe' -OutFile ""$dir\ECHO.exe"" -UseBasicParsing; Unblock-File ""$dir\ECHO.exe""; exit 0 } catch { exit 1 }"
+powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = ""$env:LOCALAPPDATA\ECHO""; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest -Uri 'https://github.com/icedracon/ECHO/releases/latest/download/ECHO-Windows-Portable.exe' -OutFile ""$dir\ECHO.exe"" -UseBasicParsing; Unblock-File ""$dir\ECHO.exe""; exit 0 } catch { exit 1 }"
 if exist "%LOCALAPPDATA%\ECHO\ECHO.exe" (
     echo [+] Download complete. Launching ECHO...
     start "" "%LOCALAPPDATA%\ECHO\ECHO.exe"
@@ -197,6 +193,6 @@ exit /b 0
 
 :Done
 echo.
-echo [+] Dante is on your taskbar. This window closes itself.
+echo [+] ECHO is on your taskbar. This window closes itself.
 timeout /t 3 >nul
 exit /b 0

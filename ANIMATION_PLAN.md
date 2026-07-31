@@ -1,5 +1,16 @@
 # Pixel Dante — Animation Action Plan
 
+## Current release note (v0.2.0)
+
+This file began as the Dante animation plan. The current build is now ECHO with
+both Dante and Corvin. Corvin's Door chain is live in `public/pixel/corvin/`:
+`c_doorsense`, `c_backstep`, `parry`, `c_swordplant2`, `c_armup`,
+`c_armoctopus`, `c_armcalm`, `c_swordtake`, plus the overlay FX under
+`public/pixel/demon_*` and `public/pixel/fx_*`.
+
+The Door backstep was regenerated for stronger leg motion. Its last frame is
+pinned to `c_swordplant2/frame_0.png` so the scene remains one continuous chain.
+
 ## Done
 - Base sprite (idle) — PixelLab `create-image-pixflux`, transparent.
 - Living loop (9 frames) — `animate-with-text-v3`, bg color-keyed to transparent.

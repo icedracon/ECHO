@@ -26,6 +26,9 @@ from pathlib import Path
 
 import edge_tts
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "public" / "voice" / "corvin"
 VOICE = "ru-RU-DmitryNeural"
@@ -58,8 +61,18 @@ def lines_from(ts_path: Path) -> list[str]:
 def collect() -> dict[str, str]:
     """text -> delivery profile, for the whole corpus."""
     jobs: dict[str, str] = {}
-    for line in lines_from(ROOT / "src" / "novel.ts"):
+    novel_path = ROOT / "src" / "novel.ts"
+    for line in lines_from(novel_path):
         jobs[line] = "story"
+    # Chapter headings are assembled at runtime, but they are spoken too. Keep
+    # them in the same neural voice instead of falling back to the OS voice.
+    novel_src = novel_path.read_text(encoding="utf-8")
+    titles = [
+        m.group(1).replace('\\"', '"')
+        for m in re.finditer(r'title:\s*"((?:[^"\\]|\\.)*)"', novel_src)
+    ]
+    for idx, title in enumerate(titles, 1):
+        jobs[f"Глава {idx}. {title}."] = "story"
     for line in lines_from(ROOT / "src" / "tales.ts"):
         jobs[line] = "story"
     # Arc openers ("Про птицу. Там есть ещё.") live outside the lines blocks.
@@ -81,6 +94,16 @@ async def render(jobs: dict[str, str], force: bool) -> None:
     index: dict[str, dict] = (
         json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
     )
+    # Recover a clip written just before an interrupted run. The old loop only
+    # checkpointed every 25 files, so a timeout could leave valid MP3s orphaned
+    # and needlessly regenerate them on the next pass.
+    if not force:
+        for text, prof in jobs.items():
+            k = key(text)
+            existing = OUT / f"{k}.mp3"
+            if k not in index and existing.exists() and existing.stat().st_size > 0:
+                index[k] = {"f": existing.name, "p": prof}
+        index_path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
     todo = [(t, p) for t, p in jobs.items() if force or key(t) not in index]
     print(f"corpus: {len(jobs)} lines | rendering: {len(todo)}", flush=True)
     for i, (text, prof) in enumerate(todo, 1):
@@ -88,8 +111,12 @@ async def render(jobs: dict[str, str], force: bool) -> None:
         o = PROFILES[prof]
         for attempt in range(3):
             try:
+                target = OUT / f"{k}.mp3"
+                if target.exists() and target.stat().st_size == 0:
+                    target.unlink()
                 c = edge_tts.Communicate(text, VOICE, rate=o["rate"], pitch=o["pitch"])
-                await c.save(str(OUT / f"{k}.mp3"))
+                async with asyncio.timeout(30):
+                    await c.save(str(target))
                 index[k] = {"f": f"{k}.mp3", "p": prof}
                 break
             except Exception as e:  # network flakiness only — retry, then skip

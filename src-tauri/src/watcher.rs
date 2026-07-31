@@ -101,7 +101,12 @@ pub fn spawn(app: AppHandle, store: Arc<Mutex<Store>>, phrases: Arc<Phrases>) {
 
         // Coarse "AI is active" pulses (Cursor / Claude Desktop) are debounced so
         // frequent autosaves don't spam the companion.
-        let mut last_pulse = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        // checked_sub: Windows Instant counts from boot — plain subtraction
+        // PANICS (and with panic=abort, kills the app) when uptime < 60 s,
+        // i.e. exactly the autostart-with-Windows case.
+        let mut last_pulse = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(60))
+            .unwrap_or_else(std::time::Instant::now);
         for res in rx {
             let Ok(event) = res else { continue };
             for path in event.paths {
@@ -139,10 +144,25 @@ fn process_file(
         return;
     }
 
-    let reader = BufReader::new(&mut file);
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-        let line = line.trim();
+    // The recorded offset must be the position after the last COMPLETE line we
+    // consumed — never the pre-read metadata length. Snapshotting `len` first
+    // both double-counted lines appended during the read (stars incremented
+    // twice) and, when a partial line was mid-write, parked the offset inside
+    // that line so both halves later failed to parse (event lost).
+    let mut consumed = start;
+    let mut reader = BufReader::new(&mut file);
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let Ok(n) = reader.read_line(&mut buf) else { break };
+        if n == 0 {
+            break;
+        }
+        if !buf.ends_with('\n') {
+            break; // partial line still being written — re-read it next event
+        }
+        consumed += n as u64;
+        let line = buf.trim();
         if line.is_empty() {
             continue;
         }
@@ -154,12 +174,12 @@ fn process_file(
         }
     }
 
-    offsets.insert(path.to_path_buf(), len);
+    offsets.insert(path.to_path_buf(), consumed);
 }
 
 fn emit(app: &AppHandle, store: &Arc<Mutex<Store>>, phrases: &Arc<Phrases>, det: Detected) {
     let (stars, level) = {
-        let mut s = store.lock().unwrap();
+        let mut s = store.lock().unwrap_or_else(|p| p.into_inner());
         s.stars += det.star_delta();
         if det.star_delta() != 0 {
             s.save();

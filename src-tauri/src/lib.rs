@@ -96,7 +96,13 @@ pub struct Shared {
 
 #[tauri::command]
 fn get_state(shared: tauri::State<Shared>) -> AgentEvent {
-    let stars = shared.store.lock().unwrap().stars;
+    // A poisoned lock must not abort the app (panic=abort) — the data is a
+    // star counter, not an invariant worth dying for.
+    let stars = shared
+        .store
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .stars;
     AgentEvent {
         state: "idle".into(),
         phrase: None,
@@ -115,7 +121,7 @@ fn idle_phrase(shared: tauri::State<Shared>) -> Option<String> {
 /// Returned as (name, data-url) so the webview can play them directly.
 /// Nothing ships with ECHO — whatever the user drops in is theirs.
 #[tauri::command]
-fn voice_clips() -> Vec<(String, String)> {
+async fn voice_clips() -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;
@@ -154,7 +160,7 @@ fn voice_clips() -> Vec<(String, String)> {
 /// Poster-scene media from ~/.echo/media (user's own files, never committed):
 /// poster.gif|png|webp + song.mp3|wav|ogg -> data URLs. Empty if none.
 #[tauri::command]
-fn poster_media() -> Vec<(String, String)> {
+async fn poster_media() -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;
@@ -209,7 +215,7 @@ fn story_save(data: String) {
 }
 
 /// Character pack selection. Precedence:
-/// 1. The exe's own name — Echo-Corvin.exe / Echo-Dante.exe are LOCKED builds
+/// 1. The exe's own name — ECHO-Corvin.exe / ECHO-Dante.exe are LOCKED builds
 ///    (one binary, two names): fans download their hero and always boot him.
 /// 2. ~/.echo/character ("dante" / "corvin"), written by the live switch
 ///    `echo corvin > ~/.echo/demo`. Plain ECHO.exe uses this.
@@ -243,17 +249,31 @@ fn character_save(name: String) {
     }
 }
 
+fn open_folder(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+    let _ = result;
+}
+
 /// Frontend diagnostics -> ~/.echo/echo-fe.log (so overlay behaviour is auditable).
+/// Rotates at ~256 KB — heartbeat context events land here every few seconds,
+/// so without rotation the file grew forever.
 #[tauri::command]
 fn fe_log(line: String) {
     if let Some(home) = dirs::home_dir() {
         let dir = home.join(".echo");
         let _ = fs::create_dir_all(&dir);
-        if let Ok(mut f) = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("echo-fe.log"))
-        {
+        let path = dir.join("echo-fe.log");
+        if let Ok(meta) = fs::metadata(&path) {
+            if meta.len() > 256 * 1024 {
+                let _ = fs::rename(&path, dir.join("echo-fe.log.1"));
+            }
+        }
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
             use std::io::Write;
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -303,12 +323,16 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .item(&item("ev:hotkey_song", "🎸  Сыграть песню  (ALT+S)").build(app)?)
         .item(&item("ev:quiet_hour", "🤫  Тихий час — не отвлекать").build(app)?)
         .separator()
+        .item(&item("help", "Как управлять ECHO").build(app)?)
         .item(&item("open_media", "📁  Мои песни и постеры").build(app)?)
         .item(&item("quit", "Выход").build(app)?)
         .build()?;
 
     TrayIconBuilder::with_id("echo-tray")
-        .icon(app.default_window_icon().cloned().expect("icon"))
+        .icon(match app.default_window_icon().cloned() {
+            Some(i) => i,
+            None => return Ok(()), // no icon -> no tray, but the app LIVES
+        })
         .tooltip("ECHO — твой компаньон")
         .menu(&menu)
         .on_menu_event(|app, event| {
@@ -343,11 +367,18 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 if kind == "quiet_hour" {
                     let _ = app.emit("context-event", context::ContextEvent { kind: "quiet_hour" });
                 }
+            } else if id == "help" {
+                let _ = app.emit(
+                    "context-event",
+                    context::ContextEvent {
+                        kind: "show_help".into(),
+                    },
+                );
             } else if id == "open_media" {
                 if let Some(home) = dirs::home_dir() {
                     let dir = home.join(".echo").join("media");
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                    open_folder(&dir);
                 }
             } else if id == "quit" {
                 std::process::exit(0);

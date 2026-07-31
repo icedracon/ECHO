@@ -1,13 +1,19 @@
 {
   "name": "agent-companion",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check": "tsc --noEmit",
     "build": "node scripts/prep_media.cjs && tsc && vite build",
+    "build:desktop": "tauri build",
+    "build:desktop:no-bundle": "tauri build --no-bundle",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "audit:runtime": "node scripts/audit_runtime.cjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "verify": "npm run audit:runtime && npm run build && npm run test:rust && npm run build:desktop:no-bundle"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

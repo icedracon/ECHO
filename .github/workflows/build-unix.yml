@@ -1,24 +1,75 @@
-name: Build Linux & macOS
+name: Build Release
+run-name: Build ECHO ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update"
+        required: true
+        default: "v0.2.0"
   push:
     tags: ["v*"]
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  build:
+  prepare-release:
+    name: Prepare download page
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create or refresh release page
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "ECHO $RELEASE_TAG" \
+              --notes-file .github/RELEASE_TEMPLATE.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "ECHO $RELEASE_TAG" \
+              --notes-file .github/RELEASE_TEMPLATE.md
+          fi
+
+  build:
+    name: ${{ matrix.label }}
+    needs: prepare-release
+    permissions:
+      contents: write
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
         include:
+          - platform: windows-latest
+            label: windows-x64
+            args: "--bundles nsis,msi"
+            rust_target: ""
           - platform: ubuntu-22.04
-            args: ""
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
+            label: linux-x64
+            args: "--bundles appimage,deb,rpm"
+            rust_target: ""
+          - platform: macos-15
+            label: macos-arm64
+            args: "--target aarch64-apple-darwin --bundles dmg,app"
+            rust_target: "aarch64-apple-darwin"
+          - platform: macos-15-intel
+            label: macos-x64
+            args: "--target x86_64-apple-darwin --bundles dmg,app"
+            rust_target: "x86_64-apple-darwin"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +78,7 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file rpm \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - uses: actions/setup-node@v4
@@ -35,24 +86,99 @@ jobs:
           node-version: 20
 
       - uses: dtolnay/rust-toolchain@stable
+        if: matrix.rust_target == ''
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.rust_target != ''
         with:
-          targets: ${{ contains(matrix.args, 'aarch64') && 'aarch64-apple-darwin' || contains(matrix.args, 'x86_64-apple') && 'x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target }}
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - run: npm ci || npm install
+      - name: Install JavaScript dependencies
+        run: npm ci
 
-      - name: Build and attach to release
+      - name: Build web frontend
+        run: npm run build
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build desktop bundle
         uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # attach the bundles (AppImage/deb on Linux, dmg/app on macOS) to
-          # the release of the pushed tag; manual runs just build artifacts
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.2.0' }}
-          releaseName: "ECHO ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.2.0' }}"
-          releaseDraft: false
-          prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Attach friendly Windows downloads
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Force -Path release-friendly | Out-Null
+          $assets = @()
+          Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Windows-Portable.exe"
+          Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Corvin.exe"
+          Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Dante.exe"
+          $assets += "release-friendly/ECHO-Windows-Portable.exe"
+          $assets += "release-friendly/ECHO-Corvin.exe"
+          $assets += "release-friendly/ECHO-Dante.exe"
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -First 1
+          if ($setup) {
+            Copy-Item $setup.FullName "release-friendly/ECHO-Windows-Setup.exe"
+            $assets += "release-friendly/ECHO-Windows-Setup.exe"
+          }
+          $msi = Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File | Select-Object -First 1
+          if ($msi) {
+            Copy-Item $msi.FullName "release-friendly/ECHO-Windows-x86_64.msi"
+            $assets += "release-friendly/ECHO-Windows-x86_64.msi"
+          }
+          gh release upload "$env:RELEASE_TAG" $assets --clobber
+
+      - name: Attach friendly Linux downloads
+        if: runner.os == 'Linux'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Force -Path release-friendly | Out-Null
+          $assets = @()
+          $appImage = Get-ChildItem "src-tauri/target/release/bundle/appimage" -Filter "*.AppImage" -File | Select-Object -First 1
+          if ($appImage) {
+            Copy-Item $appImage.FullName "release-friendly/ECHO-Linux-x86_64.AppImage"
+            $assets += "release-friendly/ECHO-Linux-x86_64.AppImage"
+          }
+          $deb = Get-ChildItem "src-tauri/target/release/bundle/deb" -Filter "*.deb" -File | Select-Object -First 1
+          if ($deb) {
+            Copy-Item $deb.FullName "release-friendly/ECHO-Debian-x86_64.deb"
+            $assets += "release-friendly/ECHO-Debian-x86_64.deb"
+          }
+          $rpm = Get-ChildItem "src-tauri/target/release/bundle/rpm" -Filter "*.rpm" -File | Select-Object -First 1
+          if ($rpm) {
+            Copy-Item $rpm.FullName "release-friendly/ECHO-Fedora-x86_64.rpm"
+            $assets += "release-friendly/ECHO-Fedora-x86_64.rpm"
+          }
+          if ($assets.Count -eq 0) { throw "No Linux bundles found" }
+          gh release upload "$env:RELEASE_TAG" $assets --clobber
+
+      - name: Attach friendly macOS download
+        if: runner.os == 'macOS'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Force -Path release-friendly | Out-Null
+          $dmg = Get-ChildItem "src-tauri/target" -Recurse -Filter "*.dmg" -File | Select-Object -First 1
+          if (-not $dmg) { throw "No macOS DMG found" }
+          $friendlyName = if ("${{ matrix.label }}" -eq "macos-arm64") {
+            "ECHO-macOS-Apple-Silicon.dmg"
+          } else {
+            "ECHO-macOS-Intel.dmg"
+          }
+          Copy-Item $dmg.FullName "release-friendly/$friendlyName"
+          gh release upload "$env:RELEASE_TAG" "release-friendly/$friendlyName" --clobber

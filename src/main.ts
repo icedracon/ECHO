@@ -62,6 +62,7 @@ function dbg(msg: string) {
 const stage = document.getElementById("stage") as HTMLElement;
 const sprite = document.getElementById("sprite") as HTMLImageElement;
 const bubble = document.getElementById("bubble") as HTMLElement;
+const FIRST_RUN_HINT = "Меню ECHO — правый клик по иконке возле часов.";
 const starsEl = document.getElementById("stars") as HTMLElement;
 const levelEl = document.getElementById("level") as HTMLElement;
 const vignetteEl = document.getElementById("vignette") as HTMLElement;
@@ -603,6 +604,101 @@ function applyCharacter() {
   dbg(`character: ${character}`);
 }
 
+function resetCharacterStage() {
+  afterClip = null;
+  curUrge = null;
+  idlePlaysLeft = 0;
+  committedUntil = 0;
+  gagActive = false;
+  showcasing = false;
+  introActive = false;
+  wandering = false;
+  returning = false;
+  away = false;
+  window.clearTimeout(corvinIdleTimer);
+  corvinTickArmed = false;
+  corvinQuietPose = "watch";
+  corvinQuietRuns = 0;
+  if (bubbleTimer) {
+    window.clearTimeout(bubbleTimer);
+    bubbleTimer = undefined;
+  }
+  stage.classList.remove("leveling", "shooting", "shake");
+  delete stage.dataset.facing;
+  stage.dataset.state = "idle";
+  document.documentElement.style.setProperty("--accent", ACCENT.idle);
+  if (home) {
+    seatedNow = !isCorvin();
+    postureChangedAt = Date.now();
+    window.clearTimeout(postureRetry);
+    window.clearTimeout(postureSettle);
+    home.lastY = isCorvin() ? home.y : home.sitY;
+    void home.win.setPosition(new PhysicalPosition(home.cornerX, home.lastY)).catch(() => {});
+  }
+  if (isCorvin()) {
+    curClip = CORVIN.windidle as Clip;
+    frameIdx = 0;
+    afterClip = null;
+    if (home) corvinIdleCycle();
+  } else {
+    curClip = idleClip("sitswing");
+    frameIdx = 0;
+    afterClip = idleStepDone;
+  }
+  sprite.src = curClip.frames[0];
+}
+
+const DANTE_DEMOS = new Set([
+  "demo_devil",
+  "demo_sword",
+  "demo_poster",
+  "demo_pizza",
+  "demo_clean",
+  "demo_wake",
+  "demo_coin",
+  "demo_spin",
+  "demo_form",
+]);
+const CORVIN_DEMOS = new Set([
+  "demo_corvin",
+  "demo_cleave",
+  "demo_unchained",
+  "demo_hunt",
+  "demo_nuzzle",
+  "demo_damage",
+  "demo_vigil",
+  "demo_execution",
+  "demo_guitar",
+  "demo_night",
+  "demo_tale",
+  "demo_break",
+  "demo_requiem",
+  "demo_breach",
+  "demo_letter",
+  "demo_road",
+  "demo_rain",
+  "demo_cairn",
+  "demo_stone",
+  "demo_flask",
+  "demo_door",
+  "demo_combo",
+  "demo_parry",
+  "demo_ritual",
+  "demo_scan",
+  "demo_fly",
+  "demo_chapter",
+]);
+
+function switchCharacter(next: "dante" | "corvin", announce = true) {
+  if (character === next) return;
+  character = next;
+  applyCharacter();
+  void invoke("character_save", { name: character }).catch(() => {});
+  resetCharacterStage();
+  if (announce)
+    showBubble(isCorvin() ? "Корвин. Страж." : "Dante's back.", PRIO.NOTABLE);
+}
+
 // Walk = the legs-visible side walk (regenerated upright-posture version).
 const WALK = clip("sidewalk", 110, true, 0, 8);
 // Contact frames (footfalls) hold a beat longer — ground stops feet, feet
@@ -768,8 +864,14 @@ const PRELOADED: HTMLImageElement[] = [];
 // Context awareness (from the Rust context watcher): you typing -> he types;
 // opening video/music -> a dance; launching a game -> he shoots. Rate-limited
 // by the same scene budget so a long session doesn't spam.
+let demoRetry = 0; // demo-word retry budget while a scene owns the stage
+
 function onContext(kind: string) {
   dbg(`context ${kind}`);
+  if (kind === "show_help") {
+    showBubble(FIRST_RUN_HINT, PRIO.NOTABLE);
+    return;
+  }
   // Only REAL activity keeps him present: typing, media, a game, a demo word,
   // or the mouse actually on him. The cursor_far/heartbeat noise used to stamp
   // this too, so "15 min without work -> he leaves" could never fire.
@@ -784,7 +886,54 @@ function onContext(kind: string) {
     kind.startsWith("demo_")
   )
     lastActivity = Date.now();
-  if (!home || gagActive || showcasing || returning || wandering || away) return;
+  if (!home || gagActive || showcasing || returning || wandering || away || introActive) {
+    // The stage is busy — but STATE must not be lost while it is (these were
+    // all silently dropped here before, per the hard review):
+    if (kind === "quiet_hour" && home) {
+      quietUntil = Date.now() + 60 * 60_000;
+      dbg("quiet hour engaged (mid-scene)");
+      return;
+    }
+    if (kind === "gaming") gamingUntil = Date.now() + 3 * 60 * 1000;
+    if (kind === "gaming_active") {
+      gamingUntil = Date.now() + 60 * 1000;
+      void invoke("raise_topmost").catch(() => {}); // stay above the game
+    }
+    if (kind === "game_start") {
+      // Arming clocks is pure bookkeeping — a session that starts while he's
+      // mid-scene must still get its 3:00/7:00/10:00 schedule.
+      lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
+      lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
+      armHuntClocks();
+      armDanteClocks();
+      dbg("game_start (mid-scene) -> clocks armed");
+      return;
+    }
+    // Demo words queue instead of vanishing (the "typed door, nothing
+    // happened" bug — the old retry block sat BELOW this gate, dead).
+    if (
+      home &&
+      kind.startsWith("demo_") &&
+      kind !== "demo_be_corvin" &&
+      kind !== "demo_be_dante"
+    ) {
+      if (demoRetry < 10) {
+        demoRetry++;
+        dbg(`demo queued (busy): ${kind} retry=${demoRetry}`);
+        window.setTimeout(() => onContext(kind), 2500);
+      } else {
+        demoRetry = 0;
+      }
+    }
+    return;
+  }
+  if (kind.startsWith("demo_")) demoRetry = 0; // the stage is free — dispatch
+  // A tray scene owns its character. Selecting a Corvin scene while Dante is
+  // active (or vice versa) switches the whole pack first, then starts frame 0.
+  // The old per-handler guards silently discarded the click or briefly mixed
+  // both characters on the same stage.
+  if (DANTE_DEMOS.has(kind) && isCorvin()) switchCharacter("dante", false);
+  if (CORVIN_DEMOS.has(kind) && !isCorvin()) switchCharacter("corvin", false);
   if (kind === "typing") {
     // Never mid-walk-in, and only once he's home in his corner.
     if (introActive) return;
@@ -805,7 +954,9 @@ function onContext(kind: string) {
         typingSessionStart = Date.now();
       lastTypingEventAt = Date.now();
       maybeTellNovel();
-      if (curClip !== (CORVIN.whetstone as Clip)) {
+      // A committed one-shot finishes its bite before the whetstone comes out
+      // (the commit contract names typing as a trigger that must WAIT).
+      if (curClip !== (CORVIN.whetstone as Clip) && !committed()) {
         stage.dataset.state = "idle";
         curClip = CORVIN.whetstone as Clip;
         frameIdx = 0;
@@ -815,7 +966,7 @@ function onContext(kind: string) {
       }
       return;
     }
-    if (curClip !== TYPING && curClip !== TYPETAP) {
+    if (curClip !== TYPING && curClip !== TYPETAP && !committed()) {
       stage.dataset.state = "idle";
       posture("idle", true); // laptop needs him seated
       curClip = TYPING;
@@ -859,45 +1010,45 @@ function onContext(kind: string) {
     dbg("battery low -> energy capped");
     return;
   }
-  // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing off.
-  // ONE gate for all demos: never during the walk-in, walks, or another scene —
-  // a seated payoff mid-stride breaks the walk (learned the hard way).
-  if (
-    kind.startsWith("demo_") &&
-    (introActive || wandering || away || returning || showcasing || gagActive)
-  ) {
-    dbg(`demo ignored (busy): ${kind}`);
-    return;
-  }
+  // Demo hook (from ~/.echo/demo): play a scene on demand for QA / showing
+  // off. Busy-stage queuing happens in the ONE gate above.
   if (kind === "demo_devil") {
+    if (isCorvin()) return;
     devilTriggerScene();
     return;
   }
   if (kind === "demo_sword") {
+    if (isCorvin()) return;
     demoSword();
     return;
   }
   if (kind === "demo_poster") {
+    if (isCorvin()) return;
     posterScene(15000);
     return;
   }
   if (kind === "demo_pizza") {
+    if (isCorvin()) return;
     demoSeated(PIZZA, "Finally.");
     return;
   }
   if (kind === "demo_clean") {
+    if (isCorvin()) return;
     demoSeated(idleClip("cleansword"));
     return;
   }
   if (kind === "demo_wake") {
+    if (isCorvin()) return;
     demoSeated(WAKEUP);
     return;
   }
   if (kind === "demo_coin") {
+    if (isCorvin()) return;
     void coinFlourish();
     return;
   }
   if (kind === "demo_spin") {
+    if (isCorvin()) return;
     void demoSpin();
     return;
   }
@@ -907,11 +1058,7 @@ function onContext(kind: string) {
   }
   // Character pack switch (live, persisted): `echo be corvin > ~/.echo/demo`.
   if (kind === "demo_be_corvin" || kind === "demo_be_dante") {
-    character = kind === "demo_be_corvin" ? "corvin" : "dante";
-    applyCharacter();
-    void invoke("character_save", { name: character }).catch(() => {});
-    showBubble(isCorvin() ? "Корвин. Страж." : "Dante's back.", PRIO.NOTABLE);
-    setState("idle");
+    switchCharacter(kind === "demo_be_corvin" ? "corvin" : "dante");
     return;
   }
   // Corvin scene QA hooks — same names you'd guess: echo cleave > ~/.echo/demo
@@ -957,7 +1104,6 @@ function onContext(kind: string) {
   if (kind === "demo_stone") return void stoneRestScene(18_000);
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
   if (kind === "demo_door") { if (isCorvin()) void doorFightScene(); return; }
-  if (kind === "demo_boss") { if (!isCorvin()) void bossFightScene(); return; }
   if (kind === "demo_form") { if (!isCorvin()) void devilFormScene(); return; }
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
@@ -979,6 +1125,17 @@ function onContext(kind: string) {
     // real, and typing should recover FAST once it ends (a 3-min tail read as
     // "typing randomly broken" after closing a game).
     gamingUntil = Date.now() + 60 * 1000;
+    // Booted INTO a running game (no game_start edge): the clocks sat at
+    // epoch 0, so the whole hunt repertoire fired as an instant salvo. Arm
+    // them properly on the first heartbeat instead.
+    if (HUNT_CLOCKS[0].last === 0) {
+      lastGamingDevil = Date.now() - GAMING_DEVIL_EVERY + 3 * 60 * 1000;
+      lastGamingSword = Date.now() - GAMING_SWORD_EVERY + 7 * 60 * 1000;
+      lastGamingSpecial = Date.now();
+      armHuntClocks();
+      armDanteClocks();
+      dbg("gaming_active with unarmed clocks -> session armed from heartbeat");
+    }
     // Borderless games repaint above us unless TOPMOST is re-asserted. tao
     // no-ops set_always_on_top when the flag is unchanged, so go through the
     // Rust command that calls SetWindowPos unconditionally every heartbeat.
@@ -1152,7 +1309,7 @@ function demoSeated(c: Clip, line?: string) {
   if (!home || gagActive) return;
   stage.dataset.state = "idle";
   posture("idle", true); // seated payoffs need the seat, wherever he was
-  const total = (c.msSeq?.reduce((a, b) => a + b, 0) ?? c.frames.length * c.ms) * paceMul();
+  const total = danteClipTotal(c);
   commitFor(total + 400);
   curClip = c;
   frameIdx = 0;
@@ -1170,7 +1327,7 @@ async function demoSpin() {
     curClip = SWORDSPIN;
     frameIdx = 0;
     window.setTimeout(sfxIgnite, 300 * paceMul());
-    await sleep(SWORDSPIN.frames.length * SWORDSPIN.ms * paceMul() + 200);
+    await sleep(danteClipTotal(SWORDSPIN) + 200);
   } finally {
     gagActive = false;
     setState("idle");
@@ -1183,6 +1340,9 @@ async function demoSpin() {
 // cycle, meditation, exit. A rehearsal for the character pack — Dante's stage,
 // Corvin's reel.
 async function playCorvin(c: (typeof CORVIN)[keyof typeof CORVIN], passes = 1) {
+  // Scenes render at pace 1.0 (frameLoop skips paceMul while gagActive), so
+  // the raw msSeq total IS the wall-clock duration — awaits, sprite frames
+  // and the hand-synced overlays (the Door) all agree exactly.
   const total = corvinClipTotal(c) * passes;
   commitFor(total + 300); // session events must not flash Dante mid-reel
   curClip = c;
@@ -1254,6 +1414,8 @@ function initTts() {
 // and shipped in public/voice/corvin: every line he owns is fixed text, so the
 // robot system voice is only ever a fallback for something unrecorded.
 const corvinVoice = new Map<string, string>(); // sha1(text) -> file
+const CORVIN_STORY_RATE = 1.5;
+const CORVIN_VOICE_CAP_MS = 30_000;
 async function initCorvinVoice() {
   try {
     const r = await fetch("/voice/corvin/index.json");
@@ -1280,17 +1442,24 @@ async function playVoiceClip(text: string): Promise<boolean> {
   return new Promise<boolean>((res) => {
     const a = new Audio(url);
     a.volume = 0.95;
+    a.playbackRate = CORVIN_STORY_RATE;
     let done = false;
-    const fin = (ok: boolean) => {
+    let cap: number | undefined;
+    const fin = (ok: boolean, stop = false) => {
       if (!done) {
         done = true;
+        if (cap) window.clearTimeout(cap);
+        a.onended = null;
+        a.onerror = null;
+        if (stop) a.pause();
         res(ok);
       }
     };
     a.onended = () => fin(true);
-    a.onerror = () => fin(false);
-    void a.play().catch(() => fin(false));
-    window.setTimeout(() => fin(true), 30_000); // hard cap
+    a.onerror = () => fin(false, true);
+    void a.play().catch(() => fin(false, true));
+    // A corrupt or unexpectedly long file must never bleed into the next line.
+    cap = window.setTimeout(() => fin(true, true), CORVIN_VOICE_CAP_MS);
   });
 }
 
@@ -1315,21 +1484,31 @@ function speakLineSystem(text: string): Promise<void> {
     const v =
       pool.find((x) => male.some((m) => x.name.toLowerCase().includes(m))) ?? pool[0] ?? null;
     if (v) u.voice = v;
-    u.rate = 0.88; // unhurried
+    u.rate = 0.88 * CORVIN_STORY_RATE;
     u.pitch = 0.42; // deep, worn, powerful
     u.volume = 1.0;
     let done = false;
-    const finish = () => {
+    let cap: number | undefined;
+    const finish = (cancel = false) => {
       if (!done) {
         done = true;
+        if (cap) window.clearTimeout(cap);
+        if (cancel) synth.cancel();
         res();
       }
     };
-    u.onend = finish;
-    u.onerror = finish;
+    u.onend = () => finish();
+    u.onerror = () => finish();
     synth.speak(u);
-    window.setTimeout(finish, 14000); // hard cap per line
+    cap = window.setTimeout(() => finish(true), CORVIN_VOICE_CAP_MS);
   });
+}
+
+async function speakCorvinStoryLine(text: string): Promise<void> {
+  // tellStory supplies the real neural voice. Suppress showBubble's generic
+  // Dante blip and keep the text visible for the complete spoken line.
+  showBubble(text, PRIO.NOTABLE, CORVIN_VOICE_CAP_MS + 1000, false);
+  await speakLine(text);
 }
 
 // The storytelling pose: the nuzzle replayed as a loop — Artsiv stays close
@@ -1358,22 +1537,26 @@ async function tellStory(lines: string[], title?: string, pose?: Clip) {
   afterClip = null;
   if (title) {
     commitFor(20_000);
-    showBubble(title, PRIO.NOTABLE);
-    await speakLine(title);
+    await speakCorvinStoryLine(title);
     await sleep(400);
   }
   for (const l of lines) {
     commitFor(20_000); // rolling commit: nothing yanks the clip mid-sentence
-    showBubble(l, PRIO.NOTABLE);
-    await speakLine(l);
+    await speakCorvinStoryLine(l);
     await sleep(350);
   }
+  hideBubbleAfter(1200);
   commitFor(400); // release quickly once the story is told
 }
 
 async function corvinScene(body: () => Promise<void>, accent?: string) {
-  if (!home || gagActive) {
-    dbg(`corvin scene refused: home=${!!home} gag=${gagActive} com=${committed()}`);
+  // The intro walk and the away/return walks OWN the window position — a scene
+  // firing mid-walk used to anchor itself mid-screen and leave him stranded
+  // there (the "standing in the middle of the desktop" bug).
+  if (!home || gagActive || introActive || wandering || away || returning) {
+    dbg(
+      `corvin scene refused: home=${!!home} gag=${gagActive} intro=${introActive} com=${committed()}`,
+    );
     return;
   }
   dbg("corvin scene start");
@@ -1496,8 +1679,11 @@ async function huntwatchPass() {
 // Tales: he remembers where he stopped (story.nextTale). Voiced, over the
 // nuzzle loop, uninterruptible until the last word (user-directed).
 async function whetstoneTaleScene() {
-  const tale = story.nextTale();
   await corvinScene(async () => {
+    // nextTale() advances the never-repeat pointer and SAVES — it must only
+    // run once the scene is actually on stage. Pulling it before corvinScene
+    // burned a fragment forever every time the scene was refused (mid-gag).
+    const tale = story.nextTale();
     if (tale) await tellStory(tale.lines);
     else await playCorvin(CORVIN.whetstone, 2); // corpus finished — quiet strokes
   });
@@ -1548,6 +1734,7 @@ function dayPart(): DayPart {
 // makes a companion feel like he lives with you rather than restarts with you.
 function maybeDailyRitual() {
   if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+  if (quietNow()) return; // "rituals honour it too" — now they actually do
   const today = dateKey();
   if (story.s.lastRitualDay === today) return;
   if (!sceneAllowed()) return;
@@ -1721,13 +1908,18 @@ async function nightSongScene() {
     if (url) {
       audio = new Audio(url);
       audio.volume = 0.55;
-      audio.onerror = () => {
+      // A missing/undecodable file fires BOTH onerror and the play() catch —
+      // one guard, or two laments played over each other at double volume
+      // and the first stop-handle leaked (hard review).
+      let lamentStarted = false;
+      const lament = () => {
+        if (lamentStarted) return;
+        lamentStarted = true;
         dbg("nightsong missing -> synth lament");
         stopMelody = playNightMelody(NIGHT_SONG_MS);
       };
-      void audio.play().catch(() => {
-        stopMelody = playNightMelody(NIGHT_SONG_MS);
-      });
+      audio.onerror = lament;
+      void audio.play().catch(lament);
     } else {
       stopMelody = playNightMelody(NIGHT_SONG_MS);
     }
@@ -1770,9 +1962,9 @@ async function nightSongScene() {
     if (i === lastSadLine) i = (i + 1) % NIGHT_SAD_LINES.length;
     lastSadLine = i;
     const line = NIGHT_SAD_LINES[i];
-    showBubble(line, PRIO.NOTABLE);
-    await speakLine(line);
+    await speakCorvinStoryLine(line);
     await sleep(1200);
+    hideBubbleAfter(1200);
   });
 }
 
@@ -1787,7 +1979,6 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 15, name: "pizza", run: () => demoSeated(PIZZA, "Finally.") },
   { h: 17, name: "sword move", run: () => void demoSword() },
   { h: 19, name: "devil trigger", run: () => devilTriggerScene() },
-  { h: 20, name: "boss fight", run: () => void bossFightScene() },
   { h: 21, name: "dance", run: () => danceScene() },
   { h: 22, name: "devil form", run: () => void devilFormScene() },
 ];
@@ -1829,23 +2020,27 @@ function scheduleMidnight() {
       return;
     }
     // The rest of the repertoire, one move per fixed hour (user-directed).
+    // NOTE (hard review): from 23:40 the stage belongs to the REQUIEM — the
+    // flask slot used to slip in here, stamp, and swallow the whole ritual.
+    // And a slot skip must not `return`: that aborted the tick before the
+    // requiem check ever ran.
+    const requiemWindow = h === 23 && now.getMinutes() >= 40;
     const slot = DAILY_HOURS.find((s) => s.h === h);
-    if (slot) {
-      if (gamingActive()) return; // the hunt owns the stage during a game
+    if (slot && !requiemWindow && !gamingActive()) {
       const key = `${dateKey()}-${h}`;
-      if (story.s.gags.lastHourSlot === key) return; // already run today
-      // Only when you're actually there (user-directed): no performances to an
-      // empty room. Not stamped on a miss, so it retries within the hour.
       const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
-      if (Date.now() - seen > 30 * 60_000) return;
-      story.s.gags.lastHourSlot = key;
-      story.save();
-      dbg(`daily hour ${h}:00 -> ${slot.name}`);
-      slot.run();
+      // Presence-gated and once per day; a miss just skips (retries next minute).
+      if (story.s.gags.lastHourSlot !== key && Date.now() - seen <= 30 * 60_000) {
+        story.s.gags.lastHourSlot = key;
+        story.save();
+        dbg(`daily hour ${h}:00 -> ${slot.name}`);
+        slot.run();
+        return; // the slot owns this tick — nothing else may double-fire
+      }
     }
     // 23:40 — the requiem: the whole grief line as one film, under the song.
     // Midnight picks it up twenty minutes later with the guitar.
-    if (h === 23 && now.getMinutes() >= 40) {
+    if (requiemWindow) {
       const last = story.s.gags.lastRequiemAt ?? 0;
       if (Date.now() - last < 12 * 3_600_000) return; // once a night
       story.s.gags.lastRequiemAt = Date.now();
@@ -2050,9 +2245,9 @@ async function requiemScene() {
     if (i === lastSadLine) i = (i + 1) % NIGHT_SAD_LINES.length;
     lastSadLine = i;
     const line = NIGHT_SAD_LINES[i];
-    showBubble(line, PRIO.NOTABLE);
-    await speakLine(line);
+    await speakCorvinStoryLine(line);
     await sleep(1500);
+    hideBubbleAfter(1200);
   });
 }
 
@@ -2085,6 +2280,7 @@ function parryBeat() {
   commitFor(corvinClipTotal(CORVIN.parry) * paceMul() + 300);
   curClip = CORVIN.parry as Clip;
   frameIdx = 0;
+  afterClip = null; // a stale idle callback must not fire mid-reaction
   window.setTimeout(() => {
     sfxGunshot(); // the steel-on-steel crack lands on the spark frame
     shake(220);
@@ -2301,6 +2497,7 @@ function reactErrorCorvin() {
   }
   if (pick === "damage") {
     stage.dataset.state = "error";
+    afterClip = null; // a stale idle callback must not fire mid-reaction
     document.documentElement.style.setProperty("--accent", ACCENT.error);
     commitFor(corvinClipTotal(CORVIN.damage) * paceMul() + 300);
     curClip = CORVIN.damage as Clip;
@@ -2364,11 +2561,27 @@ function saveDirector() {
   story.save();
 }
 
+// The continuous-session clock: resets after a 10-minute silence, so
+// workMinutes really means "how long THIS work session has run" (the old
+// formula saturated at 60 during work and grew only while you were AWAY).
+let workStartAt = Date.now();
+let workLastSeen = 0;
+function workMinutesNow(): number {
+  const now = Date.now();
+  const active = Math.max(lastActivity, lastTypingEventAt);
+  if (active > workLastSeen) {
+    if (active - workLastSeen > 10 * 60_000) workStartAt = active; // new session
+    workLastSeen = active;
+  }
+  if (now - workLastSeen > 10 * 60_000) return 0; // nobody is working right now
+  return Math.round((now - workStartAt) / 60_000);
+}
+
 function currentSituation(): Situation {
   const now = Date.now();
   return {
     hour: new Date().getHours(),
-    workMinutes: Math.round((now - Math.max(BOOT_AT, lastActivity - 60 * 60_000)) / 60_000),
+    workMinutes: workMinutesNow(),
     typing: now < typingUntil,
     present: now - Math.max(lastActivity, lastTypingEventAt) < 5 * 60_000,
     gaming: gamingActive(),
@@ -2415,6 +2628,10 @@ async function sleepScene() {
 // Feedback probe: if your typing spikes right after a BIG scene started, it
 // was in the way; calm continuation means it landed well.
 function watchReaction(id: string) {
+  // Scenes played to an empty room must not learn anything — "no typing"
+  // there is absence, not approval, and it was drifting night scenes to the
+  // weight cap while punishing everything played during real work.
+  if (Date.now() - lastActivity > 5 * 60_000) return;
   const before = lastTypingEventAt;
   window.setTimeout(() => {
     const during = lastTypingEventAt > before && Date.now() - lastTypingEventAt < 12_000;
@@ -2510,7 +2727,12 @@ function corvinIdleTick() {
         gamingActive() ||
         quietNow()
       ) {
-        return; // corvinIdleCycle() (next setState idle) restarts the chain
+        // Re-arm OURSELVES: relying on the next setState("idle") left the
+        // chain dead for hours when a quiet hour / game tail expired with no
+        // scene running to call it (hard review). clearTimeout in the arming
+        // makes the double-arm case safe.
+        corvinIdleTick();
+        return;
       }
       const st = stage.dataset.state || "idle";
       const workish = st === "coding" || st === "searching" || st === "speaking";
@@ -2587,6 +2809,14 @@ function scheduleDanteBeats() {
   window.setInterval(() => {
     if (isCorvin() || !home || !beatReady()) return;
     const now = Date.now();
+    // These three are GAME-SESSION clocks: once armed they used to run for
+    // the rest of the app's life — pizza every hour at the desk with no game
+    // open (hard review). Outside a session the daily hour table covers them.
+    if (!gamingActive()) {
+      lastDanteSpin = 0;
+      lastDanteCoin = 0;
+      lastDantePizza = 0;
+    }
     if (lastDantePizza && now - lastDantePizza > DANTE_PIZZA_EVERY) {
       lastDantePizza = now;
       dbg("dante beat: pizza (game 18:00 + 60m clock)");
@@ -2642,11 +2872,11 @@ async function gamingAmbience() {
       curClip = SWORDSPIN;
       frameIdx = 0;
       window.setTimeout(sfxIgnite, 300 * paceMul());
-      await sleep(SWORDSPIN.frames.length * SWORDSPIN.ms * paceMul() + 200);
+      await sleep(danteClipTotal(SWORDSPIN) + 200);
     } else {
-      curClip = GUNSPIN;
-      frameIdx = 0;
-      await sleep(GUNSPIN.frames.length * GUNSPIN.ms * loops);
+      // GUNSPIN settles on its last frame, so one assignment plus a long sleep
+      // only played one spin and froze. Restart it for every requested pass.
+      await playDante(GUNSPIN, loops);
       sfxHolster();
     }
   } finally {
@@ -2737,7 +2967,7 @@ function scheduleGamingBeat() {
         // gets its own minute mark inside a session (user-directed: "all
         // animations on time in Steam"). Most-overdue wins when two are due.
         const due = isCorvin()
-          ? HUNT_CLOCKS.filter((c) => now - c.last >= c.every).sort(
+          ? HUNT_CLOCKS.filter((c) => c.last > 0 && now - c.last >= c.every).sort(
               (a, b) => (now - b.last) / b.every - (now - a.last) / a.every,
             )
           : [];
@@ -2747,7 +2977,7 @@ function scheduleGamingBeat() {
           markScene();
           dbg(`hunt ${c.name} (${c.firstAt}:00 + ${Math.round(c.every / 60_000)}m)`);
           await c.run();
-        } else if (!isCorvin() && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
+        } else if (!isCorvin() && lastGamingDevil > 0 && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
           lastGamingDevil = now;
           markScene();
           dbg("gaming devil trigger (3:00 + 10min cadence)");
@@ -2755,6 +2985,7 @@ function scheduleGamingBeat() {
         } else if (
           !isCorvin() &&
           swordReady &&
+          lastGamingSword > 0 &&
           now - lastGamingSword > GAMING_SWORD_EVERY &&
           sceneAllowed()
         ) {
@@ -2765,8 +2996,10 @@ function scheduleGamingBeat() {
         } else if (
           !isCorvin() &&
           now - lastGamingSpecial > 60 * 60 * 1000 &&
+          sceneAllowed() && // it blocks the beat chain for up to 2 min — gate it
           Math.random() < 0.35
         ) {
+          lastGamingSpecial = now;
           dbg("gaming special (hourly)");
           await gamingSpecial();
         } else if (now > nextGamingAmbience) {
@@ -2925,6 +3158,10 @@ function playWalk(leaving = false) {
 // M1.4: mood pace — tired Dante plays every clip a touch slower, fresh Dante
 // snappier. CLIP playback only; window tweens keep real time or walks drift.
 function paceMul(): number {
+  // Scenes are hand-timed choreography (and the Door overlay runs on raw
+  // wall-clock): while one owns the stage, the mood must not stretch frames —
+  // playCorvin awaits raw totals, so scaling here would amputate clip tails.
+  if (gagActive) return 1;
   return Math.min(1.12, Math.max(0.88, 1.14 - life.v.energy * 0.26));
 }
 
@@ -3049,7 +3286,12 @@ function markScene() {
   lastSceneAt = Date.now();
 }
 
-function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
+function showBubble(
+  text: string | null,
+  prio: number = PRIO.NOTABLE,
+  durationMs = 4500,
+  allowVoice = true,
+) {
   // Ambient chatter: usually skipped entirely, and always silent. Decide
   // BEFORE touching the hide timer — a bailing ambient call used to clear the
   // previous bubble's hide timeout and leave it stuck on screen forever.
@@ -3059,7 +3301,10 @@ function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
       story.chapter() === "stranger" ? AMBIENT_BUBBLE_CHANCE / 2 : AMBIENT_BUBBLE_CHANCE;
     if (busyBurst() || Math.random() > chance) return;
   }
-  if (bubbleTimer) clearTimeout(bubbleTimer);
+  if (bubbleTimer) {
+    clearTimeout(bubbleTimer);
+    bubbleTimer = undefined;
+  }
   if (!text) {
     bubble.classList.add("hidden");
     return;
@@ -3069,11 +3314,22 @@ function showBubble(text: string | null, prio: number = PRIO.NOTABLE) {
   const now = Date.now();
   const mayVoice =
     prio === PRIO.MAJOR || (prio === PRIO.NOTABLE && now - lastVoiceAt >= VOICE_MIN_GAP);
-  if (mayVoice) {
+  if (allowVoice && mayVoice) {
     lastVoiceAt = now;
     voiceSay(text); // real recorded line if we have one, else a blip
   }
-  bubbleTimer = window.setTimeout(() => bubble.classList.add("hidden"), 4500);
+  bubbleTimer = window.setTimeout(() => {
+    bubble.classList.add("hidden");
+    bubbleTimer = undefined;
+  }, durationMs);
+}
+
+function hideBubbleAfter(durationMs: number) {
+  if (bubbleTimer) window.clearTimeout(bubbleTimer);
+  bubbleTimer = window.setTimeout(() => {
+    bubble.classList.add("hidden");
+    bubbleTimer = undefined;
+  }, durationMs);
 }
 
 function scheduleIdle() {
@@ -3209,6 +3465,7 @@ function coldError() {
   commitFor(1900);
   curClip = seatedNow ? idleClip("sitcross") : STAND_CROSS;
   frameIdx = 0;
+  afterClip = null; // a stale idle callback must not fire mid-reaction
 }
 
 // Seated annoyed watch-check with a shrug line.
@@ -3219,6 +3476,7 @@ function annoyedWatch() {
   commitFor(1700);
   curClip = idleClip("checkwatch");
   frameIdx = 0;
+  afterClip = null; // a stale idle callback must not fire mid-reaction
   showBubble(pickLine(SHRUG_LINES), PRIO.NOTABLE);
 }
 
@@ -3232,7 +3490,7 @@ async function coinFlourish() {
     await standUp();
     curClip = COINFLIP;
     frameIdx = 0;
-    await sleep(COINFLIP.frames.length * COINFLIP.ms * paceMul() + 250);
+    await sleep(danteClipTotal(COINFLIP) + 250);
   } finally {
     gagActive = false;
     setState("idle");
@@ -3315,33 +3573,28 @@ function applyEvent(e: AgentEvent) {
   lastActivity = Date.now(); // any event means the AI is active
   maybeDailyRitual(); // the first activity of a new day gets its ceremony
   serviceMediaWish(); // and a queued media moment gets another chance
-  recentEvents.push(lastActivity); // feeds busyBurst() — stay quiet when I'm hammering
-  life.onEvent(e.state); // v2 P1: nudge the internal state (doesn't drive behaviour yet)
   // HUD + bubble are always live, even while a state is being held.
   starsEl.textContent = `★ ${e.stars}`;
   levelEl.textContent = `Lv.${e.level}`;
-  const leveledUp = e.level > lastLevel; // handled as a Devil-Trigger scene below
-  lastLevel = e.level;
-  // Crossed a 25-star mark this event? (first event just seeds prevStars.)
-  const crossedMilestone =
-    prevStars >= 0 &&
-    Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
-  prevStars = e.stars;
   // No ambient chatter over a running scene — the scene owns the screen.
   // Corvin is SILENT (user-directed): no work chatter at all — his words live
   // in the stories only. Dante keeps his phrases.
   if (!gagActive && !showcasing && !isCorvin()) showBubble(e.phrase, PRIO.AMBIENT);
   dbg(
-    `event=${e.state} lvlUp=${leveledUp} milestone=${crossedMilestone} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
+    `event=${e.state} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
   );
-  if (gagActive || showcasing || returning || introActive) return; // a scene owns the sprite + window
+  if (gagActive || showcasing || returning || introActive || wandering) return; // a scene/walk owns the stage
   if (away) {
     returnScene(); // he's off-screen -> walk back in first; next events drive state
     return;
   }
 
   // Hold thinking/speaking for a minimum so they don't get clobbered instantly
-  // by the next JSONL line. Defer (coalescing to the latest) until the hold ends.
+  // by the next JSONL line. Defer (coalescing to the latest) until the hold
+  // ends. This check MUST run before any one-shot bookkeeping below — the
+  // level/star mutations used to run first, so a deferred event replayed
+  // against already-updated values and the Devil-Trigger/milestone payoffs
+  // were silently eaten (hard review, HIGH).
   const cur = stage.dataset.state || "idle";
   const hold = MIN_HOLD[cur] ?? 0;
   const held = performance.now() - stateShownAt;
@@ -3362,6 +3615,17 @@ function applyEvent(e: AgentEvent) {
     pendingTimer = undefined;
   }
 
+  // One-shot bookkeeping — exactly once per event, never on the deferral path.
+  recentEvents.push(lastActivity); // feeds busyBurst() — stay quiet when I'm hammering
+  life.onEvent(e.state); // v2 P1: nudge the internal state
+  const leveledUp = e.level > lastLevel; // handled as a Devil-Trigger scene below
+  lastLevel = e.level;
+  // Crossed a 25-star mark this event? (first event just seeds prevStars.)
+  const crossedMilestone =
+    prevStars >= 0 &&
+    Math.floor(e.stars / STAR_MILESTONE) > Math.floor(prevStars / STAR_MILESTONE);
+  prevStars = e.stars;
+
   stateShownAt = performance.now();
   // Big scenes are rate-limited (SCENE_MIN_GAP): if one just ran, the moment
   // degrades to a light beat instead of stacking spectacle on spectacle.
@@ -3375,7 +3639,7 @@ function applyEvent(e: AgentEvent) {
     const snap = life.v.patience < 0.35 ? 2 : 3;
     // During a game the hunt clocks own the stage (and grab every open scene
     // window otherwise) — AI payoffs degrade to bubbles until the game ends.
-    if (errStreak >= snap && !gamingActive() && sceneAllowed() && sceneBudgetOk("breakdown")) {
+    if (errStreak >= snap && !gamingActive() && !quietNow() && sceneAllowed() && sceneBudgetOk("breakdown")) {
       errStreak = 0;
       markScene();
       budgetScene("breakdown");
@@ -3415,7 +3679,7 @@ function applyEvent(e: AgentEvent) {
       scheduleIdle();
       return;
     }
-    if (leveledUp && !gamingActive() && sceneBudgetOk("devil")) {
+    if (leveledUp && !gamingActive() && !quietNow() && sceneBudgetOk("devil")) {
       winStreak = 0;
       markScene();
       budgetScene("devil");
@@ -3427,13 +3691,13 @@ function applyEvent(e: AgentEvent) {
         window.setTimeout(() => showBubble("Level 5. The sword comes out now.", PRIO.NOTABLE), 4000);
       if (lastLevel >= 10 && story.first("lv10"))
         window.setTimeout(() => showBubble("Double digits. Just warming up.", PRIO.NOTABLE), 4000);
-    } else if (crossedMilestone && !gamingActive() && sceneAllowed() && sceneBudgetOk("dance")) {
+    } else if (crossedMilestone && !gamingActive() && !quietNow() && sceneAllowed() && sceneBudgetOk("dance")) {
       winStreak = 0;
       markScene();
       budgetScene("dance");
       if (isCorvin()) void nuzzleScene(); // 25★ -> the eagle's rare approval
       else danceScene(); // 25★ milestone -> dance
-    } else if (winStreak >= 3 && !gamingActive() && sceneAllowed() && sceneBudgetOk("jackpot")) {
+    } else if (winStreak >= 3 && !gamingActive() && !quietNow() && sceneAllowed() && sceneBudgetOk("jackpot")) {
       winStreak = 0;
       markScene();
       budgetScene("jackpot");
@@ -3555,6 +3819,7 @@ let postureSettle = 0;
 // so the speed is realistic regardless of distance.
 function slideWindow(toX: number, pace = 150): Promise<void> {
   if (!home) return Promise.resolve();
+  cancelAnimationFrame(winTween);
   const h = home;
   const fromX = h.lastX;
   const dur = Math.max(500, (Math.abs(toX - fromX) / pace) * 1000);
@@ -3571,13 +3836,70 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
       h.win.setPosition(new PhysicalPosition(x, h.y));
       h.lastX = x;
       h.lastY = h.y; // walking happens standing
-      if (p < 1) requestAnimationFrame(step);
+      if (p < 1) winTween = requestAnimationFrame(step);
       else {
         window.clearInterval(scuffs);
+        winTween = 0;
         resolve();
       }
     };
-    requestAnimationFrame(step);
+    winTween = requestAnimationFrame(step);
+  });
+}
+
+const BACKSTEP_WINDOW_BEATS: Array<[number, number]> = [
+  [120, 0.05],
+  [420, 0.17],
+  [760, 0.32],
+  [1120, 0.47],
+  [1510, 0.62],
+  [1900, 0.76],
+  [2300, 0.9],
+  [2650, 1],
+];
+
+function stepWindowX(toX: number, beats = BACKSTEP_WINDOW_BEATS, stepMs = 145): Promise<void> {
+  if (!home) return Promise.resolve();
+  cancelAnimationFrame(winTween);
+  const h = home;
+  const fromX = h.lastX;
+  const y = h.y;
+  let segment = 0;
+  let segFrom = fromX;
+  let segTo = fromX;
+  let segStartedAt = performance.now();
+  const start = segStartedAt;
+  return new Promise<void>((resolve) => {
+    const tick = (now: number) => {
+      if (!home) {
+        resolve();
+        return;
+      }
+      const elapsed = now - start;
+      while (segment < beats.length && elapsed >= beats[segment][0]) {
+        segFrom = h.lastX;
+        segTo = Math.round(fromX + (toX - fromX) * beats[segment][1]);
+        segStartedAt = now;
+        segment += 1;
+        if (Math.abs(segTo - segFrom) > 1) sfxScuff();
+      }
+      const p = Math.min(1, (now - segStartedAt) / stepMs);
+      const e = 1 - Math.pow(1 - p, 3);
+      const x = Math.round(segFrom + (segTo - segFrom) * e);
+      h.win.setPosition(new PhysicalPosition(x, y));
+      h.lastX = x;
+      h.lastY = y;
+      if (segment >= beats.length && p >= 1) {
+        h.win.setPosition(new PhysicalPosition(toX, y));
+        h.lastX = toX;
+        h.lastY = y;
+        winTween = 0;
+        resolve();
+        return;
+      }
+      winTween = requestAnimationFrame(tick);
+    };
+    winTween = requestAnimationFrame(tick);
   });
 }
 
@@ -3625,11 +3947,12 @@ async function runIntro() {
     const cornerX = ox + sw - winW - Math.round(12 * sf); // by the clock
 
     // Dropped so his seat lands on the panel top edge and the dangling legs
-    // hang down over the taskbar. Nudge in ~0.04·winH steps if off.
-    const sitY = y + Math.round(winH * 0.34);
+    // hang down over the taskbar. The window has extra transparent headroom
+    // for speech bubbles, so this stays tied to the 190px sprite, not winH.
+    const sitY = y + Math.round(74 * sf);
     // A small visible dip for the error fall — he stays fully on-screen so the
     // falling + climb animations are unmissable (no dropping off the bottom).
-    const belowY = y + Math.round(winH * 0.3);
+    const belowY = y + Math.round(66 * sf);
     home = { win, ox, scrRight: ox + sw, winW, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
     dbg(`intro home set mon=${sw}x${sh} y=${y} sitY=${sitY} corner=${cornerX}`);
     await win.setPosition(new PhysicalPosition(startX, y));
@@ -3659,12 +3982,12 @@ async function runIntro() {
       // the arrival stumble (user-directed): a quick stagger sells the stop
       curClip = ANIMS_DANTE.error;
       frameIdx = 0;
-      await sleep(ANIMS_DANTE.error.frames.length * ANIMS_DANTE.error.ms + 120);
+      await sleep(danteClipTotal(ANIMS_DANTE.error) + 120);
       // then sit DOWN onto the panel (stand->sit) while the window lowers
       curClip = SITDOWN;
       frameIdx = 0;
       posture("idle", true); // drop the window to the seated height
-      await sleep(SITDOWN.frames.length * SITDOWN.ms);
+      await sleep(danteClipTotal(SITDOWN));
       setState("idle"); // seated leg-swing loop
     }
     // Discovery > demonstration. No auto-showcase — let users find everything
@@ -3675,6 +3998,10 @@ async function runIntro() {
     console.error("intro failed", err);
   } finally {
     introActive = false;
+    if (!localStorage.getItem("echo.firstRunHint.v1")) {
+      localStorage.setItem("echo.firstRunHint.v1", "1");
+      window.setTimeout(() => showBubble(FIRST_RUN_HINT, PRIO.NOTABLE), 500);
+    }
     scheduleIdle();
   }
 }
@@ -3698,7 +4025,7 @@ async function leaveScene() {
       // the departure stumble (user-directed) — he shakes it off and goes
       curClip = ANIMS_DANTE.error;
       frameIdx = 0;
-      await sleep(ANIMS_DANTE.error.frames.length * ANIMS_DANTE.error.ms + 120);
+      await sleep(danteClipTotal(ANIMS_DANTE.error) + 120);
     }
     const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
@@ -3728,11 +4055,11 @@ async function returnScene() {
     // stand and look around before sitting — same arrival beat as the intro
     curClip = STAND_CROSS;
     frameIdx = 0;
-    await sleep(STAND_CROSS.frames.length * STAND_CROSS.ms + 500);
+    await sleep(danteClipTotal(STAND_CROSS) + 500);
     curClip = SITDOWN; // sit down onto the panel
     frameIdx = 0;
     posture("idle", true);
-    await sleep(SITDOWN.frames.length * SITDOWN.ms);
+    await sleep(danteClipTotal(SITDOWN));
     setState("idle");
     showBubble(pickLine(RETURN_LINES), PRIO.MAJOR);
   } finally {
@@ -3756,7 +4083,8 @@ function laughBeat() {
   if (stage.dataset.state !== "idle") return;
   curClip = LAUGH; // one-shot -> frameLoop falls back to idle (leg-swing)
   frameIdx = 0;
-  commitFor(LAUGH.frames.length * LAUGH.ms); // let the chuckle play out
+  afterClip = null; // a stale idle callback must not fire mid-chuckle
+  commitFor(danteClipTotal(LAUGH)); // let the chuckle play out
 }
 
 // Error gag: gets hit (stagger) → FALLS down under the taskbar → hides a beat →
@@ -3826,13 +4154,13 @@ async function shootScene(shots = 1) {
     if (Math.random() < 0.95 || story.chapter() === "stranger") {
       curClip = GUNSPIN;
       frameIdx = 0;
-      await sleep(GUNSPIN.frames.length * GUNSPIN.ms);
+      await sleep(danteClipTotal(GUNSPIN));
       sfxHolster();
     } else {
       curClip = TAUNT;
       frameIdx = 0;
       showBubble("Come on!", PRIO.MAJOR);
-      await sleep(TAUNT.frames.length * TAUNT.ms + 350);
+      await sleep(danteClipTotal(TAUNT) + 350);
     }
   } finally {
     stage.classList.remove("shooting");
@@ -3977,13 +4305,16 @@ async function posterScene(durationMs: number) {
       focus: false,
       shadow: false,
     });
-    await new Promise<void>((res) => {
-      win!.once("tauri://created", () => res());
+    const posterOk = await new Promise<boolean>((res) => {
+      win!.once("tauri://created", () => res(true));
       win!.once("tauri://error", (e) => {
         dbg(`poster window error: ${JSON.stringify(e)}`);
-        res();
+        res(false);
       });
     });
+    // A failed poster window must degrade to song-plus-dance, not abort the
+    // whole beat with an unhandled rejection on a dead handle (hard review).
+    if (!posterOk) win = null;
     // Directly above his raised hands, centered on the sprite window; a slow
     // ±3px bob so the held poster feels alive.
     const sf = window.devicePixelRatio || 1;
@@ -3993,11 +4324,11 @@ async function posterScene(durationMs: number) {
     // Centered over him, but a wide poster must not run off the screen edge.
     const px = Math.min(Math.round(h.lastX + (winW - pw) / 2), h.scrRight - pw - 6);
     const py = Math.round(h.y - ph + 26);
-    await win.setPosition(new PhysicalPosition(px, py));
+    await win?.setPosition(new PhysicalPosition(px, py)).catch(() => {});
     // The synchronized beat: reveal the poster, start its gif, start the song —
     // all in the same tick. Small settle first so the webview is ready.
     await sleep(250);
-    await win.show().catch(() => {});
+    await win?.show().catch(() => {});
     void emit("poster-show");
     audio.onerror = () => dbg(`song decode error: code=${audio?.error?.code}`);
     audio
@@ -4040,10 +4371,11 @@ async function danceScene(durationMs?: number) {
     await standUp();
     await sleep(240 + Math.random() * 120); // a breath before the first move
     // §10: headbang leads; the classic moves become the rarer treat.
-    curClip = Math.random() < 0.8 ? HEADBANG : DANCE;
+    const danceClip = Math.random() < 0.8 ? HEADBANG : DANCE;
+    curClip = danceClip;
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
-    const loop = DANCE.frames.length * DANCE.ms;
+    const loop = danteClipTotal(danceClip);
     // one beat-shake at the start, then let the dance speak for itself
     shake(250);
     // M1.7: 1% of milestone dances run double length — a discovery, not a habit.
@@ -4058,7 +4390,7 @@ async function danceScene(durationMs?: number) {
 
 // Level up -> Devil Trigger: stand, strike the power pose, red aura + vignette.
 async function devilTriggerScene() {
-  if (!home || gagActive) return;
+  if (isCorvin() || !home || gagActive) return;
   gagActive = true;
   try {
     stage.dataset.state = "success";
@@ -4090,39 +4422,9 @@ async function playDante(c: Clip, plays = 1): Promise<void> {
     await sleep(danteClipTotal(c) + 80);
   }
 }
-const BOSS_ALARM = clip("d_bossalarm", 150, false, 8, 13);
-const BOSS_CLASH = clip("d_bossclash", 120, false, 8, 15);
-const BOSS_THROWN = clip("d_bossthrown", 170, false, 8, 15);
-const BOSS_FINISH = clip("d_bossfinish", 150, false, 8, 17);
 const DEVIL_RISE = clip("d_devilrise", 160, false, 8, 15);
 const DEVIL_BURN = clip("d_devilburn", 140, true, 0, 11);
 const DEVIL_CALM = clip("d_devilcalm", 180, false, 8, 15);
-
-// Dante's Boss Fight — his own Breach: snaps alert, a furious flurry, blasted
-// flat, then the Devil Trigger finish and the smug hair flick.
-async function bossFightScene() {
-  if (!home || gagActive || isCorvin()) return;
-  gagActive = true;
-  try {
-    stage.dataset.state = "success";
-    document.documentElement.style.setProperty("--accent", ACCENT.error);
-    await standUp();
-    // His boss comes through the same screen-edge rift, tinted crimson.
-    // The boss is AGGRESSIVE: charges in during the alarm, strikes through the
-    // clash — that's what throws Dante flat — and dies on the DT finish.
-    void riftGlow(15_000, { demon: true, dwalk: 200, datk: 2600, ddie: 9200, tint: "red" });
-    await playDante(BOSS_ALARM);
-    await playDante(BOSS_CLASH, 2);
-    await playDante(BOSS_THROWN);
-    await sleep(500); // the beat on the ground — he takes it, then rises
-    levelUpFlash();
-    void sayDemonJackpot();
-    await playDante(BOSS_FINISH);
-  } finally {
-    gagActive = false;
-    setState("idle");
-  }
-}
 
 // The full Devil Form — the beautiful one: eruption, the winged demon burning
 // in place, then a graceful return to the man.
@@ -4150,21 +4452,43 @@ async function devilFormScene() {
 // he wins, THE ARM triggers — a demon for a breath — then the man again.
 async function doorFightScene() {
   await corvinScene(async () => {
-    // The Door glows the whole fight; its demon walks in during the brace,
-    // claws through the clash, dies on the finishing strike.
-    // Timings measured against the sprite chain (sense 2.3s, brace 3.6s,
-    // clash 5.1s, win-blow ~11.8s) minus ~0.6s rift-window boot latency:
-    // the demon walks in WHILE Corvin braces, looms a beat, strikes when the
-    // clash starts, and dies exactly on the finishing blow.
-    void riftGlow(27_000, { demon: true, dwalk: 1650, datk: 5300, ddie: 11200 });
-    await playCorvin(CORVIN.doorsense);
-    await playCorvin(CORVIN.demonout);
-    await playCorvin(CORVIN.doorfight, 2);
-    await playCorvin(CORVIN.doorwin);
-    await sleep(500); // the win settles — then the ARM decides otherwise
-    await playCorvin(CORVIN.armtrigger);
-    await sleep(700); // the demon breathes
-    await playCorvin(CORVIN.armcalm);
+    // THE DOOR, single-arm cut (user-directed): a slow epic opening, ONE
+    // monstrous arm forcing its way out, two guarded steps back, the sword
+    // set aside — and THE ARM's octopus grip pushing the claws back through.
+    // Mirrored by the overlay's hands timeline (overlay = scene - ~600ms):
+    //   0.0s  he senses it — the crack blooms slowly
+    //   2.1s  claws punch through; he steps back once... twice, sword-shield up
+    //   5.1s  the arm hauls itself out and LUNGES -> parried, sparks
+    //   5.8s  his choice: the sword goes away — THE ARM rises
+    //   8.1s  tendrils GRIP the demon hand (burst at the grab)
+    //   8.5s  the struggle: trembling, it is forced back inch by inch
+    //  12.5s  the Door slams; the arm cools, the sword returns, he walks home
+    void riftGlow(17_700, { fight: "door" });
+    // Anchor on the CORNER, never on lastX — if anything nudged the window,
+    // the duel still fights (and ends) at his post.
+    const homeX = home!.cornerX;
+    if (Math.abs(home!.lastX - homeX) > 4) {
+      home!.lastX = homeX;
+      await home!.win.setPosition(new PhysicalPosition(homeX, home!.y));
+    }
+    await playCorvin(CORVIN.doorsense); // turn, grip — the guard is up
+    // ONE CONNECTED GENERATED FLOW from here (user-directed): the backstep
+    // clip walks him backward WHILE the window moves on footfall beats, then
+    // sword-plant -> ARM raised -> octopus erupts, all chained frame to frame.
+    const stepBack = stepWindowX(homeX - 160); // short bursts match the steps
+    await playCorvin(CORVIN.backstep);
+    await stepBack;
+    await sleep(300); // the arm is fully out — it coils
+    await playCorvin(CORVIN.parry); // the LUNGE meets steel — sparks
+    await sleep(350);
+    await playCorvin(CORVIN.doorplant); // his choice: the blade goes into the ground
+    await playCorvin(CORVIN.armup); // THE ARM rises, veins igniting
+    await playCorvin(CORVIN.armoctopus); // tentacles ERUPT and cross the gap
+    await playCorvin(CORVIN.armgrip, 3); // gripping — pushing it back, inch by inch
+    await sleep(400); // the Door slams — the silence after
+    await playCorvin(CORVIN.armcalm); // the arm cools; the man remains
+    await playCorvin(CORVIN.swordtake); // he pulls the blade free — the watch resumes
+    await slideWindow(homeX, 400); // and walks back to his post
   }, "#a852ff");
   story.s.gags.lastDoorAt = Date.now();
   story.save();
@@ -4175,9 +4499,15 @@ async function doorFightScene() {
 // owns the stage; the period stretches when his energy is low.
 function startBreathing() {
   const wrap = document.createElement("div");
+  wrap.style.position = "absolute";
+  wrap.style.right = "0";
+  wrap.style.bottom = "0";
+  wrap.style.width = "190px";
+  wrap.style.height = "190px";
   wrap.style.display = "flex";
   wrap.style.alignItems = "flex-end";
-  wrap.style.justifyContent = "center";
+  wrap.style.justifyContent = "flex-end";
+  wrap.style.pointerEvents = "none";
   sprite.parentElement!.insertBefore(wrap, sprite);
   wrap.appendChild(sprite);
   const step = (now: number) => {
@@ -4222,6 +4552,10 @@ async function main() {
   // M2: load the story; a new day gets a greeting built from yesterday's REAL
   // numbers — he remembers, and says so once the walk-in has finished.
   await story.load();
+  // The director was constructed BEFORE the story loaded (module scope), so
+  // its state was always fresh and the first save wiped everything learned.
+  // Rebind to the loaded state — this is what makes learning survive restarts.
+  director.st = { weights: {}, lastPlayed: {}, ...story.s.director };
   const todayKey = dateKey();
   const newDay = !!story.s.lastSeenDate && story.s.lastSeenDate !== todayKey;
   const y = story.yesterday();
@@ -4254,10 +4588,17 @@ async function main() {
   // leaves again later — so the desktop breathes). A real AI event brings him
   // straight back via applyEvent regardless.
   window.setInterval(() => {
-    if (returning || wandering || gagActive || showcasing) return;
+    if (returning || wandering || gagActive || showcasing || introActive) return;
     if (away) {
       if (Date.now() - awayAt > AWAY_RETURN_MS) returnScene();
       return;
+    }
+    // X self-heal: a scene that died mid-slide (thrown promise, killed
+    // overlay) used to strand him mid-screen forever — Y healed, X never did.
+    if (home && Math.abs(home.lastX - home.cornerX) > 4) {
+      dbg(`x-heal: ${home.lastX} -> corner ${home.cornerX}`);
+      home.lastX = home.cornerX;
+      void home.win.setPosition(new PhysicalPosition(home.cornerX, home.y)).catch(() => {});
     }
     if (stage.dataset.state !== "idle") return;
     if (Date.now() - lastActivity > AWAY_AFTER_MS) leaveScene();
@@ -4278,7 +4619,8 @@ async function main() {
   }
   window.setInterval(() => {
     if (Date.now() - lastDevil < DEVIL_EVERY) return;
-    if (gagActive || showcasing || wandering || away || returning || committed()) return;
+    if (isCorvin()) return;
+    if (gagActive || showcasing || wandering || away || returning || committed() || quietNow()) return;
     if (stage.dataset.state !== "idle") return;
     lastDevil = Date.now();
     localStorage.setItem("echo.lastDevil", String(lastDevil));
@@ -4358,64 +4700,343 @@ function riftMain(q: URLSearchParams) {
   // ddie -> death. tint=red re-colours him for Dante's boss fight.
   if (q.has("demon")) {
     const W = window.innerWidth;
-    const dwalk = Number(q.get("dwalk")) || 800;
-    const datk = Number(q.get("datk")) || 6000;
-    const ddie = Number(q.get("ddie")) || 11000;
     const red = q.get("tint") === "red";
+    // CHOREOGRAPHY (user-directed: "they must touch, beat each other").
+    // Each entry: [t_ms, mode]. Times mirror the sprite scene's beat table
+    // (see doorFightScene) minus ~600ms window-boot latency.
+    // attack = his swipe (the pet parries or takes it); hurt = the pet's blow
+    // LANDS on him (knockback); gloat = looming over a downed fighter.
+    // MAGIC fight (user-directed, produced): the demon fights from RANGE with
+    // arm magic — an anime bolt crosses the screen and detonates ON the pet —
+    // while the pet closes the distance himself for melee (his window slides
+    // in and back). Ranged combat also kills the window z-order fight: the
+    // demon never has to stand inside the pet's frame.
+    // cast = wind-up + bolt (spawn +550ms, flight 350ms); hurt = the pet's
+    // blow lands (knockback); gloat/menace = looming stillness.
+    // Staging (user-directed): in the DOOR fight Corvin retreats LEFT in a
+    // sword guard while the demon emerges — so the demon keeps his natural
+    // left-facing art, stays by his Door, and every landed blow knocks him
+    // back TOWARD it (+x). In the BOSS fight Dante holds his corner, so the
+    // demon mirrors, stops left of him, and knockback goes -x.
+    // Plan rows: [t, mode, walkTargetX?]. cast spawns a bolt at +550ms that
+    // flies 350ms and detonates on the fighter.
+    interface FightCfg {
+      kind: "hands" | "demon";
+      plan: Array<[number, string, number?]>;
+      mirror: boolean;
+      targetX: number;
+      knock: number;
+    }
+    const CFG: Record<string, FightCfg> = {
+      // THE DOOR (user-directed, portal reference): no walking boss — clawed
+      // ARMS reach out of the screen edge, lash at the retreating Corvin, and
+      // THE ARM's dark energy slowly forces them back until the Door slams.
+      door: {
+        kind: "hands",
+        mirror: false,
+        targetX: W - 300, // Corvin's raised-arm side after his guarded retreat
+        knock: 0,
+        plan: [], // the hands branch runs its own hardcoded timeline below
+      },
+      boss: {
+        kind: "demon",
+        mirror: true, // walked past Dante's corner — must turn to face him
+        targetX: W - 130,
+        knock: -14,
+        plan: [
+          [200, "walk", W - 430], [1300, "menace"],
+          [1350, "attack"], [2780, "hurt"],  // trading through the clash
+          [4060, "cast"],                    // the BIG blast — THIS throws Dante flat
+          [5270, "gloat"],
+          [7900, "hurt"],                    // the DT charge connects
+          [9180, "death"],                   // the finisher
+        ],
+      },
+    };
+    const cfg = CFG[q.get("fight") ?? "door"] ?? CFG.door;
+    const plan = cfg.plan;
+    if (cfg.kind === "hands") {
+      // --- THE DOOR, single-arm cut (user-directed) ------------------------
+      // One monstrous arm. Slow epic opening, a real emergence animation,
+      // a lunge met by the sword-shield, then THE ARM's octopus tendrils
+      // CLING to the demon hand and force it back through, inch by inch.
+      // Timeline (overlay ms = scene ms - ~600 boot lag):
+      //   1450-4700  the claws creep through while his retreat steps land
+      //   5050       the capped LUNGE -> Corvin's parry (spark on the blade)
+      //   11000      tendrils stream out and GRIP the hand (burst at contact)
+      //   11450-14900 the struggle: the arm, trembling, is pushed back through
+      //   ~14900     the Door slams shut
+      const GH = window.innerHeight - 46;
+      for (let i = 0; i < 15; i++) new Image().src = `/pixel/demon_arm_out/frame_${i}.png?v=1`;
+      for (let i = 0; i < 9; i++) new Image().src = `/pixel/demon_arm/frame_${i}.png?v=1`;
+      for (let i = 0; i < 9; i++) new Image().src = `/pixel/fx_burst/frame_${i}.png?v=1`;
+      for (let i = 0; i < 7; i++) new Image().src = `/pixel/fx_tendril/frame_${i}.png?v=1`;
+      const ARM_HEIGHT = 210; // the one arm, big
+      const EDGE_OVERLAP = 18; // bury the shoulder behind the Door glow
+      const ARM_ALPHA_SPAN = (128 - 6) / 128; // full-arm art starts near source x=6
+      const el = document.createElement("img");
+      el.style.cssText =
+        `position:fixed;top:${GH - 195}px;right:-${EDGE_OVERLAP}px;` +
+        `width:0;height:${ARM_HEIGHT}px;` +
+        "image-rendering:pixelated;pointer-events:none;" +
+        "filter:drop-shadow(0 6px 10px rgba(0,0,0,0.55));";
+      document.body.appendChild(el);
+      const REACH = 235; // fully out, capped before Corvin's interaction zone
+      const LUNGE_REACH = 52;
+      const EMERGE0 = 1450; // claws punch through during his sense-turn
+      const EMERGE1 = 4700; // full emergence stretches across the backstep
+      const LASH = 5050; // lunge peak rides the parry's block frame
+      const CLING = 11000; // the octopus reaches the hand mid-eruption
+      const PUSH0 = 11450;
+      const GONE = 14900; // pushed through just before the slam
+      const ARM_ROOT_X = cfg.targetX - 8;
+      const ARM_ROOT_Y = GH - 178;
+      let armX = W; // left edge of the arm img — the tendril clings to this
+      const pinArmToDoor = (reach: number) => {
+        const visibleReach = Math.max(0, reach);
+        armX = W - visibleReach;
+        // The shoulder stays behind the right edge. Increasing width extends
+        // only the claw end to the left, so a lunge can never tear the arm
+        // away from the Door.
+        el.style.width = `${(visibleReach + EDGE_OVERLAP) / ARM_ALPHA_SPAN}px`;
+      };
+      const sparkAt = (x: number, y: number, size = 90) => {
+        const s = document.createElement("img");
+        s.style.cssText =
+          `position:fixed;width:${size}px;image-rendering:pixelated;pointer-events:none;left:${x}px;top:${y}px;`;
+        document.body.appendChild(s);
+        let si = 0;
+        const st = window.setInterval(() => {
+          if (si >= 9) { window.clearInterval(st); s.remove(); return; }
+          s.src = `/pixel/fx_burst/frame_${si++}.png?v=1`;
+        }, 60);
+      };
+      const tn = document.createElement("img");
+      tn.style.cssText =
+        `position:fixed;height:142px;image-rendering:pixelated;pointer-events:none;` +
+        `transform:scaleX(-1);left:${ARM_ROOT_X}px;top:${ARM_ROOT_Y}px;width:0;`;
+      document.body.appendChild(tn);
+      let clingFired = false;
+      const t0h = performance.now();
+      const htick = (now: number) => {
+        const t = now - t0h;
+        if (t > GONE + 1800) {
+          el.remove();
+          tn.remove();
+          return;
+        }
+        // --- the arm ---
+        if (t >= EMERGE0) {
+          if (t < EMERGE1) {
+            // the emergence ANIMATION carries this phase (claws punch through,
+            // fingers unfurl); the img itself crawls out slowly with the steps
+            const p = (t - EMERGE0) / (EMERGE1 - EMERGE0);
+            const r = REACH * 0.62 * p + 26 * Math.sin(p * Math.PI); // heave
+            const fi = Math.min(14, Math.floor(p * 15));
+            el.src = `/pixel/demon_arm_out/frame_${fi}.png?v=1`;
+            pinArmToDoor(r);
+          } else if (t < PUSH0) {
+            let r = REACH * 0.62 + (REACH * 0.38) * Math.min(1, (t - EMERGE1) / 1000);
+            if (t >= LASH && t < LASH + 560) {
+              const lp = (t - LASH) / 560;
+              r += (lp < 0.32 ? lp / 0.32 : 1 - (lp - 0.32) / 0.68) * LUNGE_REACH;
+            }
+            el.src = `/pixel/demon_arm/frame_${(((t / 150) | 0) % 9)}.png?v=1`;
+            pinArmToDoor(r);
+          } else {
+            // the struggle: forced back slowly, trembling, grasping fast
+            const pp = Math.min(1, (t - PUSH0) / (GONE - PUSH0));
+            const ease = pp * pp * (3 - 2 * pp); // smoothstep — heavy resistance
+            const r = Math.max(0, REACH * (1 - ease) - Math.sin(t / 45) * 3.5);
+            el.src = `/pixel/demon_arm/frame_${(((t / 90) | 0) % 9)}.png?v=1`; // frantic
+            pinArmToDoor(r);
+            if (pp >= 1) el.style.opacity = "0";
+          }
+        }
+        // --- the octopus grip ---
+        if (t >= CLING && t < GONE + 300) {
+          if (!clingFired) {
+            clingFired = true;
+            sparkAt(armX - 24, ARM_ROOT_Y + 12, 120); // the tendrils SEIZE the hand
+          }
+          // clings to the hand: the stream spans exactly to the arm, however
+          // far it has been pushed — attached, not decorative
+          const span = Math.max(34, armX + 30 - ARM_ROOT_X);
+          const wr = 0.9 + 0.1 * Math.sin(t / 110);
+          tn.style.width = `${span * wr}px`;
+          tn.src = `/pixel/fx_tendril/frame_${((t / 90) | 0) % 7}.png?v=1`;
+        } else if (t >= GONE + 300) {
+          tn.style.width = "0";
+        }
+        requestAnimationFrame(htick);
+      };
+      requestAnimationFrame(htick);
+    } else {
     const SETS: Record<string, [string, number, number]> = {
       walk: ["demon_walk", 11, 150],
       attack: ["demon_attack", 11, 130],
+      cast: ["demon_cast", 11, 110],
+      hurt: ["demon_hurt", 9, 120],
       death: ["demon_death", 13, 170],
     };
+    for (const [dir, n] of [["fx_bolt", 7], ["fx_burst", 9]] as Array<[string, number]>)
+      for (let i = 0; i < n; i++) new Image().src = `/pixel/${dir}/frame_${i}.png?v=1`;
     for (const [dir, n] of Object.values(SETS).map((s) => [s[0], s[1]] as const))
       for (let i = 0; i < n; i++) new Image().src = `/pixel/${dir}/frame_${i}.png?v=1`;
     const dimg = document.createElement("img");
     dimg.style.cssText =
       "position:fixed;bottom:46px;width:170px;image-rendering:pixelated;pointer-events:none;" +
+      (cfg.mirror ? "transform:scaleX(-1);" : "") +
       `filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5))${red ? " hue-rotate(105deg) saturate(1.3)" : ""};` +
       `left:${W + 40}px;`;
     document.body.appendChild(dimg);
     const x0 = W + 40; // born inside the edge — he comes out of the Door
-    const x1 = W - 205 - 165; // stops just left of the pet's corner window
-    // Physics + psychology (user-directed): a heavy thing ACCELERATES slowly
-    // and stomps to a halt; a predator pauses to size you up before striking.
-    // walk = eased approach with a step-bob; menace = a still beat at arrival;
-    // death = a backward lurch, then the collapse into embers.
-    let phase: "wait" | "walk" | "menace" | "attack" | "death" | "gone" = "wait";
+    const targetX = cfg.targetX;
+    const targetY = window.innerHeight - 46 - 90;
+    // The anime bolt: sprite loop + arc flight + white-out flash on impact.
+    const fireBolt = () => {
+      const b = document.createElement("img");
+      b.style.cssText =
+        "position:fixed;width:132px;image-rendering:pixelated;pointer-events:none;" + // a HUGE ball
+        (cfg.mirror ? "transform:scaleX(-1);" : "") + // head flies point-first
+        (red ? "filter:hue-rotate(105deg) saturate(1.3);" : "");
+      document.body.appendChild(b);
+      // launches from the casting claw, wherever the demon stands right now
+      const bx0 = parseFloat(dimg.style.left || `${x0}`) + (cfg.mirror ? 120 : 20);
+      const by0 = window.innerHeight - 46 - 130;
+      const bt0 = performance.now();
+      const FLIGHT = 350;
+      let bfi = 0;
+      const btick = (now: number) => {
+        const p = (now - bt0) / FLIGHT;
+        if (p >= 1) {
+          b.remove();
+          // impact: burst sprite + a 200ms screen-tint flash
+          const burst = document.createElement("img");
+          burst.style.cssText =
+            "position:fixed;width:190px;image-rendering:pixelated;pointer-events:none;" +
+            `left:${targetX - 95}px;top:${targetY - 95}px;` +
+            (red ? "filter:hue-rotate(105deg) saturate(1.3);" : "");
+          document.body.appendChild(burst);
+          const flash = document.createElement("div");
+          flash.style.cssText =
+            "position:fixed;inset:0;pointer-events:none;" +
+            `background:${red ? "rgba(255,80,80,0.22)" : "rgba(190,120,255,0.22)"};` +
+            "transition:opacity 200ms ease-out;";
+          document.body.appendChild(flash);
+          requestAnimationFrame(() => (flash.style.opacity = "0"));
+          window.setTimeout(() => flash.remove(), 260);
+          let ki = 0;
+          const kt = window.setInterval(() => {
+            if (ki >= 9) {
+              window.clearInterval(kt);
+              burst.remove();
+              return;
+            }
+            burst.src = `/pixel/fx_burst/frame_${ki}.png?v=1`;
+            ki++;
+          }, 70);
+          return;
+        }
+        // a shallow arc with a live sprite loop — it WHIPS, not floats
+        const bx = bx0 + (targetX - bx0) * p;
+        const by = by0 + (targetY - by0) * p - Math.sin(p * Math.PI) * 34;
+        b.style.left = `${bx}px`;
+        b.style.top = `${by}px`;
+        if (((now - bt0) / 60) | 0) bfi = (((now - bt0) / 60) | 0) % 7;
+        b.src = `/pixel/fx_bolt/frame_${bfi}.png?v=1`;
+        requestAnimationFrame(btick);
+      };
+      requestAnimationFrame(btick);
+    };
+    // Physics: heavy ease-in/out walk with a step-bob; every landed blow
+    // knocks him back toward his side (cfg.knock); his swipes lunge forward.
+    let phase = "wait";
+    let phaseAt = 0; // plan time when the current phase began
     let fi = 0;
     let frameAt = 0;
-    const arriveAt = datk - 700; // he is THERE before he strikes — and waits
+    let baseX = x0; // где он стоит между сегментами; walk-сегменты его двигают
+    let segFrom = x0; // walk start x for the active segment
+    let segTo = x0;
+    let segEnd = 0; // when the active walk segment finishes
     const easeWalk = (p: number) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
     const t0 = performance.now();
     const dtick = (now: number) => {
       const t = now - t0;
       if (phase === "gone") return;
-      const want: typeof phase =
-        t >= ddie ? "death"
-        : t >= datk ? "attack"
-        : t >= arriveAt ? "menace"
-        : t >= dwalk ? "walk"
-        : "wait";
-      if (want !== phase) {
+      let want = "wait";
+      let wantAt = 0;
+      let wantTo: number | undefined;
+      let wantEnd = t + 1;
+      for (let i = 0; i < plan.length; i++) {
+        if (t >= plan[i][0]) {
+          want = plan[i][1];
+          wantAt = plan[i][0];
+          wantTo = plan[i][2];
+          wantEnd = i + 1 < plan.length ? plan[i + 1][0] : wantAt + 4000;
+        }
+      }
+      if (want !== phase || wantAt !== phaseAt) {
         phase = want;
+        phaseAt = wantAt;
         fi = 0;
         frameAt = now;
-        if (phase === "menace") dimg.src = `/pixel/demon_attack/frame_0.png?v=1`; // coiled, still
-        if (phase === "death") dimg.style.transition = "left 260ms ease-out";
+        if (phase === "walk") {
+          segFrom = baseX;
+          segTo = wantTo ?? baseX;
+          segEnd = wantEnd;
+        }
+        if (phase === "menace" || phase === "gloat" || phase === "tendril")
+          dimg.src = `/pixel/demon_attack/frame_0.png?v=1`; // coiled, still
+        if (phase === "cast") window.setTimeout(fireBolt, 550); // the throw releases
+        if (phase === "tendril") {
+          // THE ARM's octopus tendrils: anchored at the fighter, they STRETCH
+          // across the gap (350ms), writhe over the demon, then snap back.
+          const tn = document.createElement("img");
+          const ty = window.innerHeight - 46 - 150;
+          tn.style.cssText =
+            "position:fixed;height:120px;image-rendering:pixelated;pointer-events:none;" +
+            "transform:scaleX(-1);" + // flip in place: the taper points at the demon
+            `left:${targetX - 20}px;top:${ty}px;width:0px;`;
+          document.body.appendChild(tn);
+          const span = Math.max(60, baseX + 60 - (targetX - 20));
+          const tt0 = performance.now();
+          let tfi = 0;
+          const ttick = (tnow: number) => {
+            const tp = tnow - tt0;
+            if (tp > 1100) {
+              tn.remove();
+              return;
+            }
+            const wp = tp < 350 ? tp / 350 : tp > 900 ? Math.max(0, 1 - (tp - 900) / 200) : 1;
+            tn.style.width = `${span * wp}px`;
+            tfi = ((tp / 90) | 0) % 7;
+            tn.src = `/pixel/fx_tendril/frame_${tfi}.png?v=1`;
+            requestAnimationFrame(ttick);
+          };
+          requestAnimationFrame(ttick);
+        }
+        if (phase === "hurt") baseX += cfg.knock; // the blow lands — beaten back
+        if (phase === "death") {
+          dimg.style.transition = "left 260ms ease-out";
+          baseX += cfg.knock > 0 ? 18 : -18; // the finisher throws him
+        }
       }
       if (phase === "walk") {
-        const p = Math.min(1, (t - dwalk) / (arriveAt - dwalk));
-        dimg.style.left = `${x0 + (x1 - x0) * easeWalk(p)}px`;
-        // heavy step-bob: the mass lands twice per stride
-        dimg.style.bottom = `${46 + Math.abs(Math.sin(p * 22)) * 4}px`;
-      } else {
+        const p = Math.min(1, (t - phaseAt) / (segEnd - phaseAt));
+        baseX = segFrom + (segTo - segFrom) * easeWalk(p);
+        dimg.style.left = `${baseX}px`;
+        dimg.style.bottom = `${46 + Math.abs(Math.sin(p * 22)) * 4}px`; // heavy stride
+      } else if (phase !== "wait") {
+        // his swipe lunges toward the fighter; recovery pulls back to base
+        const dir = cfg.mirror ? 1 : -1; // which way "forward" is
+        const lunge =
+          phase === "attack" ? dir * Math.max(0, 18 - Math.abs((t - phaseAt) - 500) / 14) : 0;
+        dimg.style.left = `${baseX + lunge}px`;
         dimg.style.bottom = "46px";
       }
-      if (phase === "death" && fi === 0 && now - frameAt < 40) {
-        dimg.style.left = `${parseFloat(dimg.style.left) + 14}px`; // the blow lands — he reels back
-      }
-      if (phase === "walk" || phase === "attack" || phase === "death") {
-        const [dir, n, fms] = SETS[phase === "walk" ? "walk" : phase === "attack" ? "attack" : "death"];
+      if (phase === "walk" || phase === "attack" || phase === "cast" || phase === "hurt" || phase === "death") {
+        const [dir, n, fms] = SETS[phase];
         if (now - frameAt >= fms) {
           frameAt = now;
           if (phase === "death" && fi >= n - 1) {
@@ -4430,6 +5051,7 @@ function riftMain(q: URLSearchParams) {
       requestAnimationFrame(dtick);
     };
     requestAnimationFrame(dtick);
+    }
   }
   const band = document.createElement("div");
   band.style.cssText =
@@ -4467,18 +5089,17 @@ function riftMain(q: URLSearchParams) {
 }
 
 // Opens the rift overlay for `ms` — fire-and-forget; it seals and closes itself.
-// opts.demon walks the Door's demon across the screen on the given timings.
+// opts.fight walks the Door's demon through that fight's choreography preset.
 async function riftGlow(
   ms: number,
-  opts?: { demon?: boolean; dwalk?: number; datk?: number; ddie?: number; tint?: string },
+  opts?: { fight?: "door" | "boss"; tint?: string },
 ): Promise<void> {
   try {
     const mon = await currentMonitor();
     if (!mon) return;
     const sf = mon.scaleFactor || window.devicePixelRatio || 1;
-    const extra = opts?.demon
-      ? `&demon=1&dwalk=${opts.dwalk ?? 800}&datk=${opts.datk ?? 6000}&ddie=${opts.ddie ?? 11000}` +
-        (opts.tint ? `&tint=${opts.tint}` : "")
+    const extra = opts?.fight
+      ? `&demon=1&fight=${opts.fight}` + (opts.tint ? `&tint=${opts.tint}` : "")
       : "";
     const win = new WebviewWindow("rift", {
       url: `index.html?rift=1&ms=${ms}${extra}`,
@@ -4496,6 +5117,11 @@ async function riftGlow(
       shadow: false,
     });
     win.once("tauri://created", () => void win.setIgnoreCursorEvents(true).catch(() => {}));
+    win.once("tauri://error", (e) => dbg(`rift window error: ${JSON.stringify(e)}`));
+    // Parent-side failsafe: the overlay closes itself, but if its JS ever
+    // dies the "rift" label would be squatted forever and every later Door
+    // fight would silently lose its overlay. The parent guarantees the close.
+    window.setTimeout(() => void win.close().catch(() => {}), ms + 4000);
   } catch (e) {
     dbg(`rift failed: ${e}`);
   }
@@ -4600,4 +5226,17 @@ const bootQ = new URLSearchParams(location.search);
 if (bootQ.has("poster")) posterMain();
 else if (bootQ.has("skyfly")) skyflyMain(bootQ);
 else if (bootQ.has("rift")) riftMain(bootQ);
-else main();
+else {
+  void main();
+  // Browser-only visual QA hook: Tauri runs the real first-launch hint after
+  // the walk-in, while ?welcome=1 lets us inspect the same bubble at 260x420.
+  if (bootQ.has("welcome")) {
+    stage.style.position = "fixed";
+    stage.style.right = "0";
+    stage.style.bottom = "0";
+    stage.style.width = "260px";
+    stage.style.height = "420px";
+    const previewSpeech = bootQ.get("speech") || FIRST_RUN_HINT;
+    window.setTimeout(() => showBubble(previewSpeech, PRIO.NOTABLE), 300);
+  }
+}
