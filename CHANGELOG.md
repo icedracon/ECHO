@@ -1,9 +1,14 @@
 # Changelog
 
-## 0.2.3 - 2026-08-01
+## 0.2.4 - 2026-08-01
 
 ### Added
 
+- Automatic 00:40 night-watch scenes for both companions, with a once-per-night persisted trigger.
+- Corvin cairn rest, Artsiv doze, pebble toss and pebble drop animation chains.
+- Dante blanket pull, sleeping loop and wake/check/turn-back animation chains.
+- Corvin's media-watch portal snack and seated barbecue sequence.
+- Dante's full-width motorcycle ride, wheelie, return and off-screen dismount sequence.
 - Character switch between Dante and Corvin from the tray menu.
 - Windows portable aliases for release downloads:
   - `ECHO-Windows-Portable.exe`
@@ -22,6 +27,8 @@
 
 ### Changed
 
+- Corvin now rests seated against a cairn during long videos, with his sword laid aside instead of standing and leaning on it.
+- Dante mounts the motorcycle off-screen and uses one continuous sportbike design through the ride, wheelie and dismount.
 - Corvin's story, tale and grief voice now plays 1.5x faster.
 - Scene triggers switch to the correct character before starting at frame 0.
 - Dante scene waits now use the real per-frame timing sequence instead of average frame time.
@@ -46,6 +53,9 @@
 
 ### Fixed
 
+- Night scenes now restore the exact taskbar home position and a clean idle frame after every exit.
+- Dante's motorcycle no longer switches bike designs or snaps between incompatible arrival and ride clips.
+- Corvin's media rest no longer freezes on a transition frame after returning from the cairn.
 - Corvin scene and media-watch cleanup now forcibly releases the final protected frame instead of freezing side-on after the animation ends.
 - A fixed game beat due during the startup walk-in now waits instead of being marked as played and refused.
 - Steam's 15-minute Door fight no longer resets when returning to a fullscreen game after Alt+Tab.
@@ -74,6 +84,7 @@
 
 ### Verified
 
+- Live visual capture of Corvin's complete media sequence, Dante's motorcycle sequence and both 00:40 night-watch variants.
 - `npm run audit:runtime` checks animation frames/timings, demo routing, director dispatch and Corvin voice coverage.
 - `npm run build`
 - `cargo test --manifest-path src-tauri/Cargo.toml`

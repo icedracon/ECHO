@@ -58,6 +58,7 @@ export const ACTIONS: DirectorAction[] = [
   { id: "leanspell", kind: "pose", cooldownSec: 900, base: (s) => (s.workMinutes > 30 ? 1.4 : 0.8) },
   { id: "crouchcheck", kind: "small", cooldownSec: 700, base: (s) => (s.gaming ? 1.5 : 0.8) },
   { id: "swordcarry", kind: "pose", cooldownSec: 900, base: () => 0.9 }, // на плечо и обратно
+  { id: "swordrest", kind: "pose", cooldownSec: 3600, base: (s) => (s.typing ? 0 : s.sinceSceneSec > 900 ? 0.85 : 0.35) },
   { id: "stretch2", kind: "small", cooldownSec: 800, base: (s) => (s.workMinutes > 45 ? 1.7 : 0.7) },
   { id: "crouchrest", kind: "pose", cooldownSec: 1100, base: (s) => (s.workMinutes > 60 ? 1.4 : 0.6) },
   // --- быт: низкая энергия, тихие часы ---
@@ -93,6 +94,8 @@ export const DANTE_ACTIONS: DirectorAction[] = [
   { id: "pizza", kind: "big", cooldownSec: 7200, base: (s) => (s.workMinutes > 45 ? 1.7 : 0) },
   { id: "dance", kind: "big", cooldownSec: 5400, base: (s) => (evening(s) ? 1.5 : 0.35) },
   { id: "devilform", kind: "big", cooldownSec: 14400, base: (s) => (night(s) && s.present ? 1.5 : 0) },
+  // the motorcycle: a loud, rare joyride — only when someone is watching
+  { id: "moto", kind: "big", cooldownSec: 10800, base: (s) => (!s.present || s.typing ? 0 : evening(s) || night(s) ? 1.4 : 0.9) },
 ];
 
 export interface DirectorState {

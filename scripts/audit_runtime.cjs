@@ -109,10 +109,10 @@ check(
   "Steam fullscreen focus must not emit a second game_start",
 );
 check(
-  context.includes('#[cfg(target_os = "linux")]\nfn media_session_playing()') &&
+  /#\[cfg\(target_os = "linux"\)\]\r?\nfn media_session_playing\(\)/.test(context) &&
     context.includes('command_stdout("playerctl"') &&
     context.includes('org.mpris.MediaPlayer2.') &&
-    context.includes('#[cfg(target_os = "macos")]\nfn media_session_playing()') &&
+    /#\[cfg\(target_os = "macos"\)\]\r?\nfn media_session_playing\(\)/.test(context) &&
     context.includes('command_stdout("osascript"'),
   "Linux and macOS must emit real media heartbeats for shared-screen watch mode",
 );
@@ -166,7 +166,7 @@ const backendDemos = new Set([...context.matchAll(/=>\s*"(demo_[a-z_]+)"/g)].map
 const handledDemos = new Set([...main.matchAll(/kind\s*===\s*"(demo_[a-z_]+)"/g)].map((match) => match[1]));
 const danteDemos = stringSet(main, "DANTE_DEMOS");
 const corvinDemos = stringSet(main, "CORVIN_DEMOS");
-const sharedDemos = new Set(["demo_watch"]);
+const sharedDemos = new Set(["demo_watch", "demo_nightwatch"]);
 for (const demo of backendDemos) {
   check(handledDemos.has(demo), `Backend trigger ${demo} has no frontend handler`);
   if (demo === "demo_be_corvin" || demo === "demo_be_dante") continue;

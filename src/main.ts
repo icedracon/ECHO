@@ -227,6 +227,120 @@ function sfxIgnite() {
   src.connect(lp).connect(g).connect(dest());
   src.start(t);
 }
+// Claw on stone: a gritty scrape that ends in a hard tick — the arm dragging
+// itself out through the Door frame.
+function sfxClawScrape() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.9), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) {
+    const p = i / d.length;
+    // grain: sparse impulses over noise = stone grit, not hiss
+    d[i] = (Math.random() * 2 - 1) * (Math.random() < 0.35 ? 1 : 0.25) * (0.4 + 0.6 * p);
+  }
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const bp = a.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 0.9;
+  bp.frequency.setValueAtTime(700, t);
+  bp.frequency.exponentialRampToValueAtTime(2100, t + 0.75);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.2, t + 0.25);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+  src.connect(bp).connect(g).connect(dest());
+  src.start(t);
+}
+// The tendrils erupting: a wet whip crack with a low swell under it.
+function sfxTendrilWhip() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.35), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length) ** 1.5;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const bp = a.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 2.4;
+  bp.frequency.setValueAtTime(2800, t);
+  bp.frequency.exponentialRampToValueAtTime(420, t + 0.3);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.26, t + 0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+  src.connect(bp).connect(g).connect(dest());
+  src.start(t);
+  const o = a.createOscillator();
+  o.type = "sine";
+  o.frequency.setValueAtTime(120, t);
+  o.frequency.exponentialRampToValueAtTime(48, t + 0.4);
+  const og = a.createGain();
+  og.gain.setValueAtTime(0.22, t);
+  og.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+  o.connect(og).connect(dest());
+  o.start(t);
+  o.stop(t + 0.5);
+}
+// A demonic engine: two detuned saws through a shaper, revving up and settling.
+function sfxEngineRev(ms = 1400) {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const dur = ms / 1000;
+  const shaper = a.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) curve[i] = Math.tanh(2.6 * (i / 128 - 1));
+  shaper.curve = curve;
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.26, t + 0.18);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  shaper.connect(g).connect(dest());
+  for (const det of [0, 4, -6]) {
+    const o = a.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(58 + det, t);
+    o.frequency.exponentialRampToValueAtTime(190 + det, t + dur * 0.45);
+    o.frequency.exponentialRampToValueAtTime(96 + det, t + dur);
+    o.connect(shaper);
+    o.start(t);
+    o.stop(t + dur);
+  }
+}
+// Tyre screech: high band-passed noise with a wobble.
+function sfxTyreScreech() {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const buf = a.createBuffer(1, Math.floor(a.sampleRate * 0.8), a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  const bp = a.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 8;
+  bp.frequency.setValueAtTime(1500, t);
+  const lfo = a.createOscillator();
+  lfo.frequency.value = 7;
+  const lg = a.createGain();
+  lg.gain.value = 320;
+  lfo.connect(lg).connect(bp.frequency);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.16, t + 0.1);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
+  src.connect(bp).connect(g).connect(dest());
+  lfo.start(t);
+  src.start(t);
+  lfo.stop(t + 0.85);
+}
+
 // ---- The Door's voice (user-directed: awful, timed) -------------------------
 // A deep stone groan with an eerie whistle — the crack blooming open.
 function sfxDoorGroan() {
@@ -487,6 +601,40 @@ function sfxThud() {
   o.start(t);
   o.stop(t + 0.21);
 }
+
+// A restrained engine pass for the off-screen motorcycle gag. Two detuned
+// oscillators carry the rev while a lowpass keeps it behind the user's video.
+function sfxMotorcycle(durationMs: number) {
+  const a = ac();
+  if (!a) return;
+  const t = a.currentTime;
+  const duration = Math.max(0.8, durationMs / 1000);
+  const lp = a.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(520, t);
+  lp.frequency.exponentialRampToValueAtTime(900, t + Math.min(0.7, duration * 0.25));
+  lp.frequency.exponentialRampToValueAtTime(380, t + duration);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.12, t + 0.12);
+  g.gain.setValueAtTime(0.12, t + Math.max(0.13, duration - 0.2));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  lp.connect(g).connect(floorDest());
+  for (const [hz, detune] of [
+    [58, -7],
+    [116, 9],
+  ] as Array<[number, number]>) {
+    const o = a.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(hz, t);
+    o.frequency.exponentialRampToValueAtTime(hz * 1.45, t + Math.min(0.8, duration * 0.3));
+    o.frequency.exponentialRampToValueAtTime(hz * 1.18, t + duration);
+    o.detune.value = detune;
+    o.connect(lp);
+    o.start(t);
+    o.stop(t + duration + 0.02);
+  }
+}
 // ---- Voice ----
 // Two layers: (1) if you drop your own clips in ~/.echo/voice/<name>.wav|mp3
 // they play as-is; (2) otherwise a synthesized deep TTS voice speaks the line.
@@ -729,6 +877,13 @@ const ANIMS: Record<State, Clip> = {
 const DANTE_WATCH_TURN = clip("d_watchturn", 220, false, 12, 13);
 DANTE_WATCH_TURN.msSeq = [220, 180, 170, 170, 180, 190, 200, 210, 220, 240, 260, 300, 450];
 const DANTE_WATCH_LOOP = clip("d_watchloop", 380, true, 0, 9);
+const DANTE_MOTORIDE = clip("d_motoride", 128, true, 0, 10);
+DANTE_MOTORIDE.msSeq = [132, 124, 128, 120, 130, 134, 130, 120, 128, 124];
+const DANTE_BLANKET_DOWN = clip("d_blanketdown", 220, false, 10, 11);
+DANTE_BLANKET_DOWN.msSeq = [300, 210, 190, 190, 200, 210, 220, 240, 260, 320, 620];
+const DANTE_BLANKET_LOOP = clip("d_blanketloop", 460, true, 0, 9);
+const DANTE_BLANKET_CHECK = clip("d_blanketcheck", 220, false, 12, 13);
+DANTE_BLANKET_CHECK.msSeq = [360, 220, 200, 190, 190, 210, 360, 300, 240, 220, 220, 260, 520];
 // ---- Character packs ---------------------------------------------------------
 // "dante" (default) or "corvin" — read from ~/.echo/character at boot, switched
 // live with `echo be corvin > ~/.echo/demo`. Corvin swaps the state clips and
@@ -808,6 +963,8 @@ const DANTE_DEMOS = new Set([
   "demo_coin",
   "demo_spin",
   "demo_form",
+  "demo_ride",
+  "demo_moto",
 ]);
 const CORVIN_DEMOS = new Set([
   "demo_corvin",
@@ -863,6 +1020,18 @@ FALLING.msSeq = [70, 65, 60, 60, 65, 75, 90, 110, 140];
 const CLIMB = clip("climb", 120, true, 8);
 // Climbing is EFFORT — heavy pulls easing only at the top.
 CLIMB.msSeq = [160, 150, 140, 130, 120, 110, 100, 95, 130];
+const DANTE_DROP: Clip = {
+  frames: FALLING.frames.slice(0, 7),
+  ms: 145,
+  loop: true,
+  settle: 2,
+  msSeq: [150, 140, 130, 125, 135, 150, 175],
+};
+const DANTE_CRASH: Clip = { frames: [FALLING.frames[8]], ms: 520, loop: true, settle: 0 };
+const DANTE_RIDE_CLIMB: Clip = {
+  ...CLIMB,
+  msSeq: [360, 330, 310, 290, 280, 270, 250, 240, 320],
+};
 // Success "Jackpot" gun-shoot.
 const SHOOT = clip("shoot", 95, true, 8);
 // Fast draw, a beat of aim, the shot holds.
@@ -1026,6 +1195,10 @@ preloadClips([
   TYPETAP,
   DANTE_WATCH_TURN,
   DANTE_WATCH_LOOP,
+  DANTE_MOTORIDE,
+  DANTE_BLANKET_DOWN,
+  DANTE_BLANKET_LOOP,
+  DANTE_BLANKET_CHECK,
   // The whole Corvin pack too — an unloaded frame on a clip switch flashes the
   // broken-image icon mid-scene (caught by the capture rig, twice per reel).
   ...Object.values(CORVIN),
@@ -1091,8 +1264,19 @@ function onContext(kind: string) {
   }
   // A real game always outranks passive watching. If one opens mid-turn or
   // mid-loop, the watch scene finishes its current transition and exits cleanly.
-  if (kind === "gaming" || kind === "gaming_active" || kind === "game_start") {
+  // Only a game that is actually IN FRONT outranks watching (user-directed):
+  // Steam merely running in the background used to zero this every 10 s, so a
+  // YouTube video in a second window never got him to sit down and watch.
+  if (kind === "gaming_fg" || kind === "game_start") {
     if (Date.now() >= mediaDemoUntil) mediaUntil = 0;
+  }
+  if (kind === "gaming_fg") gamingFgUntil = Date.now() + 45_000;
+  // QA/showcase only: an explicit ride request should not wait forever behind
+  // the very media-watch scene it is meant to demonstrate. The current turn
+  // finishes, exits cleanly, then the normal manual-context queue runs it.
+  if (kind === "demo_ride" && mediaWatching) {
+    mediaUntil = 0;
+    mediaWanted = 0;
   }
   if (!home || gagActive || showcasing || returning || wandering || away || introActive) {
     // The stage is busy — but STATE must not be lost while it is (these were
@@ -1246,10 +1430,18 @@ function onContext(kind: string) {
     return;
   }
   if (kind === "demo_watch") {
-    mediaDemoUntil = Date.now() + 25_000;
+    mediaDemoUntil = Date.now() + 70_000;
     mediaUntil = mediaDemoUntil;
     mediaWanted = Date.now();
     serviceMediaWish();
+    return;
+  }
+  if (kind === "demo_nightwatch") {
+    void nightWatchScene(true);
+    return;
+  }
+  if (kind === "demo_ride") {
+    void danteVideoRideDemo();
     return;
   }
   // Character pack switch (live, persisted): `echo be corvin > ~/.echo/demo`.
@@ -1301,6 +1493,7 @@ function onContext(kind: string) {
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
   if (kind === "demo_door") { if (isCorvin()) void doorFightScene(true); return; }
   if (kind === "demo_form") { if (!isCorvin()) void devilFormScene(); return; }
+  if (kind === "demo_moto") { if (!isCorvin()) void motoScene(); return; }
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
   if (kind === "demo_ritual") {
@@ -1479,7 +1672,22 @@ let mediaUntil = 0;
 const MEDIA_HEARTBEAT_GRACE = 45_000;
 let mediaWatching = false;
 let mediaDemoUntil = 0;
+const CORVIN_MEDIA_RIFT_AFTER_MS = 4 * 60_000;
+const CORVIN_MEDIA_RIFT_DEMO_AFTER_MS = 4_000;
+const CORVIN_MEDIA_RIFT_AWAY_MS = 4_000;
+const CORVIN_MEDIA_EAT_MS = 10_000;
+const CORVIN_MEDIA_LINE_MIN_MS = 10 * 60_000;
+const CORVIN_MEDIA_LINE_MAX_MS = 20 * 60_000;
+const CORVIN_MEDIA_SWORD_REST_MIN_MS = 12 * 60_000;
+const CORVIN_MEDIA_SWORD_REST_MAX_MS = 20 * 60_000;
+const CORVIN_MEDIA_SWORD_REST_MS = 3 * 60_000;
+const CORVIN_MEDIA_SWORD_REST_DEMO_AFTER_MS = 30_000;
+const CORVIN_MEDIA_SWORD_REST_DEMO_MS = 8_000;
 const gamingActive = () => Date.now() < gamingUntil;
+// A game in the FOREGROUND (fullscreen) — the only gaming state that beats the
+// shared-screen watch. Background Steam keeps the hunt clocks, not the veto.
+let gamingFgUntil = 0;
+const gamingForeground = () => Date.now() < gamingFgUntil;
 
 // Quiet hour (tray item): he mutes every optional beat until it expires.
 // Rituals honour it too — a "don't disturb" that actually means it.
@@ -1579,8 +1787,9 @@ async function playCorvin(c: (typeof CORVIN)[keyof typeof CORVIN], passes = 1) {
   // and the hand-synced overlays (the Door) all agree exactly.
   const total = corvinClipTotal(c) * passes;
   commitFor(total + 300); // session events must not flash Dante mid-reel
-  curClip = c;
-  frameIdx = 0;
+  // Paint frame zero immediately. Waiting for the breathing RAF observer made
+  // short links inherit part of the previous clip's hold and look disconnected.
+  startClip(c as Clip);
   await sleep(total);
 }
 
@@ -1648,7 +1857,7 @@ function initTts() {
 // and shipped in public/voice/corvin: every line he owns is fixed text, so the
 // robot system voice is only ever a fallback for something unrecorded.
 const corvinVoice = new Map<string, string>(); // sha1(text) -> file
-const CORVIN_STORY_RATE = 1.5;
+const CORVIN_STORY_RATE = 1.5; // user-directed: Corvin's authored speech at 1.5x
 const CORVIN_VOICE_CAP_MS = 30_000;
 async function initCorvinVoice() {
   try {
@@ -1929,6 +2138,7 @@ async function whetstoneTaleScene() {
 // as long as Rust keeps sending media heartbeats. Closing media plays the turn
 // backwards; no menu or CLI action is required from ordinary users.
 let mediaWanted = 0;
+const DANTE_BORED_RIDE_AFTER_MS = 75_000;
 function serviceMediaWish() {
   if (!mediaWanted || mediaWatching) return;
   if (Date.now() >= mediaUntil) {
@@ -1936,29 +2146,217 @@ function serviceMediaWish() {
     return;
   }
   const forcedDemo = Date.now() < mediaDemoUntil;
-  if (!beatReady() || (gamingActive() && !forcedDemo)) return;
+  if (!beatReady() || (gamingForeground() && !forcedDemo)) return;
   mediaWanted = 0;
   markScene();
   dbg("media watch served");
   void mediaWatchScene();
 }
 
+// Dante's long-watch interruption: boredom, a clean exit beyond the nearest
+// edge, one full-screen motorcycle pass, then a gravity-driven return. Mounting
+// happens entirely off-screen; only the finished riding silhouette is shown.
+async function danteVideoRideBeat(resumeWatch: () => boolean): Promise<boolean> {
+  if (!home || isCorvin()) return false;
+  const h = home;
+  dbg("dante ride: bored line");
+  showBubble("Скучно.", PRIO.MAJOR, 2400);
+  await sleep(2100);
+
+  await playDante(reversedClip(DANTE_WATCH_TURN));
+  const rise = reversedClip(SITDOWN);
+  startClip(rise);
+  seatedNow = false;
+  postureChangedAt = Date.now();
+  moveWindowY(h.y, 900);
+  await sleep(danteClipTotal(rise) + 80);
+
+  // His home is beside the clock, so the nearest believable exit is right.
+  // The bike then returns from that same edge and crosses the whole monitor.
+  const offRight = h.scrRight + 12;
+  stage.dataset.facing = "right";
+  playWalk();
+  await slideWindow(offRight, 140);
+  dbg("dante ride: fully off-screen right");
+  await sleep(550); // mounting remains fully beyond the screen edge
+
+  const offLeft = h.ox - h.winW - 12;
+  stage.dataset.facing = "left";
+  startClip(DANTE_MOTORIDE);
+  dbg("dante ride: motorcycle pass right-to-left");
+  await rideWindow(offLeft, 520);
+  dbg("dante ride: fully off-screen left");
+  await sleep(260);
+
+  // He has exited with the motorcycle. Re-enter as Dante alone from above.
+  delete stage.dataset.facing;
+  startClip(DANTE_DROP);
+  dbg("dante ride: falling from monitor top");
+  await dropWindowToTaskbar(1850);
+  startClip(DANTE_CRASH);
+  sfxThud();
+  shake(380);
+  dbg("dante ride: taskbar impact");
+  await sleep(520);
+  await new Promise<void>((resolve) => {
+    moveWindowY(h.belowY, 650);
+    window.setTimeout(resolve, 680);
+  });
+  stage.dataset.facing = "left";
+  startClip(DANTE_RIDE_CLIMB);
+  dbg("dante ride: climbing back over taskbar edge");
+  await sleep(850);
+  await new Promise<void>((resolve) => {
+    moveWindowY(h.y, 1800);
+    window.setTimeout(resolve, 1820);
+  });
+  delete stage.dataset.facing;
+
+  startClip(SITDOWN);
+  posture("idle", true);
+  await sleep(danteClipTotal(SITDOWN) + 80);
+  if (!resumeWatch()) {
+    startClip(ANIMS_DANTE.idle);
+    return false;
+  }
+  await playDante(DANTE_WATCH_TURN);
+  startClip(DANTE_WATCH_LOOP);
+  dbg("dante ride: resumed shared watch");
+  return true;
+}
+
+async function danteVideoRideDemo() {
+  if (!home || gagActive || isCorvin()) return;
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    posture("idle", true);
+    if (Math.abs(home.lastY - home.sitY) > 4) await sleep(820);
+    await playDante(DANTE_WATCH_TURN);
+    startClip(DANTE_WATCH_LOOP);
+    await sleep(1400);
+    const watching = await danteVideoRideBeat(() => true);
+    if (watching) {
+      await sleep(3000);
+      await playDante(reversedClip(DANTE_WATCH_TURN));
+    }
+  } finally {
+    gagActive = false;
+    finishSceneIdle("dante video ride demo");
+  }
+}
+
+async function corvinVideoRiftSnackBeat(resumeWatch: () => boolean): Promise<boolean> {
+  if (!home || !isCorvin()) return false;
+  const h = home;
+  dbg("corvin media rift: small door opened at right edge");
+  void riftGlow(13_000, { size: "small" });
+  sfxAura();
+
+  delete stage.dataset.facing;
+  await playCorvin(REV(CORVIN.watchturn));
+  await playCorvin(REV(CORVIN.sit));
+  await playCorvin(CORVIN.turnleft);
+
+  const offRight = h.scrRight + 18;
+  stage.dataset.facing = "right";
+  playWalk(true);
+  await slideWindow(offRight, 260);
+  dbg("corvin media rift: fully inside");
+  await sleep(CORVIN_MEDIA_RIFT_AWAY_MS);
+
+  stage.dataset.facing = "left";
+  playWalk(false);
+  await slideWindow(h.cornerX, 260);
+  delete stage.dataset.facing;
+  dbg("corvin media rift: returned after 4 seconds");
+
+  await playCorvin(CORVIN.turnback);
+  await playCorvin(CORVIN.sit);
+  await playCorvin(CORVIN.watchturn);
+  startClip(CORVIN.barbecue as Clip);
+  commitFor(CORVIN_MEDIA_EAT_MS + 800);
+  dbg("corvin media rift: eating barbecue for 10 seconds");
+  await sleep(CORVIN_MEDIA_EAT_MS);
+
+  if (!resumeWatch()) {
+    await playCorvin(REV(CORVIN.watchturn));
+    return false;
+  }
+  startClip(CORVIN.watchloop as Clip);
+  dbg("corvin media watch resumed after rift snack");
+  return true;
+}
+
+async function holdWhileWatching(ms: number, resumeWatch: () => boolean): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (!resumeWatch()) return false;
+    await sleep(Math.min(1000, until - Date.now()));
+  }
+  return resumeWatch();
+}
+
+// During a long film he occasionally settles like a tired sentinel: down on the
+// ground against the cairn, sword released beside him, Artsiv on the stones.
+// If playback ends, the three-minute hold releases within one second.
+async function corvinVideoSwordRestBeat(
+  resumeWatch: () => boolean,
+  holdMs: number,
+): Promise<boolean> {
+  if (!home || !isCorvin()) return false;
+  dbg(`corvin media cairn rest: seated for ${Math.round(holdMs / 1000)} seconds`);
+  delete stage.dataset.facing;
+  await playCorvin(REV(CORVIN.watchturn));
+  await playCorvin(REV(CORVIN.sit));
+  if (!resumeWatch()) return false;
+  await playCorvin(CORVIN.sitstone);
+  const cairnFrame = CORVIN.sitstone.frames[CORVIN.sitstone.frames.length - 1];
+  startClip({ frames: [cairnFrame], ms: 700, loop: true, settle: 0 });
+  const watchedThrough = await holdWhileWatching(holdMs, resumeWatch);
+  await playCorvin(REV(CORVIN.sitstone));
+  if (!watchedThrough || !resumeWatch()) return false;
+  await playCorvin(CORVIN.sit);
+  await playCorvin(CORVIN.watchturn);
+  startClip(CORVIN.watchloop as Clip);
+  dbg("corvin media cairn rest: resumed shared watch");
+  return true;
+}
+
 async function mediaWatchScene() {
   const forcedDemo = Date.now() < mediaDemoUntil;
-  if (!home || gagActive || mediaWatching || (gamingActive() && !forcedDemo)) return;
+  if (!home || gagActive || mediaWatching || (gamingForeground() && !forcedDemo)) return;
   const watchingCorvin = isCorvin();
   mediaWatching = true;
   gagActive = true;
   afterClip = null;
+  let corvinWatchingPose = watchingCorvin;
+  let danteWatchingPose = !watchingCorvin;
+  let danteRideDone = false;
+  const danteRideAt = Date.now() + DANTE_BORED_RIDE_AFTER_MS;
+  let corvinRiftDone = false;
+  const corvinRiftAt = Date.now() + (forcedDemo ? CORVIN_MEDIA_RIFT_DEMO_AFTER_MS : CORVIN_MEDIA_RIFT_AFTER_MS);
+  let corvinSwordRestDone = false;
+  const corvinSwordRestAt = Date.now() +
+    (forcedDemo
+      ? CORVIN_MEDIA_SWORD_REST_DEMO_AFTER_MS
+      : CORVIN_MEDIA_SWORD_REST_MIN_MS +
+        Math.random() * (CORVIN_MEDIA_SWORD_REST_MAX_MS - CORVIN_MEDIA_SWORD_REST_MIN_MS));
+  let corvinLineAt = Date.now() +
+    (forcedDemo
+      ? 61_000
+      : CORVIN_MEDIA_LINE_MIN_MS +
+        Math.random() * (CORVIN_MEDIA_LINE_MAX_MS - CORVIN_MEDIA_LINE_MIN_MS));
   try {
     stage.dataset.state = "idle";
     delete stage.dataset.facing;
     document.documentElement.style.setProperty("--accent", ACCENT.idle);
 
     if (watchingCorvin) {
-      // Corvin's seated clips are bottom-anchored inside the normal standing
-      // window, so only the sprite moves; the desktop window never glides.
-      await playCorvin(CORVIN.sit);
+      // Corvin's media watch uses true back-left frames. Do not mirror them.
+      delete stage.dataset.facing;
       await playCorvin(CORVIN.watchturn);
       startClip(CORVIN.watchloop as Clip);
     } else {
@@ -1970,22 +2368,76 @@ async function mediaWatchScene() {
 
     while (
       Date.now() < mediaUntil &&
-      (forcedDemo || !gamingActive()) &&
+      (forcedDemo || !gamingForeground()) &&
       isCorvin() === watchingCorvin
     ) {
+      if (watchingCorvin && !corvinRiftDone && Date.now() >= corvinRiftAt) {
+        corvinRiftDone = true;
+        const resumed = await corvinVideoRiftSnackBeat(
+          () =>
+            Date.now() < mediaUntil &&
+            (forcedDemo || !gamingForeground()) &&
+            isCorvin(),
+        );
+        corvinWatchingPose = resumed;
+        if (!resumed) break;
+        continue;
+      }
+      if (watchingCorvin && !corvinSwordRestDone && Date.now() >= corvinSwordRestAt) {
+        corvinSwordRestDone = true;
+        const resumed = await corvinVideoSwordRestBeat(
+          () =>
+            Date.now() < mediaUntil &&
+            (forcedDemo || !gamingForeground()) &&
+            isCorvin(),
+          forcedDemo ? CORVIN_MEDIA_SWORD_REST_DEMO_MS : CORVIN_MEDIA_SWORD_REST_MS,
+        );
+        corvinWatchingPose = resumed;
+        if (!resumed) break;
+        continue;
+      }
+      if (watchingCorvin && corvinWatchingPose && Date.now() >= corvinLineAt) {
+        maybeCorvinRareLine();
+        corvinLineAt = Date.now() + CORVIN_MEDIA_LINE_MIN_MS +
+          Math.random() * (CORVIN_MEDIA_LINE_MAX_MS - CORVIN_MEDIA_LINE_MIN_MS);
+        continue;
+      }
+      if (!watchingCorvin && !danteRideDone && Date.now() >= danteRideAt) {
+        danteRideDone = true;
+        danteWatchingPose = await danteVideoRideBeat(
+          () =>
+            Date.now() < mediaUntil &&
+            (forcedDemo || !gamingForeground()) &&
+            !isCorvin(),
+        );
+        continue;
+      }
       commitFor(1500);
       await sleep(1000);
     }
 
-    if (watchingCorvin) {
+    if (watchingCorvin && corvinWatchingPose) {
+      delete stage.dataset.facing;
       await playCorvin(REV(CORVIN.watchturn));
-      await playCorvin(REV(CORVIN.sit));
-    } else {
+      delete stage.dataset.facing;
+    } else if (danteWatchingPose) {
       await playDante(reversedClip(DANTE_WATCH_TURN));
     }
   } finally {
     mediaWatching = false;
     mediaDemoUntil = 0;
+    if (watchingCorvin) delete stage.dataset.facing;
+    // A closed video or interrupted beat must never strand the companion in a
+    // portal, above the taskbar, or between two physical window positions.
+    if (home) {
+      cancelAnimationFrame(winTween);
+      winTween = 0;
+      home.lastX = home.cornerX;
+      home.lastY = home.y;
+      await home.win
+        .setPosition(new PhysicalPosition(home.cornerX, home.y))
+        .catch(() => {});
+    }
     gagActive = false;
     finishSceneIdle("media watch");
     dbg("media watch ended");
@@ -2259,6 +2711,114 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 22, name: "devil form", run: () => void devilFormScene() },
 ];
 
+const NIGHT_WATCH_FIRST_REST_MS = 10 * 60_000;
+const NIGHT_WATCH_STONE_TOSS_MS = 60_000;
+const NIGHT_WATCH_FINAL_REST_MS = 7 * 60_000;
+const CORVIN_NIGHT_GUARD_LINES = [
+  "Ты всё ещё не спишь. Тогда я останусь на страже.",
+  "Ночь глубже, чем кажется. Работай. Я рядом.",
+  "Даже стражам нужен сон. Но не сегодня.",
+];
+const DANTE_NIGHT_GUARD_LINES = [
+  "Still working? Fine. Wake me if the world ends.",
+  "You're still awake? That's dedication. Or bad judgment.",
+];
+
+const nightUserWorking = () =>
+  Date.now() - Math.max(lastActivity, lastTypingEventAt) < 2 * 60_000 ||
+  Date.now() < typingUntil ||
+  Date.now() < mediaUntil ||
+  gamingActive();
+
+async function holdNightLoop(c: Clip, ms: number) {
+  if (ms <= 0) return;
+  startClip(c);
+  commitFor(ms + 750);
+  await sleep(ms);
+}
+
+async function danteNightWatch(demo: boolean) {
+  const firstRest = demo ? 3_000 : NIGHT_WATCH_FIRST_REST_MS;
+  const finalRest = demo ? 3_000 : NIGHT_WATCH_FINAL_REST_MS;
+  await playDante(DANTE_BLANKET_DOWN);
+  dbg("night watch dante: asleep under blanket");
+  await holdNightLoop(DANTE_BLANKET_LOOP, firstRest);
+
+  const working = demo || nightUserWorking();
+  const checkMs = danteClipTotal(DANTE_BLANKET_CHECK) + 80;
+  dbg("night watch dante: wakes and checks the user");
+  startClip(DANTE_BLANKET_CHECK);
+  await sleep(Math.round(checkMs * 0.48));
+  if (working) {
+    const line = DANTE_NIGHT_GUARD_LINES[Math.floor(Math.random() * DANTE_NIGHT_GUARD_LINES.length)];
+    showBubble(line, PRIO.NOTABLE, 6500, false);
+    voiceSay(line);
+    dbg(`night watch dante: user still working — ${line}`);
+  } else {
+    dbg("night watch dante: room quiet, turns away again");
+  }
+  await sleep(Math.round(checkMs * 0.52));
+  dbg("night watch dante: turns his back and sleeps again");
+  await holdNightLoop(DANTE_BLANKET_LOOP, finalRest);
+  await playDante(reversedClip(DANTE_BLANKET_DOWN));
+}
+
+async function corvinNightWatch(demo: boolean) {
+  const firstRest = demo ? 3_000 : NIGHT_WATCH_FIRST_REST_MS;
+  const tossFor = demo ? 6_000 : NIGHT_WATCH_STONE_TOSS_MS;
+  const finalRest = demo ? 3_000 : NIGHT_WATCH_FINAL_REST_MS;
+  await playCorvin(CORVIN.sitstone);
+  await playCorvin(CORVIN.nightdoze);
+  dbg("night watch corvin: dozing at cairn with Artsiv");
+  await holdNightLoop(CORVIN.nightdozeloop as Clip, firstRest);
+
+  await playCorvin(REV(CORVIN.nightdoze));
+  const working = demo || nightUserWorking();
+  if (working) {
+    const line = CORVIN_NIGHT_GUARD_LINES[Math.floor(Math.random() * CORVIN_NIGHT_GUARD_LINES.length)];
+    showBubble(line, PRIO.NOTABLE, 6500, false);
+    await speakLine(line);
+    dbg(`night watch corvin: user still working — ${line}`);
+    await holdNightLoop(CORVIN.stonetoss as Clip, tossFor);
+    dbg("night watch corvin: final pebble toss, drop begins");
+    await playCorvin(CORVIN.stonedrop);
+    dbg("night watch corvin: pebble dropped, guard resumes");
+  } else {
+    dbg("night watch corvin: room quiet, no words");
+  }
+
+  await playCorvin(CORVIN.nightdoze);
+  await holdNightLoop(CORVIN.nightdozeloop as Clip, finalRest);
+  await playCorvin(REV(CORVIN.nightdoze));
+  await playCorvin(REV(CORVIN.sitstone));
+}
+
+async function nightWatchScene(demo = false) {
+  if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+  const h = home;
+  const corvin = isCorvin();
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    document.documentElement.style.setProperty("--accent", ACCENT.idle);
+    await standUp();
+    dbg(`night watch start: ${corvin ? "corvin" : "dante"}${demo ? " (demo)" : ""}`);
+    if (corvin) await corvinNightWatch(demo);
+    else await danteNightWatch(demo);
+  } finally {
+    cancelAnimationFrame(winTween);
+    winTween = 0;
+    h.lastX = h.cornerX;
+    h.lastY = h.y;
+    await h.win.setPosition(new PhysicalPosition(h.cornerX, h.y)).catch(() => {});
+    delete stage.dataset.facing;
+    gagActive = false;
+    finishSceneIdle("night watch");
+  }
+}
+
 function requiemPendingNow(at = new Date()) {
   return (
     isCorvin() &&
@@ -2273,12 +2833,26 @@ function scheduleMidnight() {
     if (!home) return;
     const now = new Date();
     const h = now.getHours();
+    const minute = now.getMinutes();
+    const requiemWindow = h === 23 && minute >= 40;
+    const nightWatchWindow = h === 0 && minute >= 40 && minute < 50;
     const busy =
       gagActive || showcasing || introActive || wandering || away || returning || quietNow();
     if (busy) return;
     // The 23:40 requiem owns the last twenty minutes of the day; every other
-    // ritual keeps its ten-minute window at the top of its hour.
-    if (now.getMinutes() >= 10 && !(h === 23 && now.getMinutes() >= 40)) return;
+    // ritual keeps its ten-minute window at the top of its hour, except the
+    // shared 00:40 night watch which gets its own retry window.
+    if (minute >= 10 && !requiemWindow && !nightWatchWindow) return;
+    if (nightWatchWindow) {
+      const last = story.s.gags.lastNightWatchAt ?? 0;
+      if (Date.now() - last < 12 * 3_600_000) return;
+      story.s.gags.lastNightWatchAt = Date.now();
+      story.save();
+      markScene();
+      dbg(`night watch ritual (00:40, ${isCorvin() ? "corvin" : "dante"})`);
+      void nightWatchScene();
+      return;
+    }
     // Dante's day: the hour table is all he needs — the rituals below are
     // Corvin's alone.
     if (!isCorvin()) {
@@ -2311,7 +2885,6 @@ function scheduleMidnight() {
     // flask slot used to slip in here, stamp, and swallow the whole ritual.
     // And a slot skip must not `return`: that aborted the tick before the
     // requiem check ever ran.
-    const requiemWindow = h === 23 && now.getMinutes() >= 40;
     const slot = DAILY_HOURS.find((s) => s.h === h);
     if (slot && !requiemWindow && !gamingActive()) {
       const key = `${dateKey()}-${h}`;
@@ -2977,6 +3550,7 @@ function runCorvinClock(allowBigScenes = true) {
     case "turnpair": void poseSpell(CORVIN.turnleft, CORVIN.turnback, 2500 + Math.random() * 4000); break;
     case "leanspell": void poseSpell(CORVIN.leanwall, CORVIN.leanoff, 9000 + Math.random() * 12000); break;
     case "swordcarry": void poseSpell(CORVIN.swordshoulder, CORVIN.swordplant, 7000 + Math.random() * 9000); break;
+    case "swordrest": void poseSpell(CORVIN.swordplant, REV(CORVIN.swordplant), 3 * 60_000); break;
     // big — the scenes he already owns, now competed for
     case "tale": watchReaction(a.id); void whetstoneTaleScene(); break;
     case "aura": watchReaction(a.id); void auraScene(); break;
@@ -3009,6 +3583,7 @@ function runDanteClock() {
     case "pizza": demoSeated(PIZZA, "Finally."); break;
     case "dance": void danceScene(); break;
     case "devilform": void devilFormScene(); break;
+    case "moto": void motoScene(); break;
   }
 }
 
@@ -3725,6 +4300,37 @@ function finishSceneIdle(source: string) {
   dbg(`${source} end -> idle`);
 }
 
+const CORVIN_RARE_LINES = [
+  "Люди по-прежнему любят смотреть истории...",
+  "Раньше у костра. Теперь на экране.",
+  "Тишина... Иногда она говорит громче.",
+  "Орел говорит, что ты давно не отдыхал.",
+  "Не каждый меч оставляет шрам. Некоторые оставляют память.",
+];
+function maybeCorvinRareLine() {
+  // These are film remarks, not ambient desktop chatter. Speak only from the
+  // settled watch loop, never while he is inside the rift, eating, or resting.
+  if (
+    !home ||
+    !isCorvin() ||
+    !mediaWatching ||
+    curClip !== (CORVIN.watchloop as Clip) ||
+    quietNow() ||
+    introActive ||
+    wandering ||
+    away ||
+    returning ||
+    showcasing
+  ) return;
+  const pool = CORVIN_RARE_LINES.filter((line) => voiceLineOk(line, 60 * 60_000));
+  const line = pickLine(pool.length ? pool : CORVIN_RARE_LINES);
+  markVoiceLine(line);
+  lastVoiceAt = Date.now();
+  showBubble(line, PRIO.NOTABLE, 6500, false);
+  void speakLine(line);
+  dbg(`corvin rare line: ${line}`);
+}
+
 // ---- Attention budget -------------------------------------------------
 // A companion that interrupts is a companion you close. Every reaction has a
 // cost, and he spends it carefully:
@@ -4192,8 +4798,10 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
 let home: {
   win: ReturnType<typeof getCurrentWindow>;
   ox: number;
+  oy: number;
   scrRight: number; // monitor's right edge (physical) — clamp popups on-screen
   winW: number;
+  winH: number;
   y: number;
   sitY: number;
   belowY: number;
@@ -4312,6 +4920,70 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
   });
 }
 
+// Motorcycle motion is deliberately separate from walking: no boot-scuff
+// cadence, a short acceleration, then constant speed cleanly through the edge.
+function rideWindow(toX: number, pace = 700): Promise<void> {
+  if (!home) return Promise.resolve();
+  cancelAnimationFrame(winTween);
+  const h = home;
+  const fromX = h.lastX;
+  const y = h.y;
+  const dur = Math.max(900, (Math.abs(toX - fromX) / pace) * 1000);
+  const t0 = performance.now();
+  sfxMotorcycle(dur);
+  return new Promise<void>((resolve) => {
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const e = p < 0.16 ? (p / 0.16) ** 2 * 0.16 : p;
+      const x = Math.round(fromX + (toX - fromX) * e);
+      h.win.setPosition(new PhysicalPosition(x, y));
+      h.lastX = x;
+      h.lastY = y;
+      if (p < 1) winTween = requestAnimationFrame(step);
+      else {
+        winTween = 0;
+        resolve();
+      }
+    };
+    winTween = requestAnimationFrame(step);
+  });
+}
+
+// Re-entry after the ride uses real gravity: the OS window accelerates from
+// above the monitor, drifts lightly in the air, and lands on the exact home X.
+function dropWindowToTaskbar(durationMs = 1350): Promise<void> {
+  if (!home) return Promise.resolve();
+  cancelAnimationFrame(winTween);
+  const h = home;
+  const fromY = h.oy - h.winH - 18;
+  const toY = h.y;
+  h.lastX = h.cornerX;
+  h.lastY = fromY;
+  void h.win.setPosition(new PhysicalPosition(h.cornerX, fromY));
+  const t0 = performance.now();
+  return new Promise<void>((resolve) => {
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / durationMs);
+      const fall = p * p;
+      const drift = Math.round(Math.sin(p * Math.PI * 3) * (1 - p) * 7);
+      const x = h.cornerX + drift;
+      const y = Math.round(fromY + (toY - fromY) * fall);
+      h.win.setPosition(new PhysicalPosition(x, y));
+      h.lastX = x;
+      h.lastY = y;
+      if (p < 1) winTween = requestAnimationFrame(step);
+      else {
+        h.win.setPosition(new PhysicalPosition(h.cornerX, toY));
+        h.lastX = h.cornerX;
+        h.lastY = toY;
+        winTween = 0;
+        resolve();
+      }
+    };
+    winTween = requestAnimationFrame(step);
+  });
+}
+
 const BACKSTEP_WINDOW_BEATS: Array<[number, number]> = [
   [120, 0.05],
   [420, 0.17],
@@ -4418,7 +5090,7 @@ async function runIntro() {
     // A small visible dip for the error fall — he stays fully on-screen so the
     // falling + climb animations are unmissable (no dropping off the bottom).
     const belowY = y + Math.round(66 * sf);
-    home = { win, ox, scrRight: ox + sw, winW, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
+    home = { win, ox, oy, scrRight: ox + sw, winW, winH, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
     dbg(`intro home set mon=${sw}x${sh} y=${y} sitY=${sitY} corner=${cornerX}`);
     await win.setPosition(new PhysicalPosition(startX, y));
     stage.dataset.facing = "right";
@@ -4885,6 +5557,61 @@ preloadClips([
   DANTE_CROUCHPEER,
 ]);
 
+// ---- Dante's motorcycle (user-directed "dante moto scenes") ----------------
+// He leaves on foot and mounts beyond the right edge, so the visible sequence
+// uses one coherent sportbike from entrance through wheelie and dismount.
+const MOTO_WHEELIE = clip("d_motowheelie", 130, false, 10, 11);
+const MOTO_OFF = clip("d_motooff", 160, false, 10, 11);
+preloadClips([MOTO_WHEELIE, MOTO_OFF]);
+
+async function motoScene() {
+  if (!home || gagActive || isCorvin()) return;
+  gagActive = true;
+  const h = home;
+  const homeX = h.cornerX;
+  try {
+    afterClip = null;
+    stage.dataset.state = "success";
+    document.documentElement.style.setProperty("--accent", ACCENT.success);
+    await standUp();
+
+    // Mounting is private: he walks fully outside the desktop first.
+    const offRight = h.scrRight + 12;
+    stage.dataset.facing = "right";
+    playWalk();
+    await slideWindow(offRight, 140);
+    dbg("dante motorcycle: off-screen mount");
+    await sleep(550);
+
+    // One full-width pass, using motorcycle physics rather than walking easing.
+    const leftTurnX = h.ox + 18;
+    stage.dataset.facing = "left";
+    startClip(DANTE_MOTORIDE);
+    dbg("dante motorcycle: full-width ride right-to-left");
+    await rideWindow(leftTurnX, 520);
+    sfxEngineRev(1300);
+    dbg("dante motorcycle: wheelie at left edge");
+    await playDante(MOTO_WHEELIE); // the flourish at the far end
+
+    stage.dataset.facing = "right";
+    startClip(DANTE_MOTORIDE);
+    dbg("dante motorcycle: ride home left-to-right");
+    await rideWindow(homeX, 520); // and back to his corner
+    sfxTyreScreech();
+    dbg("dante motorcycle: dismount");
+    await playDante(MOTO_OFF);
+  } finally {
+    delete stage.dataset.facing;
+    cancelAnimationFrame(winTween);
+    winTween = 0;
+    h.lastX = homeX;
+    h.lastY = h.y;
+    await h.win.setPosition(new PhysicalPosition(homeX, h.y)).catch(() => {});
+    gagActive = false;
+    finishSceneIdle("dante motorcycle");
+  }
+}
+
 // The full Devil Form — the beautiful one: eruption, the winged demon burning
 // in place, then a graceful return to the man.
 async function devilFormScene() {
@@ -4950,6 +5677,8 @@ async function doorFightScene(force = false) {
     try {
       sfxDoorGroan();
       window.setTimeout(sfxDemonRoar, 1900); // the claws punch through
+      window.setTimeout(sfxClawScrape, 2600); // and drag themselves out
+      window.setTimeout(sfxClawScrape, 3900);
       await playCorvin(CORVIN.doorsense); // turn, grip — the guard is up
       // ONE CONNECTED GENERATED FLOW from here (user-directed): the backstep
       // clip walks him backward WHILE the window moves on footfall beats, then
@@ -4976,8 +5705,12 @@ async function doorFightScene(force = false) {
       // from the arm — shoulder, then half the face — and the half-demon form
       // completes EXACTLY when the tentacles reach the claw (overlay CONTACT).
       sfxCorruption(3400); // the dissonant climb rides the creep exactly
+      window.setTimeout(sfxTendrilWhip, 2600); // the tendrils erupt
       await playCorvin(CORVIN.infect);
       sfxDemonRoar(); // the tendrils SEIZE the claw
+      sfxTendrilWhip();
+      window.setTimeout(sfxClawScrape, 1500); // the claw is dragged back
+      window.setTimeout(sfxClawScrape, 3100);
       stopStrain.push(sfxStrainStart()); // and the trembling struggle begins
       await playCorvin(CORVIN.monsterhold, 3); // the struggle — the form HOLDS
       stopStrain.shift()?.();
@@ -5337,14 +6070,17 @@ function riftMain(q: URLSearchParams) {
       requestAnimationFrame(htick);
     }
   }
+  const small = q.has("small");
+  const bandBox = small ? "top:auto;bottom:72px;height:170px;width:56px;" : "top:0;height:100vh;width:110px;";
+  const crackBox = small ? "top:auto;bottom:78px;height:158px;width:3px;" : "top:0;height:100vh;width:4px;";
   const band = document.createElement("div");
   band.style.cssText =
-    "position:fixed;top:0;right:0;height:100vh;width:110px;pointer-events:none;" +
+    `position:fixed;right:0;${bandBox}pointer-events:none;` +
     "background:linear-gradient(to left, rgba(140,60,255,0.55), rgba(140,60,255,0.18) 45%, transparent);" +
     "opacity:0;filter:blur(2px);";
   const crack = document.createElement("div");
   crack.style.cssText =
-    "position:fixed;top:0;right:0;height:100vh;width:4px;pointer-events:none;" +
+    `position:fixed;right:0;${crackBox}pointer-events:none;` +
     "background:linear-gradient(to bottom, transparent, #e2b0ff 12%, #a852ff 50%, #e2b0ff 88%, transparent);" +
     "box-shadow:0 0 18px 6px rgba(168,82,255,0.8);opacity:0;";
   document.body.appendChild(band);
@@ -5363,9 +6099,9 @@ function riftMain(q: URLSearchParams) {
     else if (t < sealAt) k = 1;
     else k = Math.max(0, 1 - (t - sealAt) / (ms - sealAt));
     const pulse = 0.82 + 0.18 * Math.sin(t / 260); // the Door breathes
-    band.style.opacity = String(0.9 * k * pulse);
+    band.style.opacity = String((small ? 0.78 : 0.9) * k * pulse);
     crack.style.opacity = String(k);
-    crack.style.width = `${2 + 3 * k * pulse}px`;
+    crack.style.width = `${(small ? 1 : 2) + 3 * k * pulse}px`;
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -5376,14 +6112,14 @@ function riftMain(q: URLSearchParams) {
 // opts.fight enables the Door hand choreography preset.
 async function riftGlow(
   ms: number,
-  opts?: { fight?: "door" },
+  opts?: { fight?: "door"; size?: "small" },
 ): Promise<void> {
   try {
     const mon = await currentMonitor();
     if (!mon) return;
     const sf = mon.scaleFactor || window.devicePixelRatio || 1;
-    const extra = opts?.fight ? `&demon=1&fight=${opts.fight}` : "";
-    const win = new WebviewWindow("rift", {
+    const extra = `${opts?.fight ? `&demon=1&fight=${opts.fight}` : ""}${opts?.size === "small" ? "&small=1" : ""}`;
+    const win = new WebviewWindow(opts?.size === "small" ? "rift-small" : "rift", {
       url: `index.html?rift=1&ms=${ms}${extra}`,
       width: Math.round(mon.size.width / sf),
       height: Math.round(mon.size.height / sf),

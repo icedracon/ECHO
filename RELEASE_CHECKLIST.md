@@ -30,6 +30,8 @@ Use this before publishing a GitHub release.
    Set-Content "$env:USERPROFILE\.echo\demo" "dante"
    Set-Content "$env:USERPROFILE\.echo\demo" "devil"
    Set-Content "$env:USERPROFILE\.echo\demo" "watch"
+   Set-Content "$env:USERPROFILE\.echo\demo" "moto"
+   Set-Content "$env:USERPROFILE\.echo\demo" "nightwatch"
    ```
 
 5. Visual checks:
@@ -61,6 +63,12 @@ Use this before publishing a GitHub release.
    - repeated `gaming` signals do not replay `magicscan` or postpone unchained/cleave/breach/Door;
    - `huntwatch` appears only occasionally and never becomes the sole gaming loop.
    - at 23:40, Requiem blocks new Director/Steam beats until the ritual starts, then plays once in full.
+   - Corvin's video rest seats him against the cairn with the sword aside; Artsiv and the return-to-watch chain stay connected;
+   - Dante mounts the motorcycle off-screen, keeps the same sportbike through ride/wheelie/return, then dismounts cleanly;
+   - at 00:40, the active character starts exactly one night-watch scene and does not collide with an already-running scene;
+   - Corvin's night watch keeps the cairn, sword and Artsiv stable, then shows one pebble toss and a visible drop near his boot;
+   - Dante's blanket comes from the desktop edge, covers his lying pose, then the wake/check/turn-back chain returns to sleep;
+   - both night-watch variants restore the exact home position and a clean idle frame.
 
 ## GitHub release
 
@@ -70,7 +78,7 @@ Manual release:
 
 1. Open GitHub Actions.
 2. Run **Build Release**.
-3. Use tag `v0.2.3`.
+3. Use tag `v0.2.4`.
 4. Confirm the release contains only the friendly downloads below, without duplicate technical filenames:
 
    - `ECHO-Windows-Setup.exe`;
@@ -89,8 +97,8 @@ Manual release:
 Tag release:
 
 ```bash
-git tag v0.2.3
-git push origin v0.2.3
+git tag v0.2.4
+git push origin v0.2.4
 ```
 
 ## Notes

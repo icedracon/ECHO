@@ -79,12 +79,17 @@ def collect() -> dict[str, str]:
     tales_src = (ROOT / "src" / "tales.ts").read_text(encoding="utf-8")
     for m in re.finditer(r'opener: "((?:[^"\\]|\\.)*)"', tales_src):
         jobs[m.group(1).replace('\\"', '"')] = "story"
-    # The sad lines are a plain array in main.ts.
+    # Short authored lines in main.ts live outside the story/tale blocks.
     main_src = (ROOT / "src" / "main.ts").read_text(encoding="utf-8")
-    m = re.search(r"const NIGHT_SAD_LINES = \[(.*?)\];", main_src, re.S)
-    if m:
-        for line in quoted_lines(m.group(1)):
-            jobs[line] = "grief"
+    for const_name, profile in [
+        ("NIGHT_SAD_LINES", "grief"),
+        ("CORVIN_NIGHT_GUARD_LINES", "story"),
+        ("CORVIN_RARE_LINES", "story"),
+    ]:
+        m = re.search(rf"const {const_name} = \[(.*?)\];", main_src, re.S)
+        if m:
+            for line in quoted_lines(m.group(1)):
+                jobs[line] = profile
     return jobs
 
 

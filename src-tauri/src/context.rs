@@ -266,7 +266,10 @@ fn spawn_typing(app: AppHandle) {
                             "flask" => "demo_flask",
                             "door" => "demo_door",
                             "form" => "demo_form",
+                            "moto" => "demo_moto",
                             "watch" => "demo_watch",
+                            "nightwatch" => "demo_nightwatch",
+                            "ride" => "demo_ride",
                             _ => "",
                         };
                         if !kind.is_empty() {
@@ -333,6 +336,11 @@ fn classify(domain: &str) -> Option<&'static str> {
 const MEDIA_TITLES: &[&str] = &[
     "youtube", "spotify", "twitch", "netflix", "soundcloud", "vk видео", "vk video",
     "кинопоиск", "rutube", "vlc", "mpv", "iina", "rhythmbox", "celluloid",
+    // more video sites (user-directed: "not only youtube") — these only guard
+    // the fullscreen-game exclusion; playback itself is judged by the OS.
+    "hdrezka", "rezka", "ivi.ru", "okko", "kinopoisk", "premier", "start.ru",
+    "amediateka", "twitch.tv", "primevideo", "hulu", "disney+", "plex", "jellyfin",
+    "кино", "сериал", "фильм",
 ];
 const GAME_TITLES: &[&str] = &["steam", "epic games", "battle.net", "riot client"];
 
@@ -727,15 +735,22 @@ fn spawn_dns(app: AppHandle) {
             let game_hit = titles
                 .iter()
                 .find(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
-            let media_titles = media_hit.is_some();
-            // SMTC sees background-tab / minimized players that titles never can.
-            let media_now = media_titles || media_session_playing();
+            // WATCHING REQUIRES ACTUAL PLAYBACK (user-directed): an open
+            // YouTube tab where you are only searching must not turn him
+            // around. The OS media session reports real playback for ANY
+            // site or player — YouTube, Netflix, HDrezka, Twitch, VLC —
+            // and keeps working when the video plays in a background tab.
+            let playing = media_session_playing();
+            // Titles stay useful for one thing: a fullscreen video page must
+            // never be mistaken for a fullscreen game.
+            let media_titles = media_hit.is_some() || playing;
+            let media_now = playing;
             let game_now = game_hit.is_some();
             if media_now && !had_media {
                 fire_media = true;
                 match media_hit {
-                    Some(t) => clog(&format!("media window detected: {t:?}")),
-                    None => clog("media session playing (SMTC)"),
+                    Some(t) => clog(&format!("video playing: {t:?}")),
+                    None => clog("video playing (media session)"),
                 }
             }
             if game_now && !had_game {
@@ -781,6 +796,13 @@ fn spawn_dns(app: AppHandle) {
             // Heartbeats: game / video still active -> he stays in that mood.
             if game_now || fullscreen_game || steam_game {
                 let _ = app.emit("context-event", ContextEvent { kind: "gaming_active" });
+            }
+            // A game that is actually IN FRONT is the only thing that outranks
+            // watching a video (user-directed). Steam merely running in the
+            // background used to kill the watch mood every 10 s, so YouTube in
+            // a second window never got him to sit down.
+            if fullscreen_game {
+                let _ = app.emit("context-event", ContextEvent { kind: "gaming_fg" });
             }
             if media_now {
                 let _ = app.emit("context-event", ContextEvent { kind: "media_active" });

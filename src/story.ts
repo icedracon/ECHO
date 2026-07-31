@@ -26,6 +26,7 @@ interface StoryState {
     lastPizzaPayoffAt?: number;
     lastSwordCareAt?: number;
     lastNightSongAt?: number; // Corvin's 00:00 guitar — once per night
+    lastNightWatchAt?: number; // 00:40 blanket/cairn watch — once per night
     lastBreakdownAt?: number; // the 01:00 / 13:00 breakdown
     lastLetterAt?: number; // the letter — once a week at most
     lastCairnAt?: number; // the cairn — once a month

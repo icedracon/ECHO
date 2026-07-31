@@ -32,6 +32,10 @@ export const CORVIN = {
   // then hold a quiet breathing loop. The turn is reversed exactly on exit.
   watchturn: cc("c_watchturn", 6, 280, false, 5, [260, 260, 280, 300, 340, 520]),
   watchloop: cc("c_watchloop", 9, 420, true),
+  // Seated snack loop, pinned to watchloop frame 0 at both ends. Keeping the
+  // sword across his lap prevents a pose jump when he resumes the film.
+  barbecue: cc("barbecue", 11, 260, true, 0,
+    [420, 280, 240, 220, 240, 320, 300, 260, 240, 280, 420]),
   bow: cc("bow", 9, 200, false, 8, [180, 190, 210, 240, 420, 240, 210, 190, 200]),
   meditate: cc("meditate", 9, 320, true, 0, [300, 320, 340, 360, 380, 360, 340, 320, 300]),
   // shadow aura (the FULL flare, three stitched stages)
@@ -130,6 +134,14 @@ export const CORVIN = {
   // ground, back against the stones, eagle hops to the top — played forward
   // to settle in, REV to rise
   sitstone: cc("sitstone", 13, 210, false, 12, [340, 220, 210, 200, 200, 200, 210, 220, 240, 260, 300, 380, 700]),
+  // 00:40 sentinel watch: Artsiv hops down and sleeps across his legs; Corvin
+  // later wakes, idly tosses one pebble, drops it and settles again.
+  nightdoze: cc("c_nightdoze", 13, 220, false, 12,
+    [340, 210, 200, 200, 210, 220, 230, 240, 260, 280, 320, 380, 620]),
+  nightdozeloop: cc("c_nightdozeloop", 9, 460, true),
+  stonetoss: cc("c_stonetoss", 13, 180, true),
+  stonedrop: cc("c_stonedrop", 13, 190, false, 12,
+    [240, 180, 170, 170, 180, 170, 160, 180, 210, 240, 280, 320, 520]),
   // THE DOOR FIGHT (user-directed): the monitor's right edge cracks open (the
   // rift overlay), a demon walks in, he wins, THE ARM triggers — partial demon
   // corruption for a breath — then the man again. Six chained parts, ~78 frames.

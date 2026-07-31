@@ -7,7 +7,7 @@ on:
       tag:
         description: "Release tag to create or update"
         required: true
-        default: "v0.2.3"
+        default: "v0.2.4"
   push:
     tags: ["v*"]
 

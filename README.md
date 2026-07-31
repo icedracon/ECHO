@@ -114,7 +114,7 @@ Set-Content "$env:USERPROFILE\.echo\demo" "door"
 `break`, `combo`, `letter`, `road`, `rain`, `cairn`, `execution`, `unchained`,
 `cleave`, `vigil`, `guitar`, `hunt`, `scan`, `nuzzle`, `damage`, `parry`,
 `ritual`, `door`, `form`, `stone`, `flask`, `devil`, `sword`, `poster`,
-`pizza`, `coin`, `spin`, `clean`, `wake`, `watch`.
+`pizza`, `coin`, `spin`, `clean`, `wake`, `watch`, `nightwatch`, `moto`, `ride`.
 
 ### Разработка
 
@@ -135,9 +135,18 @@ npm run verify   # кадры, тайминги, триггеры, голос, R
 
 ### Релиз
 
-Workflow `.github/workflows/build-unix.yml` собирает Windows (Setup/MSI/Portable/Corvin/Dante), Linux (AppImage/deb/rpm) и macOS (два .dmg). Запуск: GitHub Actions → **Build Release** → tag `v0.2.3`, или пушем тега `v*`. Перед публикацией — `CHANGELOG.md` и `RELEASE_CHECKLIST.md`.
+Workflow `.github/workflows/build-unix.yml` собирает Windows (Setup/MSI/Portable/Corvin/Dante), Linux (AppImage/deb/rpm) и macOS (два .dmg). Запуск: GitHub Actions → **Build Release** → tag `v0.2.4`, или пушем тега `v*`. Перед публикацией — `CHANGELOG.md` и `RELEASE_CHECKLIST.md`.
 
 </details>
+
+## Ночная вахта в 00:40
+
+ECHO сам замечает время, ручной запуск не нужен. В `00:40` активный герой занимает ночной пост:
+
+- **Корвин** садится у камней, откладывает меч, а Арцив устраивается рядом. Через 10 минут Корвин проверяет, работаешь ли ты ещё, и, если да, минуту подбрасывает камешек перед новой дремотой.
+- **Данте** стягивает одеяло с края рабочего стола и ложится. Через 10 минут он просыпается, смотрит, не закончил ли ты работу, коротко комментирует и снова отворачивается спать.
+
+Сцена запускается только один раз за ночь, не перебивает уже идущую сцену и после завершения возвращает героя точно на его место у часов.
 
 ---
 
