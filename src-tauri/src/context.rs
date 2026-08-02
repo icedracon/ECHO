@@ -7,6 +7,9 @@ use std::collections::HashSet;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use notify::{RecursiveMode, Watcher};
+
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -16,9 +19,154 @@ pub struct ContextEvent {
 }
 
 pub fn spawn(app: AppHandle) {
+    spawn_recycle_bin(app.clone());
     spawn_typing(app.clone());
     spawn_dns(app);
 }
+
+fn classify_recycle_change(previous: usize, current: usize) -> Option<(&'static str, usize)> {
+    if previous > 0 && current == 0 {
+        return Some(("bin_emptied", previous));
+    }
+    let added = current.saturating_sub(previous);
+    match added {
+        1..=4 => Some(("file_deleted", added)),
+        5.. => Some(("files_purged", added)),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn current_user_sid() -> Option<String> {
+    let output = Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let csv = String::from_utf8_lossy(&output.stdout);
+    csv.trim()
+        .trim_matches('"')
+        .split("\",\"")
+        .nth(1)
+        .map(|sid| sid.trim_matches('"').trim().to_owned())
+        .filter(|sid| sid.starts_with("S-1-"))
+}
+
+#[cfg(windows)]
+fn count_recycle_entries(root: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            count += count_recycle_entries(&path);
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_ascii_uppercase();
+        // Windows stores one $I metadata file and one $R payload for each item.
+        // Counting only $I files keeps one deletion equal to one reaction unit.
+        if name.starts_with("$I") {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[cfg(windows)]
+fn recycle_cooldown_ready(last: Option<Instant>, cooldown: Duration) -> bool {
+    last.map(|at| at.elapsed() >= cooldown).unwrap_or(true)
+}
+
+#[cfg(windows)]
+fn spawn_recycle_bin(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Some(sid) = current_user_sid() else {
+            clog("recycle watcher unavailable: current user SID not found");
+            return;
+        };
+        let drive = std::env::var_os("SystemDrive").unwrap_or_else(|| "C:".into());
+        // `C:` is drive-relative in Windows path semantics. Add the separator
+        // explicitly or this becomes `C:$Recycle.Bin` and always looks missing.
+        let drive_root = std::path::PathBuf::from(format!("{}\\", drive.to_string_lossy()));
+        let recycle_root = drive_root.join("$Recycle.Bin");
+        if !recycle_root.exists() {
+            clog("recycle watcher unavailable: recycle root missing");
+            return;
+        }
+        let user_bin = recycle_root.join(sid);
+        let watch_root = if user_bin.exists() { &user_bin } else { &recycle_root };
+        let mut known_count = count_recycle_entries(&user_bin);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(tx) {
+            Ok(watcher) => watcher,
+            Err(_) => {
+                clog("recycle watcher failed to initialize");
+                return;
+            }
+        };
+        if watcher.watch(watch_root, RecursiveMode::Recursive).is_err() {
+            clog("recycle watcher failed to attach");
+            return;
+        }
+        clog(&format!("recycle watcher started baseline_count={known_count}"));
+
+        let mut aggregate_started: Option<Instant> = None;
+        let mut last_deleted: Option<Instant> = None;
+        let mut last_purged: Option<Instant> = None;
+        let mut last_emptied: Option<Instant> = None;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(Ok(_)) => {
+                    aggregate_started.get_or_insert_with(Instant::now);
+                }
+                Ok(Err(_)) => clog("recycle watcher event error"),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if !aggregate_started
+                .map(|started| started.elapsed() >= Duration::from_secs(3))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            aggregate_started = None;
+            let current_count = count_recycle_entries(&user_bin);
+            let change = classify_recycle_change(known_count, current_count);
+            known_count = current_count;
+            let Some((kind, amount)) = change else { continue };
+            if idle_ms() >= 120_000 {
+                clog(&format!("recycle suppressed inactive kind={kind} count={amount}"));
+                continue;
+            }
+            let ready = match kind {
+                "file_deleted" => recycle_cooldown_ready(last_deleted, Duration::from_secs(10 * 60)),
+                "files_purged" => recycle_cooldown_ready(last_purged, Duration::from_secs(30 * 60)),
+                "bin_emptied" => recycle_cooldown_ready(last_emptied, Duration::from_secs(6 * 60 * 60)),
+                _ => false,
+            };
+            if !ready {
+                clog(&format!("recycle suppressed cooldown kind={kind} count={amount}"));
+                continue;
+            }
+            let now = Instant::now();
+            match kind {
+                "file_deleted" => last_deleted = Some(now),
+                "files_purged" => last_purged = Some(now),
+                "bin_emptied" => last_emptied = Some(now),
+                _ => {}
+            }
+            clog(&format!("recycle emit kind={kind} count={amount}"));
+            let _ = app.emit("context-event", ContextEvent { kind });
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_recycle_bin(_app: AppHandle) {}
 
 /// Append a diagnostic line to ~/.echo/echo.log (the overlay can't be screenshotted,
 /// so backend visibility matters).
@@ -287,6 +435,9 @@ fn spawn_typing(app: AppHandle) {
                             "voidstitch" => "demo_voidstitch",
                             "fullweapon" => "demo_fullweapon",
                             "kaelreview" | "kael_review" => "demo_kael_review",
+                            "del" => "demo_del",
+                            "purge" => "demo_purge",
+                            "emptybin" => "demo_emptybin",
                             _ => "",
                         };
                         if !kind.is_empty() {
@@ -1150,7 +1301,19 @@ fn spawn_dns(app: AppHandle) {
             }
 
             // Heartbeats: game / video still active -> he stays in that mood.
-            if game_now || fullscreen_game || steam_game {
+            // A LAUNCHER IS NOT A GAME. `game_now` is only a window title match
+            // ("steam", "epic games", ...), so leaving the Steam client open —
+            // which is the normal state for anyone who plays — emitted this
+            // heartbeat every poll forever. The frontend pushes its session
+            // deadline forward on each one, so clearGamingSession() could never
+            // run, and a real launch hours later was folded into the stale
+            // session: "game_start ignored: session already 140m old", with
+            // every fixed clock long since expired and no opening beat.
+            //
+            // Only evidence of a game actually RUNNING keeps a session alive:
+            // Steam's RunningAppID, or a fullscreen foreground window. The
+            // launcher still raises the gaming mood through the `gaming` edge.
+            if fullscreen_game || steam_game {
                 let _ = app.emit(
                     "context-event",
                     ContextEvent {
@@ -1223,7 +1386,17 @@ fn spawn_dns(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, resolve_media_state};
+    use super::{classify, classify_recycle_change, resolve_media_state};
+
+    #[test]
+    fn recycle_changes_aggregate_and_empty_has_priority() {
+        assert_eq!(classify_recycle_change(3, 4), Some(("file_deleted", 1)));
+        assert_eq!(classify_recycle_change(3, 7), Some(("file_deleted", 4)));
+        assert_eq!(classify_recycle_change(3, 8), Some(("files_purged", 5)));
+        assert_eq!(classify_recycle_change(8, 0), Some(("bin_emptied", 8)));
+        assert_eq!(classify_recycle_change(8, 6), None);
+        assert_eq!(classify_recycle_change(0, 0), None);
+    }
 
     #[test]
     fn media_domains_keep_video_and_music_separate() {
