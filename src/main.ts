@@ -5867,6 +5867,13 @@ let bubbleTimer: number | undefined;
 // Work poses rotate so a long coding run isn't one clip looping forever.
 const WORK_POSES = ["gunspin", "sit", "taunt"];
 let workIdx = 0;
+// A session is a stream of short bursts with `idle` in every gap. Sitting down
+// the instant one pauses — then standing again eight seconds later when the
+// next tool call lands — is the other half of the pacing. He only takes the
+// seat once the work has actually stopped.
+const DANTE_WORK_SETTLE_MS = 25_000;
+let lastDanteWorkAt = 0;
+let danteSettleTimer = 0;
 
 function setState(state: State, force = false) {
   // While YOU are typing, the laptop stays out — ambient AI poses don't
@@ -5893,13 +5900,32 @@ function setState(state: State, force = false) {
   afterClip = null;
   // See the posture block below: while he is already on his feet, a thinking
   // beat is played standing instead of sitting him down and straight back up.
+  if (isDante() && (state === "coding" || state === "searching" || state === "speaking")) {
+    lastDanteWorkAt = Date.now();
+  }
   const danteThinksOnFeet = isDante() && state === "thinking" && !seatedNow;
+  // Same rule for the gaps between bursts: `idle` may not seat him while the
+  // session is still warm. It keeps him on his feet in the standing considering
+  // pose, and a timer takes the seat once the work has genuinely stopped.
+  const danteWaitsOnFeet =
+    isDante() &&
+    state === "idle" &&
+    !seatedNow &&
+    Date.now() - lastDanteWorkAt < DANTE_WORK_SETTLE_MS;
   // movePosture=false: change the clip only. Used by the dwell hold below —
   // posture() would queue its own retry and later move the window with no
   // sit/stand clip at all, which is the silhouette teleport the bridge exists
   // to prevent.
   const applyPose = (movePosture = true) => {
     if (state === "idle") {
+      if (danteWaitsOnFeet) {
+        // Standing pause between bursts. playIdleCycle() would start his seated
+        // idle art at standing height, which reads as sunk under the taskbar.
+        const wait = clip("sit", 200, true, 8);
+        wait.msSeq = STAND_CROSS.msSeq;
+        startClip(wait);
+        return;
+      }
       if (movePosture) posture(state);
       playIdleCycle();
       return;
@@ -5948,7 +5974,22 @@ function setState(state: State, force = false) {
     // poses, and the art for it already exists — STAND_CROSS, "standing, arms
     // crossed, considering", which is his `searching` clip. Seated thinking is
     // still what happens when he is genuinely at rest and thinks.
-    const targetSeated = danteThinksOnFeet ? false : SEATED.has(state);
+    const targetSeated = danteThinksOnFeet || danteWaitsOnFeet ? false : SEATED.has(state);
+    // Without this the last `idle` of a session would already have been held,
+    // and nothing would ever come back to seat him — he'd stand until the next
+    // burst. Re-run the decision once the settle window closes.
+    window.clearTimeout(danteSettleTimer);
+    if (danteWaitsOnFeet) {
+      danteSettleTimer = window.setTimeout(
+        () => {
+          if (!isDante() || gagActive || showcasing || away || returning || wandering) return;
+          if ((stage.dataset.state || "idle") !== "idle" || seatedNow) return;
+          dbg("dante work settled -> taking the seat");
+          setState("idle", true);
+        },
+        DANTE_WORK_SETTLE_MS - (Date.now() - lastDanteWorkAt) + 250,
+      );
+    }
     // AI states alternate every couple of seconds during a working burst —
     // thinking (seated) then coding (standing) then thinking again — and each
     // flip drove a FULL sit/stand bridge. Measured in echo-fe.log: three
