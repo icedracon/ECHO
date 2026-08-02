@@ -1,4 +1,8 @@
-# ECHO v0.2.4
+# ECHO
+
+<!-- No version number here. The workflow sets the release TITLE to
+     "ECHO $RELEASE_TAG", so a hardcoded heading only ever goes stale: every
+     page built after 0.2.4 still announced itself as v0.2.4 in the body. -->
 
 Живой pixel-art компаньон для рабочего стола. Никакой консоли и настройки: скачай один файл, открой его, и ECHO появится у края экрана.
 
