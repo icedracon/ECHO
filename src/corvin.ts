@@ -25,6 +25,17 @@ export const CORVIN = {
   idle: cc("idle", 9, 230, true),
   // the standing watch with WIND: coat ripples, hair drifts (user-directed)
   windidle: cc("windidle", 13, 200, true),
+  // Recycle-bin reactions are event-owned, never Director-owned. Their timing
+  // is frame-locked in main.ts so portal, catch, ignition and ash stay aligned.
+  delete_lastrites: cc("delete_lastrites", 9, 190, false, 8,
+    [320, 180, 170, 190, 340, 240, 200, 190, 420]),
+  delete_summon: cc("delete_summon", 13, 150, false, 12,
+    [300, 150, 140, 130, 120, 120, 120, 130, 140, 160, 180, 220, 360]),
+  delete_burn: cc("delete_burn", 17, 150, false, 16,
+    [280, 150, 140, 140, 130, 130, 150, 180, 220, 260, 300, 260, 230, 210, 200, 220, 420]),
+  delete_cairnstone: cc("delete_cairnstone", 25, 190, false, 24,
+    [300, 180, 170, 170, 180, 190, 200, 220, 240, 260, 280, 320, 520,
+      300, 260, 240, 220, 210, 200, 190, 180, 180, 190, 220, 420]),
   walkin: cc("walkin", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   walkout: cc("walkout", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   sit: cc("sit", 9, 190, false, 8, [140, 150, 160, 175, 190, 205, 220, 240, 320]),

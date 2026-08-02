@@ -30,6 +30,7 @@ interface StoryState {
     lastBreakdownAt?: number; // the 01:00 / 13:00 breakdown
     lastLetterAt?: number; // the letter — once a week at most
     lastCairnAt?: number; // the cairn — once a month
+    lastBinCairnAt?: number; // recycle-bin memorial, independent from the story cairn
     lastBreachAt?: number; // the Breach — the big fight
     lastRequiemAt?: number; // the 23:40 requiem — the whole grief line
     lastDoorAt?: number; // the Door fight — the monitor-edge boss scene

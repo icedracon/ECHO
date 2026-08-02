@@ -900,6 +900,16 @@ DANTE_BLANKET_DOWN.msSeq = [
 const DANTE_BLANKET_LOOP = clip("d_blanketloop", 460, true, 0, 9);
 const DANTE_BLANKET_CHECK = clip("d_blanketcheck", 260, false, 8, 9);
 DANTE_BLANKET_CHECK.msSeq = [360, 260, 240, 300, 520, 300, 240, 280, 560];
+const DANTE_DELETE_SHOOT = clip("d_delete_shoot", 150, false, 12, 13);
+DANTE_DELETE_SHOOT.msSeq = [300, 130, 110, 100, 100, 120, 180, 90, 170, 160, 150, 180, 320];
+const DANTE_DELETE_SWORDDRAW = clip("d_delete_sworddraw", 170, false, 8, 9);
+DANTE_DELETE_SWORDDRAW.msSeq = [260, 160, 150, 150, 160, 170, 190, 230, 340];
+const DANTE_DELETE_RANGEDCUT = clip("d_delete_rangedcut", 120, false, 16, 17);
+DANTE_DELETE_RANGEDCUT.msSeq = [260, 150, 120, 100, 85, 70, 65, 70, 110, 130, 150, 170, 190, 200, 220, 250, 380];
+const DANTE_DELETE_FLICK = clip("d_delete_flick", 150, false, 12, 13);
+DANTE_DELETE_FLICK.msSeq = [260, 160, 140, 120, 110, 110, 120, 140, 170, 180, 190, 210, 320];
+const DANTE_EMPTY_BIN = clip("d_emptybin", 160, false, 12, 13);
+DANTE_EMPTY_BIN.msSeq = [280, 170, 150, 130, 120, 120, 130, 150, 180, 200, 220, 240, 360];
 // ---- Character packs ---------------------------------------------------------
 // "dante" (default) or "corvin" — read from ~/.echo/character at boot, switched
 // live with `echo be corvin > ~/.echo/demo`. Corvin swaps the state clips and
@@ -1347,6 +1357,11 @@ preloadClips([
   DANTE_BLANKET_DOWN,
   DANTE_BLANKET_LOOP,
   DANTE_BLANKET_CHECK,
+  DANTE_DELETE_SHOOT,
+  DANTE_DELETE_SWORDDRAW,
+  DANTE_DELETE_RANGEDCUT,
+  DANTE_DELETE_FLICK,
+  DANTE_EMPTY_BIN,
   // The whole Corvin pack too — an unloaded frame on a clip switch flashes the
   // broken-image icon mid-scene (caught by the capture rig, twice per reel).
   ...Object.values(CORVIN),
@@ -1358,6 +1373,11 @@ preloadClips([
 // enters the gaming mood. Long scenes stay serialized by the same busy gate.
 const contextQueue: string[] = [];
 let contextDrainTimer = 0;
+type DeletionEvent = "file_deleted" | "files_purged" | "bin_emptied";
+const DELETION_CONTEXTS = new Set<string>([
+  "file_deleted", "files_purged", "bin_emptied",
+  "demo_del", "demo_purge", "demo_emptybin",
+]);
 const isManualContext = (kind: string) =>
   kind.startsWith("demo_") || kind === "hotkey_song" || kind === "hotkey_story";
 function queueContext(kind: string) {
@@ -1381,7 +1401,8 @@ function scheduleContextDrain() {
       kind === "media_active" ||
       kind === "music" ||
       kind === "music_active" ||
-      kind === "gaming"
+      kind === "gaming" ||
+      DELETION_CONTEXTS.has(kind)
     );
     if (away && !returning && shouldWake) {
       dbg("queued context wakes companion from off-screen");
@@ -1418,6 +1439,7 @@ function onContext(kind: string) {
     kind === "gaming_active" ||
     kind === "game_start" ||
     kind === "cursor_near" ||
+    DELETION_CONTEXTS.has(kind) ||
     kind.startsWith("demo_")
   )
     lastActivity = Date.now();
@@ -1514,6 +1536,10 @@ function onContext(kind: string) {
       queueContext(kind);
       return;
     }
+    if (DELETION_CONTEXTS.has(kind)) {
+      queueContext(kind);
+      return;
+    }
     // User commands wait for the current scene instead of expiring after 25 s.
     if (isManualContext(kind)) queueContext(kind);
     return;
@@ -1537,6 +1563,18 @@ function onContext(kind: string) {
     kind !== "demo_full_review" && kind !== "demo_video_review"
   ) {
     armQaReturn(qaOriginalCharacter);
+  }
+  if (DELETION_CONTEXTS.has(kind)) {
+    const event: DeletionEvent =
+      kind === "file_deleted" ? "file_deleted"
+      : kind === "files_purged" ? "files_purged"
+      : kind === "bin_emptied" ? "bin_emptied"
+      : kind === "demo_del" ? "file_deleted"
+      : kind === "demo_purge" ? "files_purged"
+      : kind === "demo_emptybin" ? "bin_emptied"
+      : kind as DeletionEvent;
+    void fileDeletionReaction(event, kind.startsWith("demo_"));
+    return;
   }
   if (kind === "typing") {
     // Never mid-walk-in, and only once he's home in his corner.
@@ -1955,7 +1993,6 @@ let lastGamingSpecial = 0;
 const GAME_SESSION_START_KEY = "echo.gameSessionStartedAt";
 const GAME_SESSION_HEARTBEAT_KEY = "echo.gameSessionHeartbeatAt";
 const GAME_SESSION_CLOCKS_KEY = "echo.gameSessionClocks";
-const GAME_SESSION_RESUME_GAP = 10 * 60_000;
 let gameSessionStartedAt = 0;
 
 function startGamingSession(source: string) {
@@ -1969,35 +2006,27 @@ function startGamingSession(source: string) {
     return;
   }
 
-  const savedStart = Number(localStorage.getItem(GAME_SESSION_START_KEY) || 0);
-  const savedHeartbeat = Number(localStorage.getItem(GAME_SESSION_HEARTBEAT_KEY) || 0);
-  const canResume =
-    savedStart > 0 &&
-    savedStart <= now &&
-    savedHeartbeat >= savedStart &&
-    now - savedHeartbeat <= GAME_SESSION_RESUME_GAP;
-  gameSessionStartedAt = canResume ? savedStart : now;
+  // A RELAUNCH IS A NEW SESSION, ALWAYS (user-directed). The saved start and
+  // heartbeat used to be resumed when ECHO restarted within ten minutes of a
+  // live game, so relaunching mid-play inherited clocks that had already fired
+  // and the opening beat never came — you had to wait out the old schedule to
+  // see anything. Starting ECHO is now an explicit "begin here": elapsed = 0s,
+  // every clock armed from this instant, opening beat included.
+  //
+  // The keys are still written so a session survives inside one run; they are
+  // simply never read back to resume across runs.
+  gameSessionStartedAt = now;
   localStorage.setItem(GAME_SESSION_START_KEY, String(gameSessionStartedAt));
   localStorage.setItem(GAME_SESSION_HEARTBEAT_KEY, String(now));
-
-  if (canResume) {
-    restoreGamingClocks(gameSessionStartedAt, now);
-    if (isCorvin()) consumeOverdueHuntClocks("session resume", now);
-    else if (isDante()) consumeOverdueDanteClocks("session resume", now);
-  } else {
-    localStorage.removeItem(GAME_SESSION_CLOCKS_KEY);
-    lastGamingDevil = gameSessionStartedAt - GAMING_DEVIL_EVERY + 3 * 60_000;
-    lastGamingSword = gameSessionStartedAt - GAMING_SWORD_EVERY + 7 * 60_000;
-    armHuntClocks(gameSessionStartedAt);
-    armDanteClocks(gameSessionStartedAt);
-  }
+  localStorage.removeItem(GAME_SESSION_CLOCKS_KEY);
+  lastGamingDevil = gameSessionStartedAt - GAMING_DEVIL_EVERY + 3 * 60_000;
+  lastGamingSword = gameSessionStartedAt - GAMING_SWORD_EVERY + 7 * 60_000;
+  armHuntClocks(gameSessionStartedAt);
+  armDanteClocks(gameSessionStartedAt);
   lastGamingSpecial = now;
   saveGamingClocks();
-  dbg(
-    `game session ${canResume ? "resumed" : "started"}: source=${source} ` +
-      `elapsed=${Math.floor((now - gameSessionStartedAt) / 1000)}s`,
-  );
-  if (isKael()) void ensureKaelCombatReady(canResume ? "game resumed" : "game started");
+  dbg(`game session started: source=${source} elapsed=0s`);
+  if (isKael()) void ensureKaelCombatReady("game started");
 }
 
 function noteGamingHeartbeat() {
@@ -2379,11 +2408,14 @@ async function corvinScene(body: () => Promise<void>, accent?: string) {
   }
   dbg("corvin scene start");
   gagActive = true;
-  afterClip = null;
   try {
     stage.dataset.state = "idle";
     if (accent) document.documentElement.style.setProperty("--accent", accent);
+    // A scene may arrive while typing is still completing Corvin's sit bridge.
+    // Keep that bridge's callback alive until it clears the posture lock;
+    // cancelling it here stranded him seated and made standUp() wait forever.
     await standUp();
+    afterClip = null;
     await body();
   } finally {
     // Every Corvin Director scene owns a standing contract. If its body used a
@@ -5439,66 +5471,10 @@ function consumeOverdueHuntClocks(reason: string, now = Date.now()) {
   dbg(`hunt backlog folded (${reason}): ${overdue.map((c) => c.name).join(", ")}`);
 }
 
-function scheduledClockOnResume(
-  startedAt: number,
-  firstAtMinutes: number,
-  every: number,
-  now: number,
-  saved: number,
-) {
-  // An armed first appointment deliberately stores a timestamp before the
-  // session start (`start - cadence + firstAt`). Preserve that value: if ECHO
-  // restarts after the appointment, the overdue hard beat must still run.
-  if (saved >= startedAt - every && saved <= now) return saved;
-  const firstDue = startedAt + firstAtMinutes * 60_000;
-  if (now < firstDue) return startedAt - every + firstAtMinutes * 60_000;
-  // No saved per-beat state means this is the first build with persistence.
-  // Treat appointments before the restart as consumed instead of replaying a
-  // burst of 3/7/10-minute fights immediately on boot.
-  return firstDue + Math.floor((now - firstDue) / every) * every;
-}
 
-function restoreGamingClocks(startedAt: number, now: number) {
-  let saved: Record<string, number> = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(GAME_SESSION_CLOCKS_KEY) || "{}");
-  } catch {
-    /* repaired below from the session timeline */
-  }
-  for (const c of HUNT_CLOCKS) {
-    c.last = scheduledClockOnResume(startedAt, c.firstAt, c.every, now, Number(saved[c.name] || 0));
-  }
-  lastGamingDevil = scheduledClockOnResume(
-    startedAt,
-    3,
-    GAMING_DEVIL_EVERY,
-    now,
-    Number(saved.danteDevil || 0),
-  );
-  lastGamingSword = scheduledClockOnResume(
-    startedAt,
-    7,
-    GAMING_SWORD_EVERY,
-    now,
-    Number(saved.danteSword || 0),
-  );
-  lastDanteSpin = scheduledClockOnResume(startedAt, 6, 20 * 60_000, now, Number(saved.danteSpin || 0));
-  lastDanteCoin = scheduledClockOnResume(
-    startedAt,
-    12,
-    DANTE_COIN_EVERY,
-    now,
-    Number(saved.danteCoin || 0),
-  );
-  lastDantePizza = scheduledClockOnResume(
-    startedAt,
-    18,
-    DANTE_PIZZA_EVERY,
-    now,
-    Number(saved.dantePizza || 0),
-  );
-  dbg(`game clocks restored at ${Math.floor((now - startedAt) / 60_000)}m`);
-}
+// restoreGamingClocks() lived here. A relaunch is now always a fresh
+// session (see startGamingSession), so there is nothing to restore across
+// runs and its scheduledClockOnResume helper is only used by the tests.
 
 function saveGamingClocks() {
   const clocks: Record<string, number> = {
@@ -5802,6 +5778,12 @@ let frameIdx = 0;
 let frameTimer = 0;
 let frameGeneration = 0;
 let observedClip: Clip = curClip;
+interface FrameCueState {
+  clip: Clip;
+  cues: Map<number, () => void>;
+  fired: Set<number>;
+}
+let frameCues: FrameCueState | null = null;
 
 // Clip changes can happen while the old frame is holding for up to 600 ms.
 // Re-arm the clock immediately so a scene always paints frame 0 before its
@@ -5813,6 +5795,7 @@ function restartFrameLoop() {
   frameLoop();
 }
 function startClip(c: Clip, next: (() => void) | null = null) {
+  if (frameCues && frameCues.clip !== c) frameCues = null;
   curClip = c;
   frameIdx = 0;
   afterClip = next;
@@ -5822,6 +5805,13 @@ function frameLoop() {
   const generation = frameGeneration;
   observedClip = curClip;
   sprite.src = curClip.frames[frameIdx];
+  if (frameCues?.clip === curClip && !frameCues.fired.has(frameIdx)) {
+    const cue = frameCues.cues.get(frameIdx);
+    if (cue) {
+      frameCues.fired.add(frameIdx);
+      cue();
+    }
+  }
   const shownMs = (curClip.msSeq?.[frameIdx] ?? curClip.ms) * paceMul(curClip);
   frameIdx++;
   if (frameIdx >= curClip.frames.length) {
@@ -5859,6 +5849,19 @@ function frameLoop() {
   // timer owns playback; never leave a second stale loop running beside it.
   if (generation !== frameGeneration) return;
   frameTimer = window.setTimeout(frameLoop, shownMs);
+}
+
+async function playCuedClip(c: Clip, cues: Record<number, () => void> = {}) {
+  const total = c.msSeq ? c.msSeq.reduce((sum, ms) => sum + ms, 0) : c.frames.length * c.ms;
+  commitFor(total + 300);
+  frameCues = {
+    clip: c,
+    cues: new Map(Object.entries(cues).map(([frame, cue]) => [Number(frame), cue])),
+    fired: new Set(),
+  };
+  startClip(c);
+  await sleep(total + 80);
+  if (frameCues?.clip === c) frameCues = null;
 }
 
 let idleTimer: number | undefined;
@@ -7670,6 +7673,86 @@ async function danteStandingClipScene(c: Clip, plays = 1) {
     gagActive = false;
     setState("idle");
   }
+}
+
+async function danteDeletionReaction(event: DeletionEvent): Promise<boolean> {
+  if (!home || gagActive || !isDante() || introActive || wandering || away || returning) return false;
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    if (event === "files_purged") {
+      markScene();
+      await standUp();
+      await playCuedClip(DANTE_DELETE_SHOOT, {
+        7: () => {
+          sfxGunshot();
+          shake(120);
+        },
+      });
+      await playCuedClip(DANTE_DELETE_SWORDDRAW);
+      await playCuedClip(DANTE_DELETE_RANGEDCUT, {
+        5: () => sfxSlashWhoosh(),
+        8: () => shake(180),
+      });
+      // Keep the scene lock through the authored return to Dante's seated idle.
+      // Releasing it on the standing cut contact let a queued reaction replace
+      // the sit bridge before its completion callback, freezing the queue.
+      await ensureDantePosture(true);
+    } else {
+      if (event === "bin_emptied") markScene();
+      await ensureDantePosture(true);
+      await playCuedClip(event === "file_deleted" ? DANTE_DELETE_FLICK : DANTE_EMPTY_BIN);
+    }
+    return true;
+  } finally {
+    gagActive = false;
+    finishSceneIdle(`dante ${event}`);
+  }
+}
+
+async function corvinDeletionReaction(event: DeletionEvent, forced: boolean): Promise<boolean> {
+  if (!home || gagActive || !isCorvin() || introActive || wandering || away || returning) return false;
+  if (
+    event === "bin_emptied" &&
+    !forced &&
+    Date.now() - (story.s.gags.lastBinCairnAt ?? 0) < 24 * 60 * 60_000
+  ) {
+    dbg("corvin recycle cairn skipped: daily gate");
+    return false;
+  }
+  if (event !== "file_deleted") markScene();
+  await corvinScene(async () => {
+    if (event === "file_deleted") {
+      await playCuedClip(CORVIN.delete_lastrites as Clip);
+      return;
+    }
+    if (event === "files_purged") {
+      await playCuedClip(CORVIN.delete_summon as Clip, {
+        1: () => sfxCorruption(1400),
+      });
+      await playCuedClip(CORVIN.delete_burn as Clip, {
+        3: () => sfxIgnite(),
+      });
+      return;
+    }
+    await playCuedClip(CORVIN.delete_cairnstone as Clip);
+    story.s.gags.lastBinCairnAt = Date.now();
+    story.save();
+  });
+  return true;
+}
+
+async function fileDeletionReaction(event: DeletionEvent, forced = false) {
+  if (isKael()) {
+    dbg(`delete reaction ignored for Kael: ${event}`);
+    return;
+  }
+  const played = isDante()
+    ? await danteDeletionReaction(event)
+    : await corvinDeletionReaction(event, forced);
+  if (!played) return;
+  watchReaction(event, isDante() ? danteDirector : director);
 }
 
 // Corvin's Door scene: the monitor's right edge opens and one monstrous arm

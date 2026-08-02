@@ -83,7 +83,7 @@ function validateClipCatalogue(label, clips, totalFn) {
             const width = png.readUInt32BE(16);
             const height = png.readUInt32BE(20);
             check(width > 0 && height > 0, `${label} ${name}: invalid dimensions`);
-            if (label === "Kael") {
+            if (label === "Kael" || (label === "Corvin" && name.startsWith("delete_"))) {
               check(width === 128 && height === 128, `${label} ${name}: expected 128x128, found ${width}x${height}`);
               const colorType = png[25];
               const hasAlpha = colorType === 4 || colorType === 6 || png.includes(Buffer.from("tRNS"));
@@ -158,6 +158,23 @@ check(
     sameDanteFrame("d_blanketcheck", 8, "d_blanketloop", 0),
   "Dante blanket down/loop/check contact frames must be pixel-identical",
 );
+check(
+  sameDanteFrame("d_delete_shoot", 12, "d_delete_sworddraw", 0) &&
+    sameDanteFrame("d_delete_sworddraw", 8, "d_delete_rangedcut", 0),
+  "Dante delete shoot/draw/ranged-cut contact frames must be pixel-identical",
+);
+check(
+  sameClipFrame(CORVIN.delete_summon, 12, CORVIN.delete_burn, 0),
+  "Corvin delete summon/burn contact frame must be pixel-identical",
+);
+for (const folder of [
+  "d_delete_shoot", "d_delete_sworddraw", "d_delete_rangedcut", "d_delete_flick", "d_emptybin",
+]) {
+  for (const frame of folders.get(folder) || []) {
+    const png = fs.readFileSync(danteFrame(folder, frame));
+    check(png.readUInt32BE(16) === 128 && png.readUInt32BE(20) === 128, `${folder}/frame_${frame}: expected 128x128`);
+  }
+}
 
 const main = read("src/main.ts");
 const planner = read("src/planner.ts");
@@ -310,13 +327,24 @@ check(
 );
 check(
   main.includes("GAME_SESSION_START_KEY") &&
-    main.includes("GAME_SESSION_RESUME_GAP") &&
-    main.includes("GAME_SESSION_CLOCKS_KEY"),
-  "Game-session clocks must persist across quick ECHO restarts",
+    main.includes("GAME_SESSION_CLOCKS_KEY") &&
+    // A relaunch is a NEW session (user-directed): starting ECHO while a game
+    // runs must arm every clock from that instant, opening beat included,
+    // instead of inheriting a schedule whose beats have already fired.
+    !main.includes("GAME_SESSION_RESUME_GAP") &&
+    main.includes("dbg(`game session started: source=${source} elapsed=0s`)"),
+  "Starting ECHO during a game must begin a fresh session at 0s, never resume the previous run",
 );
+// Was: "armed and overdue appointments must survive an ECHO restart", which
+// asserted scheduledClockOnResume(). Nothing survives a restart any more by
+// design — a relaunch arms every clock from zero — so the guarantee that
+// replaces it is that the arming itself is intact.
 check(
-  main.includes("saved >= startedAt - every && saved <= now"),
-  "Armed and overdue game appointments must survive an ECHO restart",
+  main.includes("lastGamingDevil = gameSessionStartedAt - GAMING_DEVIL_EVERY + 3 * 60_000") &&
+    main.includes("lastGamingSword = gameSessionStartedAt - GAMING_SWORD_EVERY + 7 * 60_000") &&
+    main.includes("armHuntClocks(gameSessionStartedAt)") &&
+    main.includes("armDanteClocks(gameSessionStartedAt)"),
+  "A new game session must arm every fixed appointment from its own start time",
 );
 check(
   main.includes("if (gamingActive()) {") && main.includes("runCorvinClock(false)"),
@@ -454,7 +482,7 @@ check(
   "Kael work must use the mode controller and the connected typing-runes shell loop",
 );
 check(
-  main.includes('ensureKaelCombatReady(canResume ? "game resumed" : "game started")') &&
+  main.includes('ensureKaelCombatReady("game started")') &&
     main.includes('ensureKaelWeaponDormant("game ended")') &&
     main.includes("kaelPendingDraw") &&
     main.includes("kaelPendingStow"),
@@ -588,6 +616,7 @@ const corvinDemos = stringSet(main, "CORVIN_DEMOS");
 const kaelDemos = stringSet(main, "KAEL_DEMOS");
 const sharedDemos = new Set([
   "demo_watch", "demo_nightwatch", "demo_video_review", "demo_full_review",
+  "demo_del", "demo_purge", "demo_emptybin",
 ]);
 for (const demo of backendDemos) {
   check(handledDemos.has(demo), `Backend trigger ${demo} has no frontend handler`);
@@ -603,7 +632,7 @@ const automaticAndHotkeyKinds = [
   "typing", "cursor_left", "cursor_right", "cursor_far", "battery_low",
   "game_start", "gaming", "gaming_active", "gaming_fg",
   "media", "media_active", "music", "hotkey_song", "hotkey_story",
-  "quiet_hour", "show_help",
+  "quiet_hour", "show_help", "file_deleted", "files_purged", "bin_emptied",
 ];
 for (const kind of automaticAndHotkeyKinds) {
   check(main.includes(`kind === "${kind}"`), `Runtime trigger ${kind} has no frontend route`);
@@ -612,6 +641,17 @@ check(
   context.includes('Some(("hotkey_song", "ALT+S -> song"))') &&
     context.includes('Some(("hotkey_story", "ALT+B -> story"))'),
   "ALT+S and ALT+B must both be emitted by the global hotkey watcher",
+);
+check(
+  context.includes("spawn_recycle_bin(app.clone())") &&
+    context.includes('"file_deleted"') &&
+    context.includes('"files_purged"') &&
+    context.includes('"bin_emptied"') &&
+    context.includes("Duration::from_secs(3)") &&
+    context.includes("idle_ms() >= 120_000") &&
+    context.includes("count_recycle_entries") &&
+    !context.includes("recycle emit path="),
+  "Recycle Bin watcher must aggregate counts locally without logging file paths",
 );
 check(
   context.includes('"youtube" | "yt" | "youtube_poster" => "demo_youtube_poster"') &&
@@ -655,12 +695,11 @@ check(
 check(
   main.includes('consumeOverdueHuntClocks("character switch")') &&
     main.includes('consumeOverdueDanteClocks("character switch")') &&
-    main.includes('consumeOverdueDanteClocks("session resume", now)') &&
     main.includes("function consumeOverdueDanteClocks(reason: string, now = Date.now())") &&
     main.includes("function consumeOverdueHuntClocks(reason: string, now = Date.now())") &&
     main.includes("for (const clock of due) clock.last = now") &&
     main.includes("hunt backlog folded (beat"),
-  "Resume, character switches, and delayed hard beats must consume overdue choreography instead of bursting",
+  "Character switches and delayed hard beats must consume overdue choreography instead of bursting",
 );
 check(
   main.includes("cancelAnimationFrame(winTween)") &&
@@ -899,6 +938,11 @@ const dantePackRoutes = new Map(Object.entries({
   d_fingerguns: "hard:d_fingerguns",
   d_glanceover: "hard:d_glanceover",
   d_hairswipe: "hard:d_hairswipe",
+  d_delete_flick: "context:file-delete",
+  d_delete_rangedcut: "context:file-purge",
+  d_delete_shoot: "context:file-purge",
+  d_delete_sworddraw: "context:file-purge",
+  d_emptybin: "context:bin-empty",
   d_jacketflick: "hard:d_jacketflick",
   d_knuckles: "hard:d_knuckles",
   d_layback: "hard:d_layback",
@@ -962,6 +1006,12 @@ check(
     main.includes("await playDante(DANTE_WATCH_TURN)") &&
     main.includes("startClip(DANTE_WATCH_LOOP)") &&
     main.includes("startClip(TYPING, () => startClip(TYPETAP))") &&
+    main.includes("playCuedClip(DANTE_DELETE_SHOOT") &&
+    main.includes("playCuedClip(DANTE_DELETE_SWORDDRAW)") &&
+    main.includes("playCuedClip(DANTE_DELETE_RANGEDCUT") &&
+    main.includes("playCuedClip(CORVIN.delete_summon as Clip") &&
+    main.includes("playCuedClip(CORVIN.delete_burn as Clip") &&
+    main.includes("story.s.gags.lastBinCairnAt") &&
     main.includes("slideFootstepWindow(h.cornerX, isCorvin() ? CORVIN.walkin : WALK") &&
     main.includes("const bridge = toSeated ? SITDOWN : reversedClip(SITDOWN)") &&
     main.includes('/pixel/demon_arm_out/frame_${fi}.png') &&

@@ -82,7 +82,7 @@ Use this before publishing a GitHub release.
    - Corvin keeps the sword across his knees and Artsiv visible throughout the watch loop;
    - closing media exits watch mode cleanly, while launching a game interrupts it with higher priority.
    - Alt+Tab away from and back into a Steam game does not restart the 3/7/10/15-minute session clocks;
-   - restarting ECHO while the same game remains active resumes the session clock;
+   - restarting ECHO while a game is running starts a FRESH session at 0s — opening beat included, every clock armed from that moment (it no longer resumes the previous run's schedule);
    - restarting after a fight's due time queues that overdue fight instead of silently consuming it;
    - Corvin's Door fight starts at the 15-minute Steam appointment even if a daily/demo Door ran within four hours.
    - during Steam, Director logs and displays varied small/pose animations between fixed fights;
