@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.6 - 2026-08-02
+
+### Fixed
+
+- Game sessions start when a game does. `gaming_active` fired on any window
+  titled "steam", "epic games", "battle.net" or "riot client" — the launcher,
+  not a game — so leaving the Steam client open held a session open forever.
+  A real launch hours later was folded into it (`game_start ignored: session
+  already 140m old`) with every fixed clock long expired and no opening beat.
+  Only Steam's RunningAppID or a fullscreen foreground window keeps a session
+  alive now, and it ends about a minute after the game stops.
+- Restarting ECHO during a game begins a fresh session at 0s instead of
+  resuming the previous run's schedule, so the opening beat and the whole
+  timetable — Unchained 3:00, cleave 7:00, breach 10:00, the Door 15:00;
+  Dante's spin 6:00, coin 12:00, pizza 18:00 — run from that moment.
+- The delete-scene animations are actually in the package. Nine folders were
+  referenced by code that shipped without them, so a build from a clean
+  checkout resolved those clips to nothing.
+
 ## 0.2.5 - 2026-08-02
 
 ### Fixed
