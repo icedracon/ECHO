@@ -140,6 +140,11 @@ export const DANTE_HARD_PLAN: DirectorPlanBeat[] = [
   { id: "d_jacketflick", atSec: 33 * 60 },
   { id: "stretch", atSec: 38 * 60 },
   { id: "d_knuckles", atSec: 43 * 60 },
+  // d_coffee carries `planned: true` in the catalogue but had no slot here, and
+  // pick() skips every planned action — so it was selectable by neither path.
+  // 11 frames of art that could never appear. It sits among the other seated
+  // micros, and its own dispatch guard keeps it to waking hours (10:00-20:00).
+  { id: "d_coffee", atSec: 46 * 60 },
   { id: "leanback", atSec: 48 * 60 },
   { id: "d_crouchpeer", atSec: 53 * 60 },
   { id: "laugh", atSec: 58 * 60 },
@@ -302,6 +307,9 @@ export interface DirectorState {
 export class Director {
   st: DirectorState;
   private readonly actions: DirectorAction[];
+  // Which planned actions already used their one allowed skip. In-memory on
+  // purpose: a restart must not let an action defer twice running.
+  private readonly deferred = new Set<string>();
 
   constructor(saved?: Partial<DirectorState>, actions: DirectorAction[] = ACTIONS) {
     this.st = { weights: {}, lastPlayed: {}, ...saved };
@@ -348,10 +356,24 @@ export class Director {
 
   // Hard-plan dispatch still passes through Director: situational vetoes,
   // last-played history and feedback remain character-specific. The plan itself
-  // is the cooldown, so no weighted roll or secondary cooldown is applied.
+  // is the cooldown, so no secondary cooldown is applied.
   takePlanned(id: string, s: Situation, allowBig: boolean): DirectorAction | null {
     const action = this.actions.find((candidate) => candidate.id === id && candidate.planned);
     if (!action || (action.kind === "big" && !allowBig) || action.base(s) <= 0) return null;
+    // Learning applies here too. Every one of Dante's 43 actions is planned, so
+    // with the weight ignored his `feedback()` wrote to story.json and nothing
+    // ever read it back — the pack looked like it learned and did not.
+    //
+    // A low weight may only THIN a beat, never silence it: the skip happens at
+    // most once in a row per action, so the worst a disliked scene suffers is
+    // appearing every second cycle. Coverage stays guaranteed, which is the
+    // whole point of the hard plan.
+    const w = this.st.weights[action.id] ?? 1;
+    if (w < 1 && !this.deferred.has(action.id) && Math.random() > w) {
+      this.deferred.add(action.id);
+      return null;
+    }
+    this.deferred.delete(action.id);
     this.st.lastPlayed[action.id] = Date.now();
     return action;
   }

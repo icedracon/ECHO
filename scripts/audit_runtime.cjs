@@ -376,8 +376,12 @@ check(
 check(
   main.includes("function nightWatchWindowNow(at = new Date())") &&
     main.includes("return (h === 0 && minute >= 40) || (h >= 1 && h < 5)") &&
-    main.includes("const nightWatchWindow = nightWatchWindowNow(now)"),
-  "00:40 night watch must catch up once after a late launch through 04:59",
+    main.includes("const nightWatchWindow = nightWatchWindowNow(now)") &&
+    main.includes("async function nightWatchScene(demo = false, scheduled = false): Promise<boolean>") &&
+    main.includes('dbg("night watch appointment deferred: stage was not available")') &&
+    main.includes("story.s.gags.lastNightWatchAt = Date.now()") &&
+    main.includes("void nightWatchScene(false, true)"),
+  "00:40 night watch must catch up through 04:59 and persist only after acquiring the stage",
 );
 check(
   main.includes("function paceMul(c?: Clip): number") &&
@@ -419,7 +423,11 @@ check(
 );
 check(
   main.includes('stage.dataset.facing = isKael() ? "left" : "right"') &&
-    main.includes("const gaitRate = 1.109375 - 0.4 * contact") &&
+    // Generalised so Dante can walk at constant speed (depth 0) while Kael and
+    // Corvin keep the contact pulse; depth 0.4 reduces to the original
+    // 1.109375 - 0.4 * contact, so their motion is byte-for-byte unchanged.
+    main.includes("const gaitRate = 1 + gaitDepth * 0.2734375 - gaitDepth * contact") &&
+    main.includes("return slideFootstepWindow(toX, KAEL.walkin, fittedPace)") &&
     main.includes("const fittedPace = distance / (cycles * cycleMs / 1000)") &&
     main.includes("slideKaelWalk(cornerX, 125)") &&
     KAEL.walkin.frames.length === 8 &&
@@ -730,7 +738,59 @@ for (const [label, actions, plan] of [
   }
 }
 check(ACTIONS.every((action) => action.posture === "standing"), "Every Corvin Director action must require standing posture");
+// The posture tag must actually gate dispatch. It was decorative for a while:
+// every action carried one and nothing read it, so a standing pack selected
+// while Dante sat swapped silhouettes with no sit/stand transition.
+check(
+  DANTE_ACTIONS.every((action) => action.posture === "seated" || action.posture === "standing"),
+  "Every Dante Director action must declare a posture",
+);
+check(
+  main.includes("seatedNow !== (a.posture === \"seated\")") &&
+    main.includes("ensureDantePosture(a.posture === \"seated\")"),
+  "runDanteClock must bridge to the tagged posture before dispatching an action",
+);
 check(KAEL_ACTIONS.every((action) => action.posture === "standing"), "Every Kael Director action must require standing posture");
+
+// --- reachability: no scene may exist that the Director can never select -----
+// `pick()` skips every planned action and `takePlanned()` only answers ids the
+// hard plan names, so an action carrying `planned: true` with no slot in its
+// plan is selectable by NEITHER path. d_coffee shipped that way: catalogue
+// entry, dispatch case, 11 frames of art, and no way to ever appear. These
+// checks cover all four failure shapes for all three packs.
+function dispatchCases(fromMarker, toMarker) {
+  const from = main.indexOf(fromMarker);
+  const to = toMarker ? main.indexOf(toMarker, from) : -1;
+  if (from < 0) return new Set();
+  const body = main.slice(from, to > from ? to : from + 20000);
+  return new Set([...body.matchAll(/case\s+"([^"]+)"/g)].map((match) => match[1]));
+}
+for (const [label, actions, plan, cases] of [
+  ["Corvin", ACTIONS, CORVIN_HARD_PLAN, dispatchCases("function runCorvinClock(", "function runDanteClock(")],
+  ["Dante", DANTE_ACTIONS, DANTE_HARD_PLAN, dispatchCases("function runDanteClock(", "function runKaelClock(")],
+  ["Kael", KAEL_ACTIONS, KAEL_HARD_PLAN, dispatchCases("function runKaelClock(", "const DIRECTOR_WORK_STATES")],
+]) {
+  const planned = new Set(plan.map((beat) => beat.id));
+  for (const action of actions) {
+    check(
+      !action.planned || planned.has(action.id),
+      `${label} action ${action.id} is planned:true but has no slot in the hard plan — it can never be selected`,
+    );
+    check(cases.has(action.id), `${label} action ${action.id} is selectable but has no dispatch case`);
+  }
+  for (const beat of plan) {
+    check(
+      actions.some((action) => action.id === beat.id),
+      `${label} hard plan schedules ${beat.id}, which is not in the catalogue`,
+    );
+  }
+  for (const id of cases) {
+    check(
+      actions.some((action) => action.id === id),
+      `${label} dispatches ${id}, which no Director action can select`,
+    );
+  }
+}
 const directorStart = main.indexOf("function runCorvinClock(");
 const directorEnd = main.indexOf("function runDanteClock(", directorStart);
 const directorBody = directorStart >= 0 && directorEnd > directorStart
@@ -785,7 +845,10 @@ for (const action of DANTE_ACTIONS) {
 check(
   DANTE_HARD_PLAN_CYCLE_SEC === 4 * 60 * 60 &&
     hardPlanClockIsStrict(DANTE_HARD_PLAN, DANTE_HARD_PLAN_CYCLE_SEC) &&
-    DANTE_HARD_PLAN.length === 42 &&
+    // One slot per action, expressed against the catalogue instead of a literal
+    // count: the hardcoded 42 went stale the moment a 43rd action was routed,
+    // and a stale number here fails the build for the wrong reason.
+    DANTE_HARD_PLAN.length === DANTE_ACTIONS.length &&
     DANTE_HARD_PLAN.every((beat) => DANTE_ACTIONS.some((action) => action.id === beat.id && action.planned)) &&
     DANTE_ACTIONS.every((action) => action.planned) &&
     new Set(DANTE_HARD_PLAN.map((beat) => beat.id)).size === DANTE_HARD_PLAN.length &&

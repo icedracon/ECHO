@@ -2965,7 +2965,7 @@ async function danteVideoRideBeat(resumeWatch: () => boolean): Promise<boolean> 
   const offRight = h.scrRight + 12;
   stage.dataset.facing = "right";
   playWalk();
-  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE);
+  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE, 0);
   dbg("dante ride: fully off-screen right");
   await sleep(550); // mounting remains fully beyond the screen edge
 
@@ -3829,14 +3829,26 @@ async function kaelNightWatch(demo: boolean, token: number) {
   await playKaelMode(token, REV(KAEL.night_enter_v2));
 }
 
-async function nightWatchScene(demo = false) {
-  if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+async function nightWatchScene(demo = false, scheduled = false): Promise<boolean> {
+  if (!home || gagActive || showcasing || introActive || wandering || away || returning) {
+    if (scheduled) dbg("night watch appointment deferred: stage was not available");
+    return false;
+  }
   const h = home;
   const corvin = isCorvin();
   const kael = isKael();
   const kaelNightToken = kael ? beginKaelMode("night") : 0;
   gagActive = true;
   afterClip = null;
+  // Persist the appointment only after this function has actually acquired the
+  // stage. A rejected entry must remain due and retry inside the 00:40-04:59
+  // window instead of recording a scene the user never saw.
+  if (scheduled) {
+    story.s.gags.lastNightWatchAt = Date.now();
+    story.save();
+    markScene();
+    dbg(`night watch ritual acquired (00:40, ${corvin ? "corvin" : kael ? "kael" : "dante"})`);
+  }
   try {
     stage.dataset.state = "idle";
     delete stage.dataset.facing;
@@ -3863,6 +3875,7 @@ async function nightWatchScene(demo = false) {
       else finishSceneIdle("night watch");
     }
   }
+  return true;
 }
 
 function requiemPendingNow(at = new Date()) {
@@ -3930,11 +3943,7 @@ function scheduleMidnight() {
     if (nightWatchWindow) {
       const last = story.s.gags.lastNightWatchAt ?? 0;
       if (Date.now() - last >= 12 * 3_600_000 && sceneAllowed()) {
-        story.s.gags.lastNightWatchAt = Date.now();
-        story.save();
-        markScene();
-        dbg(`night watch ritual (00:40, ${isCorvin() ? "corvin" : isKael() ? "kael" : "dante"})`);
-        void nightWatchScene();
+        void nightWatchScene(false, true);
         return;
       }
     }
@@ -4883,6 +4892,26 @@ function runDanteClock(allowBigScenes = true, plannedId?: string): boolean {
   if (a.kind === "big") markScene();
   watchReaction(a.id, danteDirector);
   dbg(`dante director: ${a.id} (${a.kind}${plannedId ? ", hard" : ""})`);
+  // The `posture` tag is a CONTRACT, and until now nothing read it: the switch
+  // below went straight to frame zero, so a standing pack selected while he sat
+  // swapped silhouettes on the spot — seated one frame, on his feet the next.
+  // Individual standing scenes each remembered to call standUp(), but that is a
+  // promise every future scene has to keep by hand, and the seated micros never
+  // asserted their side at all.
+  //
+  // Enforce it once, here, for every action: bridge to the tagged pose with the
+  // real sit/stand transition, then dispatch. ensureDantePosture is a no-op when
+  // he is already in the right pose, so this costs nothing in the common case.
+  if (a.posture && isDante() && !gagActive && seatedNow !== (a.posture === "seated")) {
+    dbg(`dante posture bridge for ${a.id}: -> ${a.posture}`);
+    void ensureDantePosture(a.posture === "seated").then(() => dispatchDanteAction(a));
+    return true;
+  }
+  dispatchDanteAction(a);
+  return true;
+}
+
+function dispatchDanteAction(a: DirectorAction) {
   switch (a.id) {
     case "sitswing": playDantePlannedIdle("sitswing"); break;
     case "sitcross": playDantePlannedIdle("sitcross"); break;
@@ -4932,7 +4961,6 @@ function runDanteClock(allowBigScenes = true, plannedId?: string): boolean {
     case "standcross": void danteStandingClipScene(STAND_CROSS, 1); break;
     case "swordmove": void demoSword(); break;
   }
-  return true;
 }
 
 function runKaelClock(allowBigScenes = true, plannedId?: string): boolean {
@@ -5863,9 +5891,16 @@ function setState(state: State, force = false) {
   // contact frame instead of replacing a half-seated body.
   if (isDante() && dantePostureTransition !== null) return;
   afterClip = null;
-  const applyPose = () => {
+  // See the posture block below: while he is already on his feet, a thinking
+  // beat is played standing instead of sitting him down and straight back up.
+  const danteThinksOnFeet = isDante() && state === "thinking" && !seatedNow;
+  // movePosture=false: change the clip only. Used by the dwell hold below —
+  // posture() would queue its own retry and later move the window with no
+  // sit/stand clip at all, which is the silhouette teleport the bridge exists
+  // to prevent.
+  const applyPose = (movePosture = true) => {
     if (state === "idle") {
-      posture(state);
+      if (movePosture) posture(state);
       playIdleCycle();
       return;
     }
@@ -5889,14 +5924,52 @@ function setState(state: State, force = false) {
       if (name === "taunt") workClip.msSeq = TAUNT.msSeq;
       if (name === "sit") workClip.msSeq = STAND_CROSS.msSeq;
       startClip(workClip);
+    } else if (danteThinksOnFeet) {
+      // Standing think: arms crossed, considering. Loops like the other work
+      // poses so a long pause holds instead of falling back to seated art.
+      const think = clip("sit", 200, true, 8);
+      think.msSeq = STAND_CROSS.msSeq;
+      startClip(think);
     } else {
       startClip(ANIMS[state] ?? ANIMS.idle);
     }
-    posture(state);
+    if (movePosture) posture(state);
   };
 
   if (isDante()) {
-    const targetSeated = SEATED.has(state);
+    // `thinking` must never CAUSE a sit — it may only keep the pose he has.
+    //
+    // Its clip (sitthink) is seated art while coding/searching/speaking are all
+    // standing, so a working session alternates between opposite postures every
+    // couple of seconds. The dwell below paces that oscillation but cannot stop
+    // it: he still stood up and sat down every six seconds, forever.
+    //
+    // Thinking on his feet is the honest reading of a pause between two work
+    // poses, and the art for it already exists — STAND_CROSS, "standing, arms
+    // crossed, considering", which is his `searching` clip. Seated thinking is
+    // still what happens when he is genuinely at rest and thinks.
+    const targetSeated = danteThinksOnFeet ? false : SEATED.has(state);
+    // AI states alternate every couple of seconds during a working burst —
+    // thinking (seated) then coding (standing) then thinking again — and each
+    // flip drove a FULL sit/stand bridge. Measured in echo-fe.log: three
+    // transitions inside six seconds. He spent the session popping up and down.
+    //
+    // POSTURE_DWELL_MS was meant to stop exactly this, but it lives inside
+    // posture() and the bridge calls that with force=true, so the dwell never
+    // applied to the one path that actually moves his body.
+    //
+    // Hold the pose through the burst. The state, accent and bubble still
+    // update; only the physical stand/sit waits for the activity to settle,
+    // which is what makes it read as a person working rather than a toy.
+    if (seatedNow !== targetSeated && Date.now() - postureChangedAt < POSTURE_DWELL_MS) {
+      dbg(`dante posture hold: ${state} wants ${targetSeated ? "seated" : "standing"}`);
+      // Keep whatever clip fits the posture he is actually in. A seated pose at
+      // standing height (or the reverse) reads as sunk under the taskbar.
+      if (!seatedNow && (state === "coding" || state === "searching" || state === "speaking")) {
+        applyPose(false); // standing work pose — matches the body he already has
+      }
+      return;
+    }
     const linked = startDantePostureBridge(targetSeated, () => {
       const latest = (stage.dataset.state || "idle") as State;
       if (latest === state) applyPose();
@@ -6624,7 +6697,17 @@ void slideWindow;
 // Kael's side walk carries its own root motion. The OS window barely moves on
 // planted-foot frames and advances during the leg swing, so the sprite reads as
 // stepping across the taskbar rather than gliding over it.
-function slideFootstepWindow(toX: number, walkClip: CorvinClip | Clip, pace: number): Promise<void> {
+// `gaitDepth` 0 = constant speed, the released v0.2.4 motion. Dante uses it:
+// the pulse below swings his speed ±20% twice per 852 ms cycle, and on a long
+// approach that surge-and-settle reads as extra movement rather than as weight
+// (user-directed: the previous build's walk was the good one). Corvin keeps the
+// pulse — his stride is slower and the contact beat lands cleanly on it.
+function slideFootstepWindow(
+  toX: number,
+  walkClip: CorvinClip | Clip,
+  pace: number,
+  gaitDepth = 0.4,
+): Promise<void> {
   if (!home) return Promise.resolve();
   cancelAnimationFrame(winTween);
   const h = home;
@@ -6647,7 +6730,10 @@ function slideFootstepWindow(toX: number, walkClip: CorvinClip | Clip, pace: num
       // the body keeps at least 71% momentum on a planted foot: weight transfer,
       // never a visible stop.
       const contact = Math.pow(Math.cos(phase * Math.PI * 2), 8);
-      const gaitRate = 1.109375 - 0.4 * contact;
+      // cos^8 averages 35/128 over a cycle, so the base term keeps the mean rate
+      // at exactly 1.0 for any depth — the distance and duration are unchanged,
+      // only the smoothness. Depth 0 collapses to constant speed.
+      const gaitRate = 1 + gaitDepth * 0.2734375 - gaitDepth * contact;
       travelled = Math.min(distance, travelled + (pace * dt * gaitRate) / 1000);
       const x = Math.round(fromX + dir * travelled);
       void h.win.setPosition(new PhysicalPosition(x, h.y));
@@ -6856,7 +6942,7 @@ async function runIntro() {
     playWalk(); // side-view walk cycle while moving
     if (isKael()) await slideKaelWalk(cornerX, 125);
     else if (isCorvin()) await slideFootstepWindow(cornerX, CORVIN.walkin, 125);
-    else await slideFootstepWindow(cornerX, WALK, DANTE_WALK_PACE);
+    else await slideFootstepWindow(cornerX, WALK, DANTE_WALK_PACE, 0);
     delete stage.dataset.facing;
     if (isCorvin()) {
       await sleep(400);
@@ -6878,23 +6964,20 @@ async function runIntro() {
       }
       setState("idle");
     } else {
-      // deceleration beat — he's stopped walking, takes a breath
-      await sleep(400);
-      // Arrival: stand tall, arms crossed, hold it, then sit. Nothing else.
+      // He reaches his corner and sits. Nothing else (user-directed: no extra
+      // movement at the edge).
       //
-      // The "look around" that used to live here was not an animation at all —
-      // `facing` is an instant `scaleX(-1)` on the whole sprite, so a glance was
-      // the entire figure snapping to its own reflection and back. Worse, it
-      // fired at sleep(900) while STAND_CROSS (9 x 200 = 1800 ms) was still only
-      // half-played, so he mirrored MID-MOTION, twice, 650 ms apart, and then
-      // stumbled. After an 18-second walk-in that read as teleporting, not
-      // arriving (user-directed: "delete that moment, not realistic").
+      // What used to live here: a mirror "glance" left and right — `facing` is
+      // an instant scaleX(-1) on the whole sprite, so that was the figure
+      // snapping to its own reflection and back, fired mid-way through
+      // STAND_CROSS — then a stumble. Then, after that was cut, a full 1.8 s
+      // stand-up followed immediately by sitting down again: rising to his feet
+      // only to fold back onto the panel two seconds later is the least
+      // believable thing he could do on arriving somewhere he lives.
       //
-      // The stagger went with it: a stumble is a reaction to being hit, not the
-      // end of a controlled approach to his own corner.
-      startClip(STAND_CROSS);
-      await sleep(danteClipTotal(STAND_CROSS) + 500); // full stand, then hold
-      // then sit DOWN onto the panel (stand->sit) while the window lowers
+      // He is already standing when he stops walking, so the sit is the only
+      // transition the moment needs.
+      await sleep(300); // the step lands, weight settles
       startClip(SITDOWN);
       posture("idle", true); // drop the window to the seated height
       await sleep(danteClipTotal(SITDOWN));
@@ -6955,7 +7038,7 @@ async function leaveScene() {
     const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
     playWalk(true);
-    await slideFootstepWindow(offX, isCorvin() ? CORVIN.walkout : WALK, isCorvin() ? 125 : DANTE_WALK_PACE);
+    await slideFootstepWindow(offX, isCorvin() ? CORVIN.walkout : WALK, isCorvin() ? 125 : DANTE_WALK_PACE, isCorvin() ? 0.4 : 0);
     away = true;
     awayAt = Date.now();
   } finally {
@@ -6995,7 +7078,7 @@ async function returnScene() {
     h.lastY = h.y;
     stage.dataset.facing = "right";
     playWalk();
-    await slideFootstepWindow(h.cornerX, isCorvin() ? CORVIN.walkin : WALK, isCorvin() ? 125 : DANTE_WALK_PACE);
+    await slideFootstepWindow(h.cornerX, isCorvin() ? CORVIN.walkin : WALK, isCorvin() ? 125 : DANTE_WALK_PACE, isCorvin() ? 0.4 : 0);
     delete stage.dataset.facing;
     // stand tall, hold, then sit — the same arrival beat as the intro
     if (isCorvin()) {
@@ -7006,9 +7089,9 @@ async function returnScene() {
       await playCorvin(CORVIN.bow);
       finishSceneIdle("corvin return");
     } else {
-      // Dante stands tall, holds, then uses his authored panel sit.
-      startClip(STAND_CROSS);
-      await sleep(danteClipTotal(STAND_CROSS) + 500);
+      // Walk in, sit. Same as the intro: he is already on his feet, so standing
+      // up first only to sit down again is movement for its own sake.
+      await sleep(300);
       startClip(SITDOWN);
       posture("idle", true);
       await sleep(danteClipTotal(SITDOWN));
@@ -7161,10 +7244,10 @@ async function showcase() {
     const reviewX = Math.max(h.ox + 8, h.cornerX - Math.min(360, h.winW));
     stage.dataset.facing = "left";
     startClip(WALK);
-    await slideFootstepWindow(reviewX, WALK, DANTE_WALK_PACE);
+    await slideFootstepWindow(reviewX, WALK, DANTE_WALK_PACE, 0);
     stage.dataset.facing = "right";
     startClip(WALK);
-    await slideFootstepWindow(h.cornerX, WALK, DANTE_WALK_PACE);
+    await slideFootstepWindow(h.cornerX, WALK, DANTE_WALK_PACE, 0);
     delete stage.dataset.facing;
   };
   try {
@@ -7456,7 +7539,7 @@ async function danteLegacyMotoTourBody() {
   const offRight = h.scrRight + 12;
   stage.dataset.facing = "right";
   playWalk();
-  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE);
+  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE, 0);
   dbg("dante legacy motorcycle: off-screen mount");
   await sleep(550);
 
