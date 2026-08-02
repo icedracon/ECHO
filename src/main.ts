@@ -926,6 +926,8 @@ let kaelMode: KaelMode = "idle";
 let kaelModeToken = 0;
 let kaelWeaponForm: KaelWeaponForm = "dormant";
 let kaelWorkTask: Promise<void> | null = null;
+let kaelWorkExitRequested = false;
+let kaelSceneReserved = false;
 let kaelPendingDraw = false;
 let kaelPendingStow = false;
 const ANIMS_DANTE: Record<State, Clip> = { ...ANIMS };
@@ -970,8 +972,13 @@ function resetCharacterStage() {
   kaelMode = "idle";
   kaelWeaponForm = "dormant";
   kaelWorkTask = null;
+  kaelWorkExitRequested = false;
+  kaelSceneReserved = false;
   kaelPendingDraw = false;
   kaelPendingStow = false;
+  kaelReactionQueue.length = 0;
+  kaelReactionRunning = false;
+  window.clearTimeout(kaelReactionTimer);
   afterClip = null;
   curUrge = null;
   idlePlaysLeft = 0;
@@ -1007,7 +1014,7 @@ function resetCharacterStage() {
     void home.win.setPosition(new PhysicalPosition(home.lastX, home.lastY)).catch(() => {});
   }
   if (isKael()) {
-    resetKaelHardPlan("character reset");
+    resumeKaelHardPlan("character reset");
     startClip(KAEL.breathe as Clip);
   } else if (isCorvin()) {
     resetCorvinHardPlan("character reset");
@@ -1075,6 +1082,11 @@ const KAEL_DEMOS = new Set([
   "demo_voidstitch",
   "demo_fullweapon",
   "demo_kael_review",
+  "demo_kael_work",
+  "demo_kael_search",
+  "demo_kael_overload",
+  "demo_kael_swordrest",
+  "demo_kael_combat",
 ]);
 
 let qaReturnTarget: CharacterName | null = null;
@@ -1127,6 +1139,7 @@ function switchCharacter(
 ) {
   if (persist) cancelQaReturn("manual character selection");
   if (character === next) return;
+  if (isKael()) checkpointKaelHardPlan(true);
   character = next;
   applyCharacter();
   if (persist) void invoke("character_save", { name: character }).catch(() => {});
@@ -1471,6 +1484,9 @@ function onContext(kind: string) {
   // The bundled poster song appears in the OS media session. Without this
   // ownership guard it emits `music` back into ECHO and tries to start a second
   // presentation immediately after the first one.
+  if (kind === "music" || kind === "music_active") {
+    musicUntil = Date.now() + MEDIA_HEARTBEAT_GRACE;
+  }
   if ((kind === "music" || kind === "music_active") && Date.now() < ownedMediaUntil) {
     dbg("music ignored: owned by ECHO poster scene");
     return;
@@ -1559,6 +1575,7 @@ function onContext(kind: string) {
   if (KAEL_DEMOS.has(kind) && !isKael()) switchCharacter("kael", false, false);
   if (
     kind.startsWith("demo_") &&
+    character !== qaOriginalCharacter &&
     kind !== "demo_be_corvin" && kind !== "demo_be_dante" && kind !== "demo_be_kael" &&
     kind !== "demo_full_review" && kind !== "demo_video_review"
   ) {
@@ -1816,6 +1833,15 @@ function onContext(kind: string) {
   if (kind === "demo_voidstitch") return void kaelVoidStitchScene();
   if (kind === "demo_fullweapon") return void kaelFullWeaponScene();
   if (kind === "demo_kael_review") return void kaelReviewScene();
+  if (kind === "demo_kael_work") {
+    typingUntil = Date.now() + 10_000;
+    stage.dataset.state = "coding";
+    return void kaelWorkSession();
+  }
+  if (kind === "demo_kael_search") return void kaelSearchScene();
+  if (kind === "demo_kael_overload") return void kaelOverloadScene();
+  if (kind === "demo_kael_swordrest") return void kaelSwordPlantScene(8_000);
+  if (kind === "demo_kael_combat") return void kaelHuntLoopPass();
   if (kind === "demo_scan") return void magicscanScene();
   if (kind === "demo_fly") return void artsivCycleScene();
   if (kind === "demo_chapter") {
@@ -2059,6 +2085,12 @@ function clearGamingSession() {
 }
 // Media session: stay turned toward the monitor while video/music is detected.
 let mediaUntil = 0;
+// Пока играет музыка, он рядом с тобой в теме, а не выступает. Крупные сцены
+// глушатся: под фильмом это уже делает сцена просмотра, удерживая gagActive,
+// а музыка сцену не держит — плакат отыгрывает 15 секунд и отпускает, после
+// чего расписание могло вывести moto или Devil Trigger посреди трека.
+let musicUntil = 0;
+const musicActive = () => Date.now() < musicUntil;
 const MEDIA_HEARTBEAT_GRACE = 45_000;
 let mediaWatching = false;
 let mediaDemoUntil = 0;
@@ -2439,6 +2471,58 @@ const kaelModeCurrent = (token: number, mode?: KaelMode) =>
 
 const KAEL_MODE_CANCELLED = Symbol("kael-mode-cancelled");
 type KaelModePlay = (c: CorvinClip, passes?: number) => Promise<void>;
+type KaelSceneWeapon = "dormant" | "sword" | "preserve" | "ambient";
+interface KaelSceneOptions {
+  accent?: string;
+  entryWeapon?: Exclude<KaelSceneWeapon, "ambient">;
+  exitWeapon?: KaelSceneWeapon;
+  label?: string;
+  mode?: KaelMode;
+}
+interface KaelQueuedReaction {
+  id: string;
+  run: () => Promise<void>;
+}
+const kaelReactionQueue: KaelQueuedReaction[] = [];
+let kaelReactionRunning = false;
+let kaelReactionTimer = 0;
+
+function queueKaelReaction(id: string, run: () => Promise<void>) {
+  const existing = kaelReactionQueue.find((item) => item.id === id);
+  if (existing) existing.run = run;
+  else kaelReactionQueue.push({ id, run });
+  dbg(`kael reaction queued: ${id} depth=${kaelReactionQueue.length}`);
+  scheduleKaelReactionDrain();
+}
+
+function scheduleKaelReactionDrain(delay = 180) {
+  window.clearTimeout(kaelReactionTimer);
+  kaelReactionTimer = window.setTimeout(() => void drainKaelReactions(), delay);
+}
+
+async function drainKaelReactions() {
+  if (kaelReactionRunning || !kaelReactionQueue.length) return;
+  if (!isKael()) {
+    kaelReactionQueue.length = 0;
+    return;
+  }
+  if (
+    !home || kaelSceneReserved || gagActive || showcasing || introActive || wandering ||
+    away || returning || committed() || !["idle", "work", "combat"].includes(kaelMode)
+  ) {
+    scheduleKaelReactionDrain(350);
+    return;
+  }
+  const next = kaelReactionQueue.shift();
+  if (!next) return;
+  kaelReactionRunning = true;
+  try {
+    await next.run();
+  } finally {
+    kaelReactionRunning = false;
+    if (kaelReactionQueue.length) scheduleKaelReactionDrain(220);
+  }
+}
 
 function requireKaelMode(token: number) {
   if (!kaelModeCurrent(token)) throw KAEL_MODE_CANCELLED;
@@ -2471,146 +2555,198 @@ function settleKaelMode(token: number, source: string) {
   }, 0);
 }
 
+async function finishKaelWorkForScene(source: string): Promise<boolean> {
+  if (!kaelWorkTask || kaelMode !== "work") return true;
+  kaelWorkExitRequested = true;
+  dbg(`kael work exit requested: ${source}`);
+  await kaelWorkTask;
+  return isKael() && kaelMode !== "work";
+}
+
 async function kaelWorkSession() {
-  if (kaelWorkTask || !home || !isKael() || gagActive || introActive || away || returning) return;
+  if (
+    kaelWorkTask || kaelSceneReserved || !home || !isKael() || gagActive ||
+    introActive || away || returning || kaelWeaponForm !== "dormant"
+  ) return;
+  kaelWorkExitRequested = false;
   const token = beginKaelMode("work");
   kaelWorkTask = (async () => {
     await playKaelMode(token, KAEL.work_enter, 1, false);
-    while (kaelModeCurrent(token, "work") && Date.now() < typingUntil && !gagActive) {
-      await playKaelMode(token, KAEL.typing_runes, 1, false);
+    await playKaelMode(token, KAEL.typing_portal_enter, 1, false);
+    let throws = 0;
+    while (
+      kaelModeCurrent(token, "work") && !kaelWorkExitRequested && !gagActive &&
+      (Date.now() < typingUntil || throws === 0)
+    ) {
+      await playKaelMode(token, KAEL.typing_runes_v4, 1, false);
+      throws += 1;
     }
     if (!kaelModeCurrent(token, "work") || gagActive) return;
+    await playKaelMode(token, KAEL.typing_portal_exit, 1, false);
     await playKaelMode(token, KAEL.work_exit, 1, false);
     settleKaelMode(token, "kael work");
   })().catch((error) => {
     if (error !== KAEL_MODE_CANCELLED) throw error;
     dbg(`kael work cancelled token=${token}`);
   }).finally(() => {
+    kaelWorkExitRequested = false;
     kaelWorkTask = null;
   });
   await kaelWorkTask;
 }
 
+async function setKaelWeaponForMode(
+  token: number,
+  target: "dormant" | "sword" | "preserve",
+): Promise<void> {
+  if (target === "preserve" || kaelWeaponForm === target) return;
+  if (kaelWeaponForm === "scythe") {
+    await playKaelMode(token, KAEL.fullweapon_v2);
+    kaelWeaponForm = "sword";
+  }
+  if (target === "sword" && kaelWeaponForm === "dormant") {
+    await playKaelMode(token, KAEL.weapon_draw_sword);
+    kaelWeaponForm = "sword";
+  } else if (target === "dormant" && kaelWeaponForm === "sword") {
+    await playKaelMode(token, REV(KAEL.weapon_draw_sword));
+    kaelWeaponForm = "dormant";
+  }
+}
+
+function kaelSceneExitWeapon(target: KaelSceneWeapon): "dormant" | "sword" | "preserve" {
+  if (target === "ambient") return gamingActive() ? "sword" : "dormant";
+  return target;
+}
+
+async function kaelScene(
+  body: (play: KaelModePlay, token: number) => Promise<void>,
+  accentOrOptions?: string | KaelSceneOptions,
+): Promise<boolean> {
+  const options: KaelSceneOptions = typeof accentOrOptions === "string"
+    ? { accent: accentOrOptions }
+    : (accentOrOptions ?? {});
+  const label = options.label ?? "scene";
+  if (
+    kaelSceneReserved || !home || !isKael() || gagActive || showcasing ||
+    introActive || wandering || away || returning
+  ) {
+    dbg(`kael ${label} refused: reserved=${kaelSceneReserved} gag=${gagActive} mode=${kaelMode}`);
+    return false;
+  }
+  kaelSceneReserved = true;
+  let token = 0;
+  try {
+    if (!(await finishKaelWorkForScene(label))) return false;
+    if (!home || !isKael() || gagActive || showcasing || introActive || wandering || away || returning)
+      return false;
+
+    dbg(`kael ${label} start`);
+    token = beginKaelMode(options.mode ?? "scene");
+    gagActive = true;
+    afterClip = null;
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    if (options.accent) document.documentElement.style.setProperty("--accent", options.accent);
+    await standUp();
+    requireKaelMode(token);
+    const play: KaelModePlay = (c, passes = 1) => playKaelMode(token, c, passes);
+    await setKaelWeaponForMode(token, options.entryWeapon ?? "preserve");
+    await body(play, token);
+    const exitWeapon = kaelSceneExitWeapon(options.exitWeapon ?? "ambient");
+    await setKaelWeaponForMode(token, exitWeapon);
+    return true;
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael ${label} cancelled token=${token}`);
+    return false;
+  } finally {
+    if (token && kaelModeCurrent(token)) {
+      delete stage.dataset.facing;
+      gagActive = false;
+      settleKaelMode(token, `kael ${label}`);
+    }
+    kaelSceneReserved = false;
+    scheduleKaelReactionDrain();
+    if (
+      isKael() && Date.now() < typingUntil && stage.dataset.state === "coding" &&
+      kaelMode === "idle" && !gagActive
+    ) window.setTimeout(() => void kaelWorkSession(), 0);
+  }
+}
+
 async function ensureKaelCombatReady(source: string): Promise<boolean> {
   if (!isKael() || !home || away || returning) return false;
-  if (kaelWeaponForm === "sword") {
-    kaelPendingDraw = false;
-    return true;
-  }
-  if (gagActive || introActive || wandering) {
+  if (kaelSceneReserved || gagActive || introActive || wandering) {
     kaelPendingDraw = true;
     dbg(`kael draw deferred: ${source}`);
     return false;
   }
+  if (kaelWeaponForm === "sword") {
+    kaelPendingDraw = false;
+    return true;
+  }
   kaelPendingDraw = false;
   kaelPendingStow = false;
-  const token = beginKaelMode("scene");
-  gagActive = true;
-  try {
-    await playKaelMode(token, KAEL.weapon_draw_sword);
-    kaelWeaponForm = "sword";
-    return true;
-  } catch (error) {
-    if (error !== KAEL_MODE_CANCELLED) throw error;
-    return false;
-  } finally {
-    if (kaelModeCurrent(token)) {
-      gagActive = false;
-      kaelMode = "combat";
-      startClip(KAEL.combat_idle_v2 as Clip);
-      dbg(`kael Rift ready: ${source}`);
-    }
-  }
+  return kaelScene(async () => {}, {
+    entryWeapon: "sword",
+    exitWeapon: "sword",
+    label: `draw: ${source}`,
+  });
 }
 
 async function ensureKaelWeaponDormant(source: string): Promise<boolean> {
   if (!isKael() || !home) return false;
-  if (kaelWeaponForm === "dormant") {
-    kaelPendingStow = false;
-    return true;
-  }
-  if (gagActive || introActive || wandering || away || returning) {
+  if (kaelSceneReserved || gagActive || introActive || wandering || away || returning) {
     kaelPendingStow = true;
     dbg(`kael stow deferred: ${source}`);
     return false;
   }
+  if (kaelWeaponForm === "dormant") {
+    kaelPendingStow = false;
+    return true;
+  }
   kaelPendingStow = false;
   kaelPendingDraw = false;
-  const token = beginKaelMode("scene");
-  gagActive = true;
-  try {
-    if (kaelWeaponForm === "scythe") await playKaelMode(token, KAEL.fullweapon_v2);
-    await playKaelMode(token, REV(KAEL.weapon_draw_sword));
-    kaelWeaponForm = "dormant";
-    return true;
-  } catch (error) {
-    if (error !== KAEL_MODE_CANCELLED) throw error;
-    return false;
-  } finally {
-    if (kaelModeCurrent(token)) {
-      gagActive = false;
-      settleKaelMode(token, `kael stow: ${source}`);
-    }
-  }
-}
-
-async function kaelScene(body: (play: KaelModePlay, token: number) => Promise<void>, accent?: string) {
-  if (!home || gagActive || introActive || wandering || away || returning) {
-    dbg(
-      `kael scene refused: home=${!!home} gag=${gagActive} intro=${introActive} com=${committed()}`,
-    );
-    return;
-  }
-  dbg("kael scene start");
-  const token = beginKaelMode("scene");
-  gagActive = true;
-  afterClip = null;
-  try {
-    stage.dataset.state = "idle";
-    delete stage.dataset.facing;
-    if (accent) document.documentElement.style.setProperty("--accent", accent);
-    await standUp();
-    requireKaelMode(token);
-    const play: KaelModePlay = (c, passes = 1) => playKaelMode(token, c, passes);
-    await body(play, token);
-  } catch (error) {
-    if (error !== KAEL_MODE_CANCELLED) throw error;
-    dbg(`kael scene cancelled token=${token}`);
-  } finally {
-    if (kaelModeCurrent(token)) {
-      delete stage.dataset.facing;
-      gagActive = false;
-      settleKaelMode(token, "kael scene");
-    }
-  }
+  return kaelScene(async () => {}, {
+    entryWeapon: "dormant",
+    exitWeapon: "dormant",
+    label: `stow: ${source}`,
+  });
 }
 
 async function kaelLightSuccess() {
   await kaelScene(async (play) => {
-    await play(kaelWeaponForm === "sword" ? KAEL.combat_idle_v2 : KAEL.success_v2);
-  }, ACCENT.success);
+    await play(kaelWeaponForm === "sword" ? KAEL.combat_runes_v3 : KAEL.success_v2);
+  }, { accent: ACCENT.success, entryWeapon: "preserve", exitWeapon: "ambient", label: "success" });
 }
 
 async function kaelStreakScene() {
-  if (!(await ensureKaelCombatReady("streak"))) return;
   await kaelScene(async (play) => {
     await play(KAEL.streak_v2);
-  }, ACCENT.success);
-  if (!gamingActive()) await ensureKaelWeaponDormant("streak complete");
+  }, { accent: ACCENT.success, entryWeapon: "sword", exitWeapon: "ambient", label: "streak" });
 }
 
 async function kaelLightError() {
   await kaelScene(async (play) => {
     sfxTendrilWhip();
-    await play(kaelWeaponForm === "sword" ? KAEL.combat_idle_v2 : KAEL.error_v2);
-  }, ACCENT.error);
+    await play(kaelWeaponForm === "sword" ? KAEL.combat_grip_v3 : KAEL.error_v2);
+  }, { accent: ACCENT.error, entryWeapon: "preserve", exitWeapon: "ambient", label: "error" });
+}
+
+async function kaelSearchScene() {
+  await kaelScene(async (play) => {
+    await play(KAEL.search_v2);
+  }, { entryWeapon: "dormant", exitWeapon: "ambient", label: "search" });
 }
 
 async function kaelOverloadScene() {
   await kaelScene(async (play) => {
     sfxAura();
-    await play(KAEL.overload_v2);
-  }, ACCENT.error);
+    await play(KAEL.overload_enter_v3);
+    commitFor(1400);
+    await sleep(1200);
+    await play(KAEL.overload_exit_v3);
+  }, { accent: ACCENT.error, entryWeapon: "dormant", exitWeapon: "ambient", label: "overload" });
 }
 
 async function kaelGameReadyScene() {
@@ -2618,21 +2754,19 @@ async function kaelGameReadyScene() {
 }
 
 async function kaelHuntLoopPass() {
-  if (!(await ensureKaelCombatReady("hunt watch"))) return;
   await kaelScene(async (play) => {
-    await play(KAEL.combat_idle_v2, 2);
-  }, ACCENT.success);
+    const micros = [KAEL.combat_glance_v3, KAEL.combat_grip_v3, KAEL.combat_runes_v3];
+    await play(micros[Math.floor(Math.random() * micros.length)]);
+  }, { accent: ACCENT.success, entryWeapon: "sword", exitWeapon: "ambient", label: "hunt watch" });
 }
 
 async function kaelFullWeaponScene() {
-  if (!(await ensureKaelCombatReady("full weapon"))) return;
   await kaelScene(async (play) => {
     sfxIgnite();
     kaelWeaponForm = "scythe";
     await play(KAEL.fullweapon_v2);
     kaelWeaponForm = "sword";
-  }, ACCENT.success);
-  if (!gamingActive()) await ensureKaelWeaponDormant("full weapon complete");
+  }, { accent: ACCENT.success, entryWeapon: "sword", exitWeapon: "ambient", label: "full weapon" });
 }
 
 async function kaelRestScene() {
@@ -2640,16 +2774,15 @@ async function kaelRestScene() {
     await play(KAEL.rest_enter);
     await play(KAEL.rest_loop_v2, 2);
     await play(REV(KAEL.rest_enter));
-  });
+  }, { entryWeapon: "dormant", exitWeapon: "ambient", label: "rest" });
 }
 
 async function kaelSwordPlantScene(holdMs = 3 * 60_000) {
-  await kaelScene(async (play) => {
-    await play(KAEL.swordplant);
-    commitFor(holdMs + 500);
-    await sleep(holdMs);
-    await play(REV(KAEL.swordplant));
-  });
+  await kaelScene(async (play, token) => {
+    await play(KAEL.swordplant_enter_v3);
+    await holdKaelModeLoop(token, KAEL.swordplant_hold_v3, holdMs);
+    await play(REV(KAEL.swordplant_enter_v3));
+  }, { entryWeapon: "dormant", exitWeapon: "ambient", label: "sword rest" });
 }
 
 async function kaelRepairScene() {
@@ -2657,7 +2790,7 @@ async function kaelRepairScene() {
     await play(KAEL.work_enter);
     await play(KAEL.work_loop_v2, 3);
     await play(KAEL.work_exit);
-  });
+  }, { entryWeapon: "dormant", exitWeapon: "ambient", label: "repair" });
 }
 
 async function kaelVoidStitchScene() {
@@ -2667,8 +2800,8 @@ async function kaelVoidStitchScene() {
     kaelWeaponForm = "scythe";
     await play(KAEL.voidstitch_pull);
     await play(KAEL.voidstitch_seal);
-    kaelWeaponForm = gamingActive() ? "sword" : "dormant";
-  }, ACCENT.error);
+    kaelWeaponForm = "dormant";
+  }, { accent: ACCENT.error, entryWeapon: "dormant", exitWeapon: "ambient", label: "void stitch" });
 }
 
 const KAEL_ORGAN_TRACK_URL = "/media/kael-passacaglia.mp3";
@@ -2746,35 +2879,35 @@ async function kaelVoidOrganScene(_songBeat = false) {
       audio.pause();
       audio.currentTime = 0;
     }
-  }, ACCENT.success);
+  }, { accent: ACCENT.success, entryWeapon: "dormant", exitWeapon: "ambient", label: "void organ" });
 }
 
 // Developer-only contact reel. It never enters the user menu and deliberately
 // excludes the already-approved 47-second organ film.
 async function kaelReviewScene() {
-  if (!home || !isKael() || gagActive || introActive || wandering || away || returning) return;
-  const token = beginKaelMode("scene");
-  const restoreWeapon: KaelWeaponForm = gamingActive() ? "sword" : "dormant";
-  gagActive = true;
-  afterClip = null;
-  try {
-    stage.dataset.state = "idle";
-    delete stage.dataset.facing;
-    const play: KaelModePlay = (c, passes = 1) => playKaelMode(token, c, passes);
+  await kaelScene(async (play) => {
     await play(KAEL.idle_v2, 2);
     await play(KAEL.scarf_adjust);
     await play(KAEL.armcheck_v2);
     await play(KAEL.platypus_v2);
     await play(KAEL.work_enter);
-    await play(KAEL.work_loop_v2, 2);
+    await play(KAEL.typing_portal_enter);
+    await play(KAEL.typing_runes_v4);
+    await play(KAEL.typing_portal_exit);
     await play(KAEL.work_exit);
     await play(KAEL.success_v2);
     await play(KAEL.error_v2);
     await play(KAEL.search_v2);
-    await play(KAEL.overload_v2);
+    await play(KAEL.overload_enter_v3);
+    await play(KAEL.overload_exit_v3);
+    await play(KAEL.swordplant_enter_v3);
+    await play(KAEL.swordplant_hold_v3);
+    await play(REV(KAEL.swordplant_enter_v3));
     await play(KAEL.weapon_draw_sword);
     kaelWeaponForm = "sword";
-    await play(KAEL.combat_idle_v2, 2);
+    await play(KAEL.combat_glance_v3);
+    await play(KAEL.combat_grip_v3);
+    await play(KAEL.combat_runes_v3);
     await play(KAEL.streak_v2);
     kaelWeaponForm = "scythe";
     await play(KAEL.fullweapon_v2);
@@ -2787,10 +2920,10 @@ async function kaelReviewScene() {
     await play(KAEL.rest_enter);
     await play(KAEL.rest_loop_v2, 2);
     await play(REV(KAEL.rest_enter));
-    await play(KAEL.night_enter_v2);
-    await play(KAEL.night_loop_v2, 2);
-    await play(KAEL.night_glance_v2);
-    await play(REV(KAEL.night_enter_v2));
+    await play(KAEL.night_enter_v3);
+    await play(KAEL.night_loop_v3, 2);
+    await play(KAEL.night_glance_v3);
+    await play(REV(KAEL.night_enter_v3));
     await play(KAEL.voidstitch_alarm);
     kaelWeaponForm = "scythe";
     await play(KAEL.voidstitch_pull);
@@ -2798,16 +2931,7 @@ async function kaelReviewScene() {
     kaelWeaponForm = "dormant";
     await play(KAEL.leave_v2);
     await play(KAEL.return_v2);
-  } catch (error) {
-    if (error !== KAEL_MODE_CANCELLED) throw error;
-    dbg(`kael review cancelled token=${token}`);
-  } finally {
-    if (kaelModeCurrent(token)) {
-      kaelWeaponForm = restoreWeapon;
-      gagActive = false;
-      settleKaelMode(token, "kael review");
-    }
-  }
+  }, { entryWeapon: "dormant", exitWeapon: "ambient", label: "review" });
 }
 
 // Execution — the win payoff: slow raise, tension, one devastating cut.
@@ -2903,6 +3027,29 @@ async function guitarScene(durationMs: number) {
   });
 }
 
+// The barbecue existed only inside the video watch. A game session is exactly
+// as long and exactly as much of a reason to eat (user-directed: BBQ two or
+// three times a session). No rift here — he simply steps out and comes back
+// carrying it, which the bbqwalk frames are already authored for.
+async function corvinGameBbqBeat() {
+  if (!home || !isCorvin()) return;
+  const h = home;
+  await corvinScene(async () => {
+    stage.dataset.facing = "right";
+    playWalk(true);
+    await slideFootstepWindow(h.scrRight + 18, CORVIN.walkout, 125);
+    await sleep(2600); // off-screen: he is fetching it
+    delete stage.dataset.facing;
+    startClip(CORVIN.bbqwalk as Clip);
+    await slideFootstepWindow(h.cornerX, CORVIN.bbqwalk, 110);
+    await playCorvin(CORVIN.bbqsit);
+    startClip(CORVIN.barbecue as Clip);
+    commitFor(CORVIN_MEDIA_EAT_MS + 800);
+    await sleep(CORVIN_MEDIA_EAT_MS);
+    await playCorvin(CORVIN.bbqfinish);
+  });
+}
+
 // The arcane perimeter scan (gaming's rare beat and the hunt's opening).
 async function magicscanScene() {
   await corvinScene(async () => {
@@ -2941,6 +3088,8 @@ const DANTE_BORED_RIDE_AFTER_MS = 75_000;
 // The original v0.2.4 full-width bike tour remains a second, much rarer film
 // beat. It does not replace the newer boredom/fall scene above.
 const DANTE_LEGACY_MOTO_AFTER_MS = 12 * 60_000;
+// Третий выезд — самый поздний: длинный фильм и один короткий заезд под конец.
+const DANTE_SHORT_MOTO_AFTER_MS = 22 * 60_000;
 function serviceMediaWish() {
   if (!mediaWanted || mediaWatching) return;
   if (Date.now() >= mediaUntil) {
@@ -3290,8 +3439,46 @@ let lastWatchSongAt = 0;
 let mediaSongWanted = 0;
 const WATCH_SONG_GAP = 8 * 60_000;
 
+async function kaelMediaWatchScene(forcedDemo: boolean) {
+  if (!home || mediaWatching || (gamingForeground() && !forcedDemo)) return;
+  const watchStartedAt = Date.now();
+  let glanceDone = false;
+  const glanceAt = Date.now() +
+    (forcedDemo ? KAEL_MEDIA_GLANCE_DEMO_AFTER_MS : KAEL_MEDIA_GLANCE_AFTER_MS);
+  mediaWatching = true;
+  try {
+    await kaelScene(async (play, token) => {
+      await play(KAEL.watch_enter_v3);
+      startKaelModeClip(token, KAEL.watch_loop_v3);
+      while (
+        Date.now() < mediaUntil && (forcedDemo || !gamingForeground()) && isKael()
+      ) {
+        if (!glanceDone && Date.now() >= glanceAt) {
+          glanceDone = true;
+          await play(KAEL.screen_glance);
+          startKaelModeClip(token, KAEL.watch_loop_v3);
+        }
+        commitFor(1500);
+        await sleep(1000);
+        requireKaelMode(token);
+      }
+      await play(REV(KAEL.watch_enter_v3));
+    }, {
+      entryWeapon: "dormant",
+      exitWeapon: "ambient",
+      label: "media watch",
+      mode: "watch",
+    });
+  } finally {
+    mediaWatching = false;
+    mediaDemoUntil = 0;
+    dbg(`kael media watch ended after ${Math.round((Date.now() - watchStartedAt) / 1000)}s`);
+  }
+}
+
 async function mediaWatchScene() {
   const forcedDemo = Date.now() < mediaDemoUntil;
+  if (isKael()) return kaelMediaWatchScene(forcedDemo);
   if (!home || gagActive || mediaWatching || (gamingForeground() && !forcedDemo)) return;
   const watchingCharacter = character;
   const watchStartedAt = Date.now();
@@ -3308,6 +3495,8 @@ async function mediaWatchScene() {
   let danteRideDone = false;
   const danteRideAt = Date.now() + DANTE_BORED_RIDE_AFTER_MS;
   let danteLegacyMotoDone = false;
+  let danteShortMotoDone = false;
+  const danteShortMotoAt = Date.now() + DANTE_SHORT_MOTO_AFTER_MS;
   const danteLegacyMotoAt = Date.now() + DANTE_LEGACY_MOTO_AFTER_MS;
   let kaelScreenGlanceDone = false;
   const kaelScreenGlanceAt = Date.now() +
@@ -3402,6 +3591,23 @@ async function mediaWatchScene() {
             isDante(),
         );
         if (!danteWatchingPose) break;
+        continue;
+      }
+      // Третья мото-сцена под фильм (user-directed: все три и в кино, и в
+      // музыке). Короткий выезд, без падения с верха экрана — он уже дважды
+      // уходил, третий раз должен быть легче.
+      if (watchingDante && !danteShortMotoDone && Date.now() >= danteShortMotoAt) {
+        danteShortMotoDone = true;
+        await playDante(reversedClip(DANTE_WATCH_TURN));
+        await danteRiseFromSeat();
+        await motoScene();
+        await danteReturnToSeat();
+        if (Date.now() >= mediaUntil || (!forcedDemo && gamingForeground()) || !isDante()) {
+          danteWatchingPose = false;
+          break;
+        }
+        await playDante(DANTE_WATCH_TURN);
+        startClip(DANTE_WATCH_LOOP);
         continue;
       }
       if (watchingKael && kaelWatchingPose && !kaelScreenGlanceDone && Date.now() >= kaelScreenGlanceAt) {
@@ -3727,6 +3933,9 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
   { h: 15, name: "pizza", run: () => demoSeated(PIZZA, "Finally.") },
   { h: 17, name: "sword move", run: () => void demoSword() },
   { h: 19, name: "devil trigger", run: () => devilTriggerScene() },
+  // Мото жил только в hard plan раз в 4 часа и внутри фильма — в быту его не
+  // было вовсе. Вечерний час (user-directed: мото и в быту, и в игре).
+  { h: 20, name: "moto", run: () => void motoScene() },
   { h: 21, name: "dance", run: () => danceScene() },
   { h: 22, name: "devil form", run: () => void devilFormScene() },
 ];
@@ -3844,24 +4053,39 @@ async function corvinNightWatch(demo: boolean) {
 
 async function kaelNightWatch(demo: boolean, token: number) {
   const firstRest = demo ? 3_000 : NIGHT_WATCH_FIRST_REST_MS;
-  const finalRest = demo ? 3_000 : NIGHT_WATCH_FINAL_REST_MS;
-  await playKaelMode(token, KAEL.night_enter_v2);
+  await playKaelMode(token, KAEL.night_enter_v3);
   dbg("night watch kael: black mirror opened");
-  await holdKaelModeLoop(token, KAEL.night_loop_v2, firstRest);
+  await holdKaelModeLoop(token, KAEL.night_loop_v3, firstRest);
 
   const working = demo || nightUserWorking();
   if (working) {
     dbg("night watch kael: user still working, quiet glance");
-    await playKaelMode(token, KAEL.night_glance_v2);
+    await playKaelMode(token, KAEL.night_glance_v3);
   } else {
     dbg("night watch kael: room quiet, mirror holds");
   }
+  await playKaelMode(token, REV(KAEL.night_enter_v3));
+}
 
-  await holdKaelModeLoop(token, KAEL.night_loop_v2, finalRest);
-  await playKaelMode(token, REV(KAEL.night_enter_v2));
+async function kaelNightWatchScene(demo: boolean, scheduled: boolean): Promise<boolean> {
+  return kaelScene(async (_play, token) => {
+    if (scheduled) {
+      story.s.gags.lastNightWatchAt = Date.now();
+      story.save();
+      markScene();
+      dbg("night watch ritual acquired (00:40, kael)");
+    }
+    await kaelNightWatch(demo, token);
+  }, {
+    entryWeapon: "dormant",
+    exitWeapon: "ambient",
+    label: "night watch",
+    mode: "night",
+  });
 }
 
 async function nightWatchScene(demo = false, scheduled = false): Promise<boolean> {
+  if (isKael()) return kaelNightWatchScene(demo, scheduled);
   if (!home || gagActive || showcasing || introActive || wandering || away || returning) {
     if (scheduled) dbg("night watch appointment deferred: stage was not available");
     return false;
@@ -4569,8 +4793,35 @@ function corvinSetQuiet(pose: string) {
   }
 }
 
+// Bounded on purpose. Both of these were `while (corvinPostureTransition !==
+// null) await sleep(25)` with no exit, and the flag CAN be stranded: two of the
+// four clears run inside a startClip() callback, which never fires if another
+// clip replaces that one mid-play, and the other two are each guarded by their
+// own value, so a superseded transition never clears its predecessor.
+//
+// A stranded flag meant standUp() never returned, so the awaiting scene held
+// gagActive forever and every later scene — including the shared video watch —
+// queued behind it. Seen live: a gaming edge landing five seconds into the
+// typing sit-bridge froze the stage for ten minutes with YouTube playing.
+//
+// Waiting politely is right; waiting forever is not. After the grace period the
+// lock is declared stale and cleared, which is always recoverable: the worst
+// case is one posture clip cut short, against a companion that stops answering.
+const CORVIN_POSTURE_WAIT_MS = 4000;
+async function waitCorvinPostureIdle(source: string) {
+  const until = Date.now() + CORVIN_POSTURE_WAIT_MS;
+  while (isCorvin() && corvinPostureTransition !== null) {
+    if (Date.now() >= until) {
+      dbg(`corvin posture lock stale ("${corvinPostureTransition}") -> cleared by ${source}`);
+      corvinPostureTransition = null;
+      return;
+    }
+    await sleep(25);
+  }
+}
+
 async function ensureCorvinSeated(source: string) {
-  while (isCorvin() && corvinPostureTransition !== null) await sleep(25);
+  await waitCorvinPostureIdle(source);
   if (!isCorvin() || corvinSeatedNow) return;
   dbg(`corvin posture: standing -> seated (${source})`);
   corvinSeatedNow = true;
@@ -4583,7 +4834,7 @@ async function ensureCorvinSeated(source: string) {
 }
 
 async function ensureCorvinStanding(source: string) {
-  while (isCorvin() && corvinPostureTransition !== null) await sleep(25);
+  await waitCorvinPostureIdle(source);
   const quietSeat = corvinQuietPose === "meditate" || corvinQuietPose === "whet";
   if (!isCorvin() || (!corvinSeatedNow && !quietSeat && !SEATED_CLIPS.has(curClip))) return;
   dbg(`corvin posture: seated -> standing (${source})`);
@@ -4708,31 +4959,54 @@ const KAEL_DIRECTOR_TICK_MS = 1000;
 const KAEL_HARD_PLAN_RECOVERY_GAP_MS = 120_000;
 const KAEL_AMBIENT_MIN_MS = 75_000;
 const KAEL_AMBIENT_MAX_MS = 120_000;
-let kaelPlanStartedAt = Date.now();
 let kaelPlanCursor = 0;
+let kaelPlanElapsedMs = 0;
+let kaelPlanActiveSince = 0;
 let lastKaelHardBeatAt = 0;
 let kaelAmbientDueAt = Date.now() + KAEL_AMBIENT_MIN_MS;
 
 const nextKaelAmbientDelay = () =>
   KAEL_AMBIENT_MIN_MS + Math.random() * (KAEL_AMBIENT_MAX_MS - KAEL_AMBIENT_MIN_MS);
 
-function resetKaelHardPlan(source: string) {
+function kaelPlanElapsedAt(now = Date.now()): number {
+  return kaelPlanElapsedMs + (kaelPlanActiveSince > 0 ? Math.max(0, now - kaelPlanActiveSince) : 0);
+}
+
+function checkpointKaelHardPlan(pause: boolean, now = Date.now()) {
+  if (kaelPlanActiveSince > 0) {
+    kaelPlanElapsedMs += Math.max(0, now - kaelPlanActiveSince);
+    kaelPlanActiveSince = pause ? 0 : now;
+  }
+  story.s.kaelHardPlan = { cursor: kaelPlanCursor, elapsedMs: Math.round(kaelPlanElapsedMs) };
+  story.save();
+}
+
+function restoreKaelHardPlan(source: string) {
   const now = Date.now();
-  kaelPlanStartedAt = now;
-  kaelPlanCursor = 0;
+  const saved = story.s.kaelHardPlan;
+  kaelPlanCursor = saved?.cursor ?? 0;
+  kaelPlanElapsedMs = saved?.elapsedMs ?? 0;
+  kaelPlanActiveSince = isKael() ? now : 0;
   lastKaelHardBeatAt = 0;
   kaelAmbientDueAt = now + nextKaelAmbientDelay();
-  dbg(`kael hard plan reset: ${source}`);
+  dbg(`kael hard plan restored: ${source} cursor=${kaelPlanCursor} active=${Math.round(kaelPlanElapsedMs / 1000)}s`);
+}
+
+function resumeKaelHardPlan(source: string) {
+  if (!isKael() || kaelPlanActiveSince > 0) return;
+  kaelPlanActiveSince = Date.now();
+  kaelAmbientDueAt = Date.now() + nextKaelAmbientDelay();
+  dbg(`kael hard plan resumed: ${source} cursor=${kaelPlanCursor}`);
 }
 
 function kaelPlanBeatAt(cursor: number): number {
   const cycle = Math.floor(cursor / KAEL_HARD_PLAN.length);
   const beat = KAEL_HARD_PLAN[cursor % KAEL_HARD_PLAN.length];
-  return kaelPlanStartedAt + cycle * KAEL_HARD_PLAN_CYCLE_MS + beat.atSec * 1000;
+  return cycle * KAEL_HARD_PLAN_CYCLE_MS + beat.atSec * 1000;
 }
 
 function dueKaelHardBeat(now: number): { id: string; cursorAfter: number } | null {
-  if (kaelPlanBeatAt(kaelPlanCursor) > now) return null;
+  if (kaelPlanBeatAt(kaelPlanCursor) > kaelPlanElapsedAt(now)) return null;
   return {
     id: KAEL_HARD_PLAN[kaelPlanCursor % KAEL_HARD_PLAN.length].id,
     cursorAfter: kaelPlanCursor + 1,
@@ -4746,6 +5020,7 @@ function runKaelHardPlan(now = Date.now()): boolean {
   if (!runKaelClock(true, due.id)) return false;
   kaelPlanCursor = due.cursorAfter;
   lastKaelHardBeatAt = now;
+  checkpointKaelHardPlan(false, now);
   dbg(`kael hard beat: ${due.id} cursor=${kaelPlanCursor}`);
   return true;
 }
@@ -4774,6 +5049,7 @@ function currentSituation(): Situation {
     typing: now < typingUntil,
     present: now - Math.max(lastActivity, lastTypingEventAt) < 5 * 60_000,
     gaming: gamingActive(),
+    music: musicActive(),
     errStreak,
     winStreak,
     sinceSceneSec: Math.round((now - lastSceneAt) / 1000),
@@ -5097,7 +5373,7 @@ function scheduleKaelDirector() {
           kaelAmbientDueAt = now + nextKaelAmbientDelay();
         } else if (
           now >= kaelAmbientDueAt &&
-          kaelPlanBeatAt(kaelPlanCursor) - now > KAEL_HARD_PLAN_GUARD_MS &&
+          kaelPlanBeatAt(kaelPlanCursor) - kaelPlanElapsedAt(now) > KAEL_HARD_PLAN_GUARD_MS &&
           directorStageReady("kael")
         ) {
           runKaelClock();
@@ -5256,15 +5532,19 @@ function corvinIdleBody() {
 const BOOT_AT = Date.now();
 const DANTE_COIN_EVERY = 25 * 60_000;
 const DANTE_PIZZA_EVERY = 60 * 60_000;
+const DANTE_MOTO_EVERY = 55 * 60_000;
 let lastDanteSpin = 0; // 0 = unarmed until a game session starts
 let lastDanteCoin = 0;
 let lastDantePizza = 0;
+let lastDanteMoto = 0;
 let lastDanteShrug = BOOT_AT;
 function armDanteClocks(startedAt = Date.now()) {
   lastDanteSpin = startedAt - 20 * 60_000 + 6 * 60_000; // -> first spin at 6:00
   lastDanteCoin = startedAt - DANTE_COIN_EVERY + 12 * 60_000; // -> coin at 12:00
   lastDantePizza = startedAt - DANTE_PIZZA_EVERY + 18 * 60_000; // -> pizza at 18:00
-  dbg("dante clocks armed: spin@6m, coin@12m, pizza@18m");
+  // Мото и в игре (user-directed). Позже пиццы, чтобы не толкались.
+  lastDanteMoto = startedAt - DANTE_MOTO_EVERY + 24 * 60_000; // -> moto at 24:00
+  dbg("dante clocks armed: spin@6m, coin@12m, pizza@18m, moto@24m");
 }
 function scheduleDanteBeats() {
   window.setInterval(() => {
@@ -5277,6 +5557,14 @@ function scheduleDanteBeats() {
       lastDanteSpin = 0;
       lastDanteCoin = 0;
       lastDantePizza = 0;
+      lastDanteMoto = 0;
+    }
+    if (lastDanteMoto && now - lastDanteMoto > DANTE_MOTO_EVERY) {
+      lastDanteMoto = now;
+      saveGamingClocks();
+      dbg("dante beat: moto (game 24:00 + 55m clock)");
+      void motoScene();
+      return;
     }
     if (lastDantePizza && now - lastDantePizza > DANTE_PIZZA_EVERY) {
       const folded = consumeOverdueDanteClocks("pizza beat", now);
@@ -5415,6 +5703,12 @@ const HUNT_CLOCKS: Array<{
   // The DOOR joins the hunt at 15:00 into the session (user-directed) and
   // returns each half hour; the 4h guard inside the scene keeps it special.
   { name: "door", firstAt: 15, every: 30 * 60_000, last: 0, run: () => doorFightScene(true) },
+  // Living beats on drawn-but-unrouted art. Spaced off the fight minutes above
+  // so a hunt beat and a snack never fall due together.
+  // 26 seconds end to end — off-screen, back with the food, eats, finishes. A
+  // full scene, not a micro-beat, and he leaves his post for half a minute, so
+  // it sits between the fight minutes and stays rare: once or twice a session.
+  { name: "bbq", firstAt: 21, every: 45 * 60_000, last: 0, run: () => corvinGameBbqBeat() },
 ];
 const HARD_BEAT_RESERVE_MS = 45_000;
 
@@ -5490,6 +5784,66 @@ function saveGamingClocks() {
 let nextGamingAmbience = 0;
 
 let lastBeatSkipLog = 0;
+// Мото под музыку. Три сцены по очереди, круг не повторяется: короткий выезд,
+// полный тур v0.2.4, «Скучно» без реплики. Раз в 14 минут — редко, чтобы не
+// сбивать концентрацию, но за час прослушивания ты увидишь хотя бы одну.
+//
+// Остальные 42 сцены Данте под музыку молчат: он слушает вместе с тобой.
+// Мото — исключение, ради которого исключение и делалось.
+const CORVIN_MUSIC_EVERY = 13 * 60_000;
+const CORVIN_MUSIC_REEL: Array<{ name: string; run: () => void }> = [
+  { name: "leanstone", run: () => void corvinScene(() => playCorvin(CORVIN.leanstone)) },
+  { name: "feedeagle", run: () => void corvinScene(() => playCorvin(CORVIN.feedeagle)) },
+  { name: "stonerest", run: () => void stoneRestScene(20_000 + Math.random() * 15_000) },
+];
+let corvinMusicAt = 0;
+let corvinMusicIdx = 0;
+const DANTE_MUSIC_MOTO_EVERY = 14 * 60_000;
+const DANTE_MUSIC_MOTO_REEL: Array<() => void> = [
+  () => void motoScene(),
+  () => void danteMotoTourScene(),
+  () => void danteMotoRideScene(),
+];
+let danteMusicMotoAt = 0;
+let danteMusicMotoIdx = 0;
+function scheduleMusicBeat() {
+  window.setInterval(() => {
+    if (!musicActive() || !beatReady()) return;
+    if (isCorvin()) {
+      // У Корвина под музыку свой круг: прислониться к камню, покормить
+      // Арцива, сесть у каирна. Все три тихие и никуда не уводят с экрана —
+      // мото не его язык, а гитары одной на час прослушивания мало.
+      const now2 = Date.now();
+      if (!corvinMusicAt) {
+        corvinMusicAt = now2 - CORVIN_MUSIC_EVERY + 5 * 60_000;
+        return;
+      }
+      if (now2 - corvinMusicAt < CORVIN_MUSIC_EVERY) return;
+      corvinMusicAt = now2;
+      const pick = CORVIN_MUSIC_REEL[corvinMusicIdx % CORVIN_MUSIC_REEL.length];
+      dbg(`corvin music beat ${corvinMusicIdx % CORVIN_MUSIC_REEL.length + 1}/3: ${pick.name}`);
+      corvinMusicIdx += 1;
+      markScene();
+      pick.run();
+      return;
+    }
+    if (!isDante()) return;
+    const now = Date.now();
+    if (!danteMusicMotoAt) {
+      // Первый выезд не сразу: дай треку начаться.
+      danteMusicMotoAt = now - DANTE_MUSIC_MOTO_EVERY + 4 * 60_000;
+      return;
+    }
+    if (now - danteMusicMotoAt < DANTE_MUSIC_MOTO_EVERY) return;
+    danteMusicMotoAt = now;
+    const run = DANTE_MUSIC_MOTO_REEL[danteMusicMotoIdx % DANTE_MUSIC_MOTO_REEL.length];
+    dbg(`dante music moto ${danteMusicMotoIdx % DANTE_MUSIC_MOTO_REEL.length + 1}/3`);
+    danteMusicMotoIdx += 1;
+    markScene();
+    run();
+  }, 30_000);
+}
+
 function scheduleGamingBeat() {
   window.setTimeout(async () => {
     try {
@@ -5559,8 +5913,7 @@ function scheduleGamingBeat() {
             else runCorvinClock(false);
           }
           else if (isKael()) {
-            if (Math.random() < 0.25) await kaelHuntLoopPass();
-            else runKaelClock(false);
+            await kaelHuntLoopPass();
           }
           else await gamingAmbience();
         }
@@ -5768,7 +6121,7 @@ const isPhysicalClip = (c?: Clip) =>
 //     chain reading as "very fast moves in 2 seconds" is this.
 function paceMul(c?: Clip): number {
   if (gagActive || introActive || showcasing || returning || wandering || away) return 1;
-  if (isKael() && kaelMode !== "idle") return 1;
+  if (isKael()) return 1;
   if (isPhysicalClip(c)) return 1;
   return Math.min(1.12, Math.max(0.88, 1.14 - life.v.energy * 0.26));
 }
@@ -5875,6 +6228,15 @@ let workIdx = 0;
 // next tool call lands — is the other half of the pacing. He only takes the
 // seat once the work has actually stopped.
 const DANTE_WORK_SETTLE_MS = 25_000;
+// Печать главнее рабочих поз. Ты печатаешь -> он сидит с ноутбуком; событие
+// сессии (coding/searching/speaking) -> он стоит с пистолетом. Пока идёт
+// работа с Claude Code эти два сигнала чередуются каждые несколько секунд, и
+// он вставал и садился без конца. Защита `typingUntil` живёт 9 секунд на
+// клавишу и истекает в паузе между словами, поэтому её не хватало.
+//
+// Сорок пять секунд после последней клавиши он остаётся сидеть: пауза, чтобы
+// подумать над строкой, не повод подниматься.
+const DANTE_TYPING_DOMINANCE_MS = 45_000;
 let lastDanteWorkAt = 0;
 let danteSettleTimer = 0;
 
@@ -5896,6 +6258,10 @@ function setState(state: State, force = false) {
   const prev = stage.dataset.state;
   stage.dataset.state = state;
   document.documentElement.style.setProperty("--accent", ACCENT[state]);
+  // Kael's mode owner is the only code allowed to replace a connected work,
+  // watch, combat, night, or scene clip. State JSON still updates the HUD and
+  // accent, but never cuts a body transition in half.
+  if (isKael() && kaelMode !== "idle") return;
   // A state event may arrive while the body is physically between postures.
   // Record the newest intent, then let the bridge callback apply it from its
   // contact frame instead of replacing a half-seated body.
@@ -5977,7 +6343,12 @@ function setState(state: State, force = false) {
     // poses, and the art for it already exists — STAND_CROSS, "standing, arms
     // crossed, considering", which is his `searching` clip. Seated thinking is
     // still what happens when he is genuinely at rest and thinks.
-    const targetSeated = danteThinksOnFeet || danteWaitsOnFeet ? false : SEATED.has(state);
+    const typingRecent = Date.now() - lastTypingEventAt < DANTE_TYPING_DOMINANCE_MS;
+    const targetSeated = typingRecent
+      ? true
+      : danteThinksOnFeet || danteWaitsOnFeet
+        ? false
+        : SEATED.has(state);
     // Without this the last `idle` of a session would already have been held,
     // and nothing would ever come back to seat him — he'd stand until the next
     // burst. Re-run the decision once the settle window closes.
@@ -6283,16 +6654,16 @@ function reactWin() {
   // used to restart or replace it (user: "he breaks one animation for the
   // second trigger"). Reactions set curClip directly, bypassing setState's
   // guard, so the check has to live here too.
+  if (isKael()) {
+    queueKaelReaction("success", kaelLightSuccess);
+    return;
+  }
   if (committed()) {
     dbg("react=win skipped (animation in flight)");
     return;
   }
   if (isCorvin()) {
     reactWinCorvin();
-    return;
-  }
-  if (isKael()) {
-    void kaelLightSuccess();
     return;
   }
   const pick = pickWeighted([
@@ -6316,16 +6687,16 @@ function reactWin() {
 }
 
 function reactError() {
+  if (isKael()) {
+    queueKaelReaction("error", kaelLightError);
+    return;
+  }
   if (committed()) {
     dbg("react=err skipped (animation in flight)");
     return; // let the running beat finish — see reactWin()
   }
   if (isCorvin()) {
     reactErrorCorvin();
-    return;
-  }
-  if (isKael()) {
-    void kaelLightError();
     return;
   }
   // Low patience forces the cold treatment — anger is quiet.
@@ -6601,7 +6972,13 @@ function applyEvent(e: AgentEvent) {
     scheduleIdle();
     return;
   }
-  setState(e.state);
+  if (isKael() && e.state === "searching") {
+    stage.dataset.state = "searching";
+    document.documentElement.style.setProperty("--accent", ACCENT.searching);
+    queueKaelReaction("search", kaelSearchScene);
+  } else {
+    setState(e.state);
+  }
   scheduleIdle();
 }
 
@@ -7055,6 +7432,10 @@ async function leaveScene() {
     afterClip = null;
     await new Promise<void>((res) => (moveWindowY(h.y, 300), window.setTimeout(res, 320)));
     if (isKael()) {
+      if (kaelMode !== "idle" || kaelWeaponForm !== "dormant") {
+        dbg(`kael leave deferred: mode=${kaelMode} weapon=${kaelWeaponForm}`);
+        return;
+      }
       const token = beginKaelMode("away");
       try {
         await playKaelMode(token, KAEL.leave_v2);
@@ -7067,6 +7448,7 @@ async function leaveScene() {
       await h.win.hide();
       away = true;
       awayAt = Date.now();
+      checkpointKaelHardPlan(true);
       dbg("kael portal closed -> window hidden");
       return;
     }
@@ -7098,6 +7480,7 @@ async function returnScene() {
   const h = home;
   try {
     if (isKael()) {
+      resumeKaelHardPlan("return");
       const token = beginKaelMode("scene");
       await h.win.setPosition(new PhysicalPosition(h.cornerX, h.y));
       h.lastX = h.cornerX;
@@ -7575,6 +7958,94 @@ preloadClips([MOTO_WHEELIE, MOTO_OFF]);
 // The complete v0.2.4 choreography, kept as its own reusable scene: walk past
 // the desktop edge, mount out of sight, cross, wheelie, ride home and dismount.
 // The caller owns the surrounding idle/watch transition and busy flag.
+// ---- Moto under film and music ---------------------------------------------
+// All three motorcycle scenes belong to BOTH contexts (user-directed: the art
+// was generated for exactly this). Under a film they already existed as watch
+// beats; under music they had no route at all, because music never holds the
+// stage the way the shared watch does.
+//
+// The two watch beats assume he is seated in the watch pose and hand him back
+// to the watch loop afterwards. These variants take him from the ordinary
+// seated idle instead, so the same authored bodies run without a film open.
+
+async function danteRiseFromSeat() {
+  if (!home) return;
+  const rise = reversedClip(SITDOWN);
+  startClip(rise);
+  seatedNow = false;
+  postureChangedAt = Date.now();
+  moveWindowY(home.y, 900);
+  await sleep(danteClipTotal(rise) + 80);
+}
+
+async function danteReturnToSeat() {
+  startClip(SITDOWN);
+  posture("idle", true);
+  await sleep(danteClipTotal(SITDOWN) + 80);
+  startClip(ANIMS_DANTE.idle);
+}
+
+// The ride: out past the edge, a pass on the bike, back in over the taskbar.
+// Same body as the film beat minus the "Скучно" line, which only makes sense
+// when there is a film to be bored of.
+async function danteMotoRideScene() {
+  if (!home || !isDante() || gagActive) return;
+  const h = home;
+  gagActive = true;
+  try {
+    dbg("dante moto ride (music/idle)");
+    await danteRiseFromSeat();
+    const offRight = h.scrRight + 20;
+    stage.dataset.facing = "right";
+    playWalk(true);
+    await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE, 0);
+    await sleep(550); // mounting stays beyond the edge
+    const offLeft = h.ox - h.winW - 12;
+    stage.dataset.facing = "left";
+    startClip(DANTE_MOTORIDE);
+    await rideWindow(offLeft, 520);
+    await sleep(260);
+    delete stage.dataset.facing;
+    startClip(DANTE_DROP);
+    await dropWindowToTaskbar(1850);
+    startClip(DANTE_CRASH);
+    sfxThud();
+    shake(380);
+    await sleep(520);
+    await new Promise<void>((resolve) => {
+      moveWindowY(h.belowY, 650);
+      window.setTimeout(resolve, 680);
+    });
+    stage.dataset.facing = "left";
+    startClip(DANTE_RIDE_CLIMB);
+    await sleep(850);
+    await new Promise<void>((resolve) => {
+      moveWindowY(h.y, 1800);
+      window.setTimeout(resolve, 1820);
+    });
+    delete stage.dataset.facing;
+    await danteReturnToSeat();
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+// The full v0.2.4 tour, standalone. Same body the film beat uses.
+async function danteMotoTourScene() {
+  if (!home || !isDante() || gagActive) return;
+  gagActive = true;
+  try {
+    dbg("dante moto tour (music/idle)");
+    await danteRiseFromSeat();
+    await danteLegacyMotoTourBody();
+    await danteReturnToSeat();
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
 async function danteLegacyMotoTourBody() {
   if (!home || !isDante()) return;
   const h = home;
@@ -7891,7 +8362,6 @@ async function main() {
   scheduleCorvinHardPlan(); // guaranteed living reel; Director only gates safe windows
   scheduleDanteBeats(); // fixed clocks: spin 6/20m, coin 12/25m, pizza 18/60m, shrug
   scheduleDanteDirector(); // situational Dante beats between fixed appointments
-  scheduleKaelDirector(); // Kael's quiet Abyss/platypus beats
   initTts(); // system voices — the fallback under the pre-rendered pack
   void initCorvinVoice(); // his real, neural voice (public/voice/corvin)
 
@@ -7905,7 +8375,6 @@ async function main() {
   applyCharacter();
   if (isDante()) resetDanteHardPlan("startup");
   if (isCorvin()) resetCorvinHardPlan("startup");
-  if (isKael()) resetKaelHardPlan("startup");
 
   // M2: load the story; a new day gets a greeting built from yesterday's REAL
   // numbers — he remembers, and says so once the walk-in has finished.
@@ -7916,6 +8385,8 @@ async function main() {
   director.st = { weights: {}, lastPlayed: {}, ...story.s.director };
   danteDirector.st = { weights: {}, lastPlayed: {}, ...story.s.danteDirector };
   kaelDirector.st = { weights: {}, lastPlayed: {}, ...story.s.kaelDirector };
+  restoreKaelHardPlan("startup");
+  scheduleKaelDirector(); // starts after story restoration, so no early reset can eat the saved reel
   const todayKey = dateKey();
   const newDay = !!story.s.lastSeenDate && story.s.lastSeenDate !== todayKey;
   const y = story.yesterday();
@@ -7948,6 +8419,13 @@ async function main() {
   // leaves again later — so the desktop breathes). A real AI event brings him
   // straight back via applyEvent regardless.
   window.setInterval(() => {
+    // Stage watchdog. A scene that never releases gagActive blocks EVERY later
+    // beat and the video watch, silently and forever — an unbounded posture
+    // wait did exactly that for ten minutes during a recording, with YouTube
+    // playing and the companion frozen mid-pose. The specific deadlock is
+    // fixed, but "one hung await disables the whole companion" is too sharp an
+    // edge to leave unguarded. Nothing legitimate owns the stage for minutes:
+    // the longest authored scene is well under two.
     if (returning || wandering || gagActive || showcasing || introActive) return;
     if (away) {
       if (Date.now() - awayAt > AWAY_RETURN_MS) returnScene();
@@ -7965,6 +8443,7 @@ async function main() {
   }, 30000);
 
   scheduleGamingBeat(); // playful beats while a game is open
+  scheduleMusicBeat(); // мото под музыку, остальное молчит
 
   // Signature hourly moment: Devil Trigger once an hour. Checked every 2 min so
   // a busy/away moment only DELAYS it instead of skipping the whole hour, and
@@ -8006,6 +8485,7 @@ async function main() {
       showBubble("A hundred hours together. Time flies.", PRIO.NOTABLE);
     if (Date.now() - storySavedAt > 5 * 60 * 1000) {
       storySavedAt = Date.now();
+      if (isKael()) checkpointKaelHardPlan(false);
       story.save();
     }
   }, 5000);

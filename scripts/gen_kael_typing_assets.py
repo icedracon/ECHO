@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -10,6 +11,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "public" / "pixel" / "_candidates" / "kael_typing_throw_body_v4"
 OUTPUT = ROOT / "public" / "pixel" / "_candidates" / "kael_typing_v4"
+PUBLISHED = ROOT / "public" / "pixel" / "kael"
 REVIEW = ROOT / "assets-src" / "wip" / "runtime-review"
 
 VOID = (3, 2, 10, 255)
@@ -136,7 +138,11 @@ def draw_flight_sparks(image: Image.Image, cx: int, cy: int, step: int) -> None:
 
 def build() -> tuple[list[Image.Image], list[Image.Image], list[Image.Image]]:
     body = load_frames(SOURCE)
-    base = body[0]
+    # PixelLab moved four pixels between nominally identical contacts. Use the
+    # authored work-shell contact as the canonical pose at every rune boundary.
+    base = load_frames(ROOT / "public" / "pixel" / "kael" / "work_enter")[-1]
+    body[0] = base.copy()
+    body[-1] = base.copy()
     enter: list[Image.Image] = []
     for phase in (0.0, 0.18, 0.38, 0.65, 0.86, 1.0):
         frame = base.copy()
@@ -212,6 +218,12 @@ def main() -> None:
     save_frames(OUTPUT / "enter", enter)
     save_frames(OUTPUT / "loop", loop)
     save_frames(OUTPUT / "exit", exit_frames)
+    save_frames(PUBLISHED / "typing_portal_enter", enter)
+    save_frames(PUBLISHED / "typing_runes_v4", loop)
+    save_frames(PUBLISHED / "typing_portal_exit", exit_frames)
+    canonical = ROOT / "public" / "pixel" / "kael" / "work_enter" / "frame_12.png"
+    shutil.copy2(canonical, PUBLISHED / "typing_portal_enter" / "frame_0.png")
+    shutil.copy2(canonical, PUBLISHED / "typing_portal_exit" / "frame_5.png")
     save_review(enter, loop, exit_frames)
     print(f"Kael typing v4: enter={len(enter)} loop={len(loop)} exit={len(exit_frames)}")
 

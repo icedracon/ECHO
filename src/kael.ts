@@ -41,6 +41,21 @@ export const KAEL = {
   swordplant: kc("swordplant", 13, 260, false, 12),
   platypus_sniff: kc("platypus_sniff", 13, 240, false, 12),
   typing_runes: kc("typing_runes", 9, 320, true, 0),
+  // Approved typing-v4 film. The portal owns its open/close contacts and the
+  // body clip throws three distinct runes one at a time. Per-frame timing adds
+  // anticipation and impact while preserving the reviewed 120 ms average.
+  typing_portal_enter: kc("typing_portal_enter", 6, 120, false, 5, [90, 95, 110, 125, 140, 160]),
+  typing_runes_v4: kc(
+    "typing_runes_v4",
+    51,
+    120,
+    false,
+    50,
+    Array.from({ length: 3 }, () => [
+      150, 130, 110, 100, 90, 85, 80, 85, 120, 100, 100, 105, 115, 130, 150, 170, 220,
+    ]).flat(),
+  ),
+  typing_portal_exit: kc("typing_portal_exit", 6, 120, false, 5, [160, 140, 125, 110, 95, 90]),
   screen_glance: kc("screen_glance", 13, 230, false, 12),
   scarf_adjust: kc("scarf_adjust", 13, 250, false, 12),
   armcheck_v2: kc("armcheck_v2", 13, 270, false, 12),
@@ -52,12 +67,21 @@ export const KAEL = {
   success_v2: kc("success_v2", 13, 240, false, 12),
   error_v2: kc("error_v2", 17, 250, false, 16),
   overload_v2: kc("overload_v2", 17, 280, false, 16),
+  overload_enter_v3: kc("overload_enter_v3", 17, 230, false, 16, [
+    280, 230, 210, 190, 180, 170, 160, 160, 180, 200, 220, 240, 260, 280, 320, 380, 560,
+  ]),
+  overload_exit_v3: kc("overload_exit_v3", 17, 210, false, 16, [
+    360, 300, 270, 240, 220, 200, 190, 180, 170, 170, 180, 190, 210, 230, 260, 300, 420,
+  ]),
 
   rest_enter: kc("rest_enter", 13, 240, false, 12),
   rest_loop_v2: kc("rest_loop_v2", 9, 460, true, 0),
 
   weapon_draw_sword: kc("weapon_draw_sword", 17, 220, false, 16),
   combat_idle_v2: kc("combat_idle_v2", 9, 360, true, 0),
+  combat_grip_v3: kc("combat_grip_v3", 9, 240, false, 8, [300, 230, 210, 200, 280, 210, 220, 250, 360]),
+  combat_glance_v3: kc("combat_glance_v3", 9, 250, false, 8, [320, 240, 220, 210, 340, 220, 230, 260, 360]),
+  combat_runes_v3: kc("combat_runes_v3", 9, 230, false, 8, [280, 220, 200, 190, 300, 200, 210, 240, 360]),
   streak_v2: kc("streak_v2", 13, 190, false, 12),
   fullweapon_v2: kc("fullweapon_v2", 17, 250, false, 16),
 
@@ -69,9 +93,20 @@ export const KAEL = {
   night_enter_v2: kc("night_enter_v2", 13, 260, false, 12),
   night_loop_v2: kc("night_loop_v2", 9, 500, true, 0),
   night_glance_v2: kc("night_glance_v2", 13, 240, false, 12),
+  night_enter_v3: kc("night_enter_v3", 17, 250, false, 16, [
+    300, 260, 240, 230, 220, 210, 210, 220, 230, 240, 250, 260, 280, 300, 340, 380, 520,
+  ]),
+  night_loop_v3: kc("night_loop_v3", 9, 520, true, 0, [560, 500, 480, 520, 620, 520, 480, 500, 560]),
+  night_glance_v3: kc("night_glance_v3", 9, 300, false, 8, [360, 280, 260, 280, 480, 280, 260, 300, 420]),
 
   leave_v2: kc("leave_v2", 17, 230, false, 16),
   return_v2: kc("return_v2", 17, 230, false, 16),
+
+  swordplant_enter_v3: kc("swordplant_enter_v3", 21, 220, false, 20, [
+    280, 230, 210, 200, 190, 190, 200, 210, 220, 240, 260, 300, 360,
+    240, 220, 210, 220, 240, 280, 340, 560,
+  ]),
+  swordplant_hold_v3: kc("swordplant_hold_v3", 9, 500, true, 0, [560, 480, 460, 500, 600, 500, 460, 480, 560]),
 
   voidstitch_alarm: kc("voidstitch_alarm", 13, 240, false, 12),
   voidstitch_pull: kc("voidstitch_pull", 17, 230, false, 16),

@@ -115,21 +115,34 @@ for (const name of [
   "rest_loop_v2",
   "combat_idle_v2",
   "watch_loop_v3",
-  "night_loop_v2",
+  "night_loop_v3",
+  "swordplant_hold_v3",
 ]) {
   const c = KAEL[name];
   check(sameClipFrame(c, 0, c, c.frames.length - 1), `Kael ${name}: loop endpoints are not pixel-identical`);
 }
 for (const [left, leftIndex, right, rightIndex, label] of [
-  [KAEL.work_enter, 12, KAEL.typing_runes, 0, "work enter -> typing runes"],
-  [KAEL.typing_runes, 0, KAEL.work_exit, 0, "typing runes -> work exit"],
+  [KAEL.work_enter, 12, KAEL.typing_portal_enter, 0, "work enter -> typing portal"],
+  [KAEL.typing_portal_enter, 5, KAEL.typing_runes_v4, 0, "typing portal -> rune throws"],
+  [KAEL.typing_runes_v4, 50, KAEL.typing_portal_exit, 0, "rune throws -> portal exit"],
+  [KAEL.typing_portal_exit, 5, KAEL.work_exit, 0, "typing portal -> work exit"],
   [KAEL.work_exit, 12, KAEL.breathe, 0, "work exit -> breathe"],
   [KAEL.watch_loop_v3, 0, KAEL.screen_glance, 0, "watch loop -> screen glance"],
   [KAEL.screen_glance, 12, KAEL.watch_loop_v3, 0, "screen glance -> watch loop"],
   [KAEL.rest_enter, 12, KAEL.rest_loop_v2, 0, "rest enter -> loop"],
   [KAEL.weapon_draw_sword, 16, KAEL.combat_idle_v2, 0, "draw -> combat idle"],
   [KAEL.watch_enter_v3, 12, KAEL.watch_loop_v3, 0, "watch enter -> loop"],
-  [KAEL.night_enter_v2, 12, KAEL.night_loop_v2, 0, "night enter -> loop"],
+  [KAEL.night_enter_v3, 16, KAEL.night_loop_v3, 0, "night enter -> loop"],
+  [KAEL.night_loop_v3, 0, KAEL.night_glance_v3, 0, "night loop -> glance"],
+  [KAEL.night_glance_v3, 8, KAEL.night_loop_v3, 0, "night glance -> loop"],
+  [KAEL.swordplant_enter_v3, 20, KAEL.swordplant_hold_v3, 0, "swordplant enter -> hold"],
+  [KAEL.overload_enter_v3, 16, KAEL.overload_exit_v3, 0, "overload settle -> recovery"],
+  [KAEL.combat_idle_v2, 0, KAEL.combat_grip_v3, 0, "combat idle -> grip"],
+  [KAEL.combat_grip_v3, 8, KAEL.combat_idle_v2, 0, "combat grip -> idle"],
+  [KAEL.combat_idle_v2, 0, KAEL.combat_glance_v3, 0, "combat idle -> glance"],
+  [KAEL.combat_glance_v3, 8, KAEL.combat_idle_v2, 0, "combat glance -> idle"],
+  [KAEL.combat_idle_v2, 0, KAEL.combat_runes_v3, 0, "combat idle -> runes"],
+  [KAEL.combat_runes_v3, 8, KAEL.combat_idle_v2, 0, "combat runes -> idle"],
   [KAEL.leave_v2, 16, KAEL.return_v2, 0, "leave -> return portal"],
   [KAEL.voidstitch_alarm, 12, KAEL.voidstitch_pull, 0, "void alarm -> pull"],
   [KAEL.voidstitch_pull, 16, KAEL.voidstitch_seal, 0, "void pull -> seal"],
@@ -239,6 +252,10 @@ const approvedLegacyFolders = new Set([
   "corvin/c_armoctopus",
   "corvin/c_armretract",
   "kael/watch_loop_v2",
+  "kael/night_enter_v2",
+  "kael/night_loop_v2",
+  "kael/night_glance_v2",
+  "kael/overload_v2",
   "kael/repair",
   "kael/game_ready",
   "kael/huntloop",
@@ -416,7 +433,10 @@ check(
     // Authored scenes remain at 1.0 while the existing ambient energy response
     // stays intact. Visual QA must never rewrite either playback speed.
     main.includes("if (gagActive || introActive || showcasing || returning || wandering || away) return 1;") &&
-    main.includes('if (isKael() && kaelMode !== "idle") return 1;') &&
+    // Kael is pinned to authored pace unconditionally now, not only while a
+    // mode owns him. The assertion tracks the code; the guarantee it protects
+    // (no mood scaling on his clips) is unchanged and in fact stronger.
+    main.includes("if (isKael()) return 1;") &&
     main.includes("if (isPhysicalClip(c)) return 1;") &&
     main.includes("return Math.min(1.12, Math.max(0.88, 1.14 - life.v.energy * 0.26));") &&
     !main.includes("GLOBAL_ANIMATION_PACE") &&
@@ -439,9 +459,12 @@ check(
     main.includes("function startKaelModeClip(token: number") &&
     main.includes("async function playKaelMode(") &&
     main.includes("async function holdKaelModeLoop(") &&
-    main.includes('isKael() && kaelMode !== "idle"') &&
-    main.includes("await playKaelMode(kaelWatchToken, KAEL.watch_enter_v3)") &&
-    main.includes("await holdKaelModeLoop(token, KAEL.night_loop_v2"),
+    main.includes("async function finishKaelWorkForScene(") &&
+    main.includes("kaelSceneReserved") &&
+    main.includes('if (isKael() && kaelMode !== "idle") return;') &&
+    main.includes("async function kaelMediaWatchScene(") &&
+    main.includes("await play(KAEL.watch_enter_v3)") &&
+    main.includes("await holdKaelModeLoop(token, KAEL.night_loop_v3"),
   "Kael scenes must run through the cancellable mode controller and hold linked poses",
 );
 check(
@@ -477,7 +500,10 @@ check(
     main.includes('type KaelWeaponForm = "dormant" | "sword" | "scythe"') &&
     main.includes("async function kaelWorkSession()") &&
     main.includes("KAEL.work_enter") &&
-    main.includes("KAEL.typing_runes") &&
+    main.includes("KAEL.typing_portal_enter") &&
+    main.includes("KAEL.typing_runes_v4") &&
+    main.includes("KAEL.typing_portal_exit") &&
+    main.includes("kaelWorkExitRequested") &&
     main.includes("KAEL.work_exit"),
   "Kael work must use the mode controller and the connected typing-runes shell loop",
 );
@@ -738,9 +764,11 @@ for (const event of trayEvents) {
 const {
   ACTIONS,
   CORVIN_HARD_PLAN,
+  CORVIN_PLAN_HOURS,
   CORVIN_HARD_PLAN_CYCLE_SEC,
   DANTE_ACTIONS,
   DANTE_HARD_PLAN,
+  DANTE_PLAN_HOURS,
   DANTE_HARD_PLAN_CYCLE_SEC,
   KAEL_ACTIONS,
   KAEL_HARD_PLAN,
@@ -772,8 +800,11 @@ for (const [label, actions, plan] of [
   for (const beat of plan) {
     const action = actions.find((candidate) => candidate.id === beat.id);
     const brain = new Director(undefined, action ? [action] : []);
-    check(brain.pick(hardPlanSituation, true) === null, `${label} hard action ${beat.id} leaked into random selection`);
-    check(brain.takePlanned(beat.id, hardPlanSituation, true)?.id === beat.id, `${label} hard action ${beat.id} cannot be dispatched directly`);
+    const dispatchSituation = beat.id === "nap"
+      ? { ...hardPlanSituation, hour: 1 }
+      : hardPlanSituation;
+    check(brain.pick(dispatchSituation, true) === null, `${label} hard action ${beat.id} leaked into random selection`);
+    check(brain.takePlanned(beat.id, dispatchSituation, true)?.id === beat.id, `${label} hard action ${beat.id} cannot be dispatched directly`);
   }
 }
 check(ACTIONS.every((action) => action.posture === "standing"), "Every Corvin Director action must require standing posture");
@@ -843,16 +874,22 @@ check(
   directorBody.includes('if (a.kind === "big") markScene();'),
   "Corvin Director big actions must reserve the shared scene gap",
 );
+// The plan is built in HOUR BASKETS now, not one flat reel, so a micro-gesture
+// deliberately repeats across hours — it is "he is alive", not an event. The
+// guarantee that replaced uniqueness is COVERAGE: every planned action holds at
+// least one slot, and the clock still only ever moves forward.
 check(
-  CORVIN_HARD_PLAN_CYCLE_SEC === 3 * 60 * 60 &&
+  CORVIN_HARD_PLAN_CYCLE_SEC === CORVIN_PLAN_HOURS.length * 3600 &&
     hardPlanClockIsStrict(CORVIN_HARD_PLAN, CORVIN_HARD_PLAN_CYCLE_SEC) &&
     CORVIN_HARD_PLAN.every((beat) => ACTIONS.some((action) => action.id === beat.id && action.planned)) &&
-    new Set(CORVIN_HARD_PLAN.map((beat) => beat.id)).size === CORVIN_HARD_PLAN.length &&
+    ACTIONS.filter((a) => a.planned).every((a) => CORVIN_HARD_PLAN.some((b) => b.id === a.id)) &&
+    CORVIN_PLAN_HOURS.every((h) => h.big && h.seatedOpen.length && h.seatedClose.length) &&
+    new Set(CORVIN_PLAN_HOURS.map((h) => h.big)).size === CORVIN_PLAN_HOURS.length &&
     main.includes("const CORVIN_HARD_PLAN_TICK_MS = 1000;") &&
     main.includes("const CORVIN_HARD_PLAN_RECOVERY_GAP_MS = 120_000;") &&
     main.includes("runCorvinClock(true, due.id)") &&
     main.includes("scheduleCorvinHardPlan();"),
-  "Every ordinary Corvin Director pack must have a unique slot in the three-hour hard reel",
+  "Every Corvin pack must hold a slot in the hour baskets, and no hour may repeat another hour's big scene",
 );
 const corvinHardRouted = new Set(CORVIN_HARD_PLAN.map((beat) => beat.id));
 const corvinExplicitRoutes = new Set(["flask", "sleep", "scan", "artsiv", "bow", "door"]);
@@ -882,15 +919,16 @@ for (const action of DANTE_ACTIONS) {
   check(danteDirectorCases.has(action.id), `Dante director action ${action.id} is not dispatched`);
 }
 check(
-  DANTE_HARD_PLAN_CYCLE_SEC === 4 * 60 * 60 &&
+  DANTE_HARD_PLAN_CYCLE_SEC === DANTE_PLAN_HOURS.length * 3600 &&
     hardPlanClockIsStrict(DANTE_HARD_PLAN, DANTE_HARD_PLAN_CYCLE_SEC) &&
-    // One slot per action, expressed against the catalogue instead of a literal
-    // count: the hardcoded 42 went stale the moment a 43rd action was routed,
-    // and a stale number here fails the build for the wrong reason.
-    DANTE_HARD_PLAN.length === DANTE_ACTIONS.length &&
+    // Coverage, not a count: hour baskets repeat micro-gestures on purpose, so
+    // the plan is longer than the catalogue. What must hold is that no action
+    // is left without a slot.
+    DANTE_ACTIONS.every((a) => DANTE_HARD_PLAN.some((b) => b.id === a.id)) &&
+    DANTE_PLAN_HOURS.every((h) => h.big && h.seatedOpen.length && h.seatedClose.length) &&
+    new Set(DANTE_PLAN_HOURS.map((h) => h.big)).size === DANTE_PLAN_HOURS.length &&
     DANTE_HARD_PLAN.every((beat) => DANTE_ACTIONS.some((action) => action.id === beat.id && action.planned)) &&
     DANTE_ACTIONS.every((action) => action.planned) &&
-    new Set(DANTE_HARD_PLAN.map((beat) => beat.id)).size === DANTE_HARD_PLAN.length &&
     main.includes("const DANTE_DIRECTOR_TICK_MS = 1000;") &&
     main.includes("const DANTE_HARD_PLAN_RECOVERY_GAP_MS = 90_000;") &&
     main.includes("runDanteClock(true, due.id)") &&
@@ -1076,6 +1114,40 @@ check(
   "Every ordinary Kael pack must follow the exact 90-minute hard plan with a three-minute sword rest",
 );
 check(
+  storySource.includes("kaelHardPlan?: { cursor: number; elapsedMs: number }") &&
+    main.includes("function kaelPlanElapsedAt(") &&
+    main.includes("function checkpointKaelHardPlan(") &&
+    main.includes("function restoreKaelHardPlan(") &&
+    main.includes("function resumeKaelHardPlan(") &&
+    main.includes("checkpointKaelHardPlan(true)") &&
+    main.includes('restoreKaelHardPlan("startup")') &&
+    main.includes("kaelPlanBeatAt(kaelPlanCursor) - kaelPlanElapsedAt(now)"),
+  "Kael hard plan must persist active screen-time without wall-clock backlog or character-switch resets",
+);
+check(
+  main.includes("interface KaelSceneOptions") &&
+    main.includes("async function setKaelWeaponForMode(") &&
+    main.includes('entryWeapon: "dormant"') &&
+    main.includes('exitWeapon: "ambient"') &&
+    main.includes("function queueKaelReaction(") &&
+    main.includes('queueKaelReaction("search", kaelSearchScene)') &&
+    main.includes('queueKaelReaction("success", kaelLightSuccess)') &&
+    main.includes('queueKaelReaction("error", kaelLightError)'),
+  "Kael reactions must queue behind connected posture/weapon transitions and search must have a real route",
+);
+const kaelNightStart = main.indexOf("async function kaelNightWatch(");
+const kaelNightEnd = main.indexOf("async function kaelNightWatchScene(", kaelNightStart);
+const kaelNightBody = kaelNightStart >= 0 && kaelNightEnd > kaelNightStart
+  ? main.slice(kaelNightStart, kaelNightEnd)
+  : "";
+check(
+  kaelNightBody.includes("KAEL.night_enter_v3") &&
+    kaelNightBody.includes("KAEL.night_loop_v3") &&
+    kaelNightBody.includes("KAEL.night_glance_v3") &&
+    !kaelNightBody.includes("NIGHT_WATCH_FINAL_REST_MS"),
+  "Kael night mirror must close after the ten-minute watch instead of monopolising a second rest block",
+);
+check(
   !main.includes("oldestUsefulCursor") &&
     !main.includes("due[due.length - 1]") &&
     main.includes("cursorAfter: corvinPlanCursor + 1") &&
@@ -1102,7 +1174,10 @@ check(
   main.includes("const kaelDirector = new Director(story.s.kaelDirector, KAEL_ACTIONS)") &&
     main.includes("function scheduleKaelDirector()") &&
     main.includes("scheduleKaelDirector();") &&
-    main.includes("runKaelClock(false)"),
+    main.includes("await kaelHuntLoopPass()") &&
+    main.includes("KAEL.combat_glance_v3") &&
+    main.includes("KAEL.combat_grip_v3") &&
+    main.includes("KAEL.combat_runes_v3"),
   "Kael Director must be stored, scheduled, and active during game sessions",
 );
 check(

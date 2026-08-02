@@ -50,6 +50,9 @@ interface StoryState {
   director?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
   danteDirector?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
   kaelDirector?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
+  // Active Kael screen-time only. Closing ECHO or selecting another companion
+  // pauses the reel instead of resetting it or creating a wall-clock backlog.
+  kaelHardPlan?: { cursor: number; elapsedMs: number };
 }
 
 export const dateKey = (t = Date.now()) => {
@@ -129,6 +132,18 @@ export class Story {
         const d = this.s[key];
         if (d === undefined) continue;
         if (!obj(d) || !obj(d.weights) || !obj(d.lastPlayed)) delete this.s[key];
+      }
+      if (s.kaelHardPlan !== undefined) {
+        const plan = s.kaelHardPlan;
+        if (!obj(plan)) delete s.kaelHardPlan;
+        else {
+          const p = plan as { cursor?: unknown; elapsedMs?: unknown };
+          const cursor = Number(p.cursor);
+          const elapsedMs = Number(p.elapsedMs);
+          if (!Number.isInteger(cursor) || cursor < 0 || !Number.isFinite(elapsedMs) || elapsedMs < 0)
+            delete s.kaelHardPlan;
+          else this.s.kaelHardPlan = { cursor, elapsedMs };
+        }
       }
       // `days` is keyed by date and nothing ever pruned it, so it grew forever
       // and was re-serialised on every one of the ~1500 saves a day. Only

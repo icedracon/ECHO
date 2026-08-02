@@ -22,6 +22,9 @@ export interface Situation {
   typing: boolean; // пользователь печатает прямо сейчас
   present: boolean; // был активен за последние 5 минут
   gaming: boolean;
+  // Играет музыка. Крупные сцены под неё не выходят — он слушает вместе с
+  // тобой, а не перетягивает внимание.
+  music: boolean;
   errStreak: number;
   winStreak: number;
   sinceSceneSec: number; // сколько прошло от последней большой сцены
@@ -91,139 +94,134 @@ export const ACTIONS: DirectorAction[] = [
   { id: "rain", kind: "big", cooldownSec: 3200, base: (s) => (night(s) ? 1.1 : 0.5) },
 ];
 
-export const CORVIN_HARD_PLAN_CYCLE_SEC = 3 * 60 * 60;
-export const CORVIN_HARD_PLAN: DirectorPlanBeat[] = [
-  { id: "shiftweight", atSec: 3 * 60 },
-  { id: "coatdust", atSec: 8 * 60 },
-  { id: "glanceback", atSec: 13 * 60 },
-  { id: "eaglelook", atSec: 18 * 60 },
-  { id: "hairwind", atSec: 23 * 60 },
-  { id: "flinch", atSec: 28 * 60 },
-  { id: "nodself", atSec: 33 * 60 },
-  { id: "lookarm", atSec: 38 * 60 },
-  { id: "breathfog", atSec: 43 * 60 },
-  { id: "knuckle", atSec: 48 * 60 },
-  { id: "stepright", atSec: 54 * 60 },
-  { id: "crouchcheck", atSec: 60 * 60 },
-  { id: "stretch2", atSec: 66 * 60 },
-  { id: "crouchrest", atSec: 72 * 60 },
-  { id: "turnpair", atSec: 80 * 60 },
-  { id: "leanspell", atSec: 88 * 60 },
-  { id: "swordcarry", atSec: 98 * 60 },
-  { id: "swordrest", atSec: 110 * 60 },
-  { id: "feedeagle", atSec: 124 * 60 },
-  { id: "leanstone", atSec: 136 * 60 },
-  { id: "tale", atSec: 148 * 60 },
-  { id: "aura", atSec: 158 * 60 },
-  { id: "road", atSec: 166 * 60 },
-  { id: "rain", atSec: 172 * 60 },
-  { id: "stonerest", atSec: 178 * 60 },
+
+// ---- Часовые корзины -------------------------------------------------------
+// План строится ЧАСАМИ, а не одной лентой. Плоский список выдавал бит ровно
+// каждые пять минут в одном и том же порядке — метроном, а не жизнь, и поза
+// прыгала: стоячее движение оказывалось между двумя сидячими, он вставал ради
+// одного жеста и садился обратно.
+//
+// Час = сидячий блок -> ОДИН подъём -> крупная сцена со стоячими жестами ->
+// ОДНА посадка -> сидячий блок. Два перехода позы за час вместо десяти.
+//
+// Ровно одна крупная сцена в час, и каждый час другая: круг не повторяется,
+// пока не пройдёт весь список. Микро-жесты повторяются между часами намеренно —
+// это «он жив», а не событие.
+export interface PlanHour {
+  big: string;
+  seatedOpen: string[];
+  standing: string[];
+  seatedClose: string[];
+}
+
+// Промежутки внутри часа разные — 4, 7, 9, 6, 11, 8 — чтобы биты не ложились
+// на одинаковую сетку. Три набора чередуются по часам.
+const GAP_PATTERNS = [
+  [4, 11, 19, 27, 34, 41, 47, 53],
+  [6, 13, 21, 30, 38, 45, 51, 57],
+  [5, 12, 18, 26, 35, 43, 50, 56],
 ];
 
+function buildHourPlan(hours: PlanHour[]): DirectorPlanBeat[] {
+  const out: DirectorPlanBeat[] = [];
+  hours.forEach((hour, index) => {
+    const order = [...hour.seatedOpen, hour.big, ...hour.standing, ...hour.seatedClose];
+    const gaps = GAP_PATTERNS[index % GAP_PATTERNS.length];
+    order.forEach((id, slot) => {
+      const minute = gaps[slot] ?? gaps[gaps.length - 1] + (slot - gaps.length + 1) * 2;
+      out.push({ id, atSec: index * 3600 + minute * 60 });
+    });
+  });
+  return out;
+}
+
+export const CORVIN_PLAN_HOURS: PlanHour[] = [
+  { big: "swordrest",  seatedOpen: ["shiftweight", "glanceback", "breathfog"], standing: ["crouchcheck"], seatedClose: ["coatdust", "nodself"] },
+  { big: "tale",       seatedOpen: ["hairwind", "lookarm", "knuckle"],         standing: ["stretch2"],    seatedClose: ["glanceback", "flinch"] },
+  { big: "aura",       seatedOpen: ["coatdust", "shiftweight", "nodself"],     standing: ["turnpair"],    seatedClose: ["eaglelook", "breathfog"] },
+  { big: "road",       seatedOpen: ["glanceback", "hairwind", "flinch"],       standing: ["stepright"],   seatedClose: ["knuckle", "lookarm"] },
+  { big: "rain",       seatedOpen: ["shiftweight", "eaglelook", "coatdust"],   standing: ["crouchrest"],  seatedClose: ["nodself", "hairwind"] },
+  { big: "stonerest",  seatedOpen: ["breathfog", "glanceback", "knuckle"],     standing: ["leanspell"],   seatedClose: ["flinch", "shiftweight"] },
+  { big: "feedeagle",  seatedOpen: ["lookarm", "coatdust", "eaglelook"],       standing: ["swordcarry"],  seatedClose: ["nodself", "breathfog"] },
+  { big: "leanstone",  seatedOpen: ["hairwind", "shiftweight", "glanceback"],  standing: ["crouchcheck"], seatedClose: ["knuckle", "flinch"] },
+];
+
+export const CORVIN_HARD_PLAN_CYCLE_SEC = CORVIN_PLAN_HOURS.length * 3600;
+export const CORVIN_HARD_PLAN: DirectorPlanBeat[] = buildHourPlan(CORVIN_PLAN_HOURS);
+
+// Всё, что стоит в часовых корзинах, уходит из лотереи: расписание им и есть
+// кулдаун. Шесть остальных (flask, sleep, scan, artsiv, bow, door) живут на
+// своих поводах — суточный час или событие, — и в план намеренно не входят.
 const corvinHardActionIds = new Set(CORVIN_HARD_PLAN.map((beat) => beat.id));
 for (const action of ACTIONS) {
   if (corvinHardActionIds.has(action.id)) action.planned = true;
+  // Корвин не садится: все его сцены поставлены от стойки.
   action.posture = "standing";
 }
 
-// Dante has his own repertoire and memory. His director favours small lived-in
-// beats, with the headline scenes kept rare; fixed daily/game clocks still own
-// their exact appointments.
-export const DANTE_HARD_PLAN_CYCLE_SEC = 4 * 60 * 60;
-export const DANTE_HARD_PLAN: DirectorPlanBeat[] = [
-  { id: "d_glanceover", atSec: 3 * 60 },
-  { id: "sitswing", atSec: 8 * 60 },
-  { id: "d_bootswing", atSec: 13 * 60 },
-  { id: "headtilt", atSec: 18 * 60 },
-  { id: "d_neckroll", atSec: 23 * 60 },
-  { id: "checkwatch", atSec: 28 * 60 },
-  { id: "d_jacketflick", atSec: 33 * 60 },
-  { id: "stretch", atSec: 38 * 60 },
-  { id: "d_knuckles", atSec: 43 * 60 },
-  // d_coffee carries `planned: true` in the catalogue but had no slot here, and
-  // pick() skips every planned action — so it was selectable by neither path.
-  // 11 frames of art that could never appear. It sits among the other seated
-  // micros, and its own dispatch guard keeps it to waking hours (10:00-20:00).
-  { id: "d_coffee", atSec: 46 * 60 },
-  { id: "leanback", atSec: 48 * 60 },
-  { id: "d_crouchpeer", atSec: 53 * 60 },
-  { id: "laugh", atSec: 58 * 60 },
-  { id: "d_hairswipe", atSec: 63 * 60 },
-  { id: "cleansword", atSec: 68 * 60 },
-  { id: "d_sigh", atSec: 73 * 60 },
-  { id: "cheer", atSec: 78 * 60 },
-  { id: "d_sitedge", atSec: 83 * 60 },
-  { id: "yawn", atSec: 88 * 60 },
-  { id: "d_phone", atSec: 93 * 60 },
-  { id: "shrug", atSec: 98 * 60 },
-  { id: "d_standlean", atSec: 103 * 60 },
-  { id: "sitthink", atSec: 108 * 60 },
-  { id: "d_fingerguns", atSec: 113 * 60 },
-  { id: "coin", atSec: 118 * 60 },
-  { id: "nap", atSec: 123 * 60 },
-  { id: "gunspin", atSec: 128 * 60 },
-  { id: "d_layback", atSec: 133 * 60 },
-  { id: "lookout", atSec: 138 * 60 },
-  { id: "taunt", atSec: 143 * 60 },
-  { id: "sitcross", atSec: 148 * 60 },
-  { id: "standcross", atSec: 153 * 60 },
-  { id: "swordspin", atSec: 158 * 60 },
-  { id: "pizza", atSec: 163 * 60 },
-  { id: "shoot", atSec: 169 * 60 },
-  { id: "stagger", atSec: 175 * 60 },
-  { id: "dance", atSec: 181 * 60 },
-  { id: "dive", atSec: 188 * 60 },
-  { id: "headbang", atSec: 196 * 60 },
-  { id: "swordmove", atSec: 204 * 60 },
-  { id: "deviltrigger", atSec: 212 * 60 },
-  { id: "devilform", atSec: 222 * 60 },
-  { id: "moto", atSec: 234 * 60 },
+export const DANTE_PLAN_HOURS: PlanHour[] = [
+  { big: "moto",        seatedOpen: ["d_glanceover", "d_neckroll", "sitswing"],   standing: ["d_standlean"],  seatedClose: ["d_jacketflick", "leanback"] },
+  { big: "dance",       seatedOpen: ["d_hairswipe", "headtilt", "sitthink"],      standing: ["coin"],         seatedClose: ["shrug", "d_sitedge"] },
+  { big: "deviltrigger",seatedOpen: ["d_knuckles", "d_sigh", "checkwatch"],       standing: ["gunspin"],      seatedClose: ["d_glanceover", "d_phone"] },
+  { big: "swordmove",   seatedOpen: ["d_neckroll", "d_jacketflick", "sitcross"],  standing: ["taunt"],        seatedClose: ["headtilt", "d_fingerguns"] },
+  { big: "pizza",       seatedOpen: ["d_hairswipe", "shrug", "stretch"],          standing: ["swordspin"],    seatedClose: ["d_sigh", "d_bootswing"] },
+  { big: "headbang",    seatedOpen: ["d_knuckles", "d_glanceover", "laugh"],      standing: ["cheer"],        seatedClose: ["d_neckroll", "lookout"] },
+  { big: "dive",        seatedOpen: ["headtilt", "d_jacketflick", "yawn"],        standing: ["stagger"],      seatedClose: ["d_hairswipe", "d_layback"] },
+  { big: "devilform",   seatedOpen: ["d_sigh", "shrug", "cleansword"],            standing: ["standcross", "d_crouchpeer"], seatedClose: ["d_knuckles", "nap"] },
+  { big: "shoot",       seatedOpen: ["d_glanceover", "headtilt", "d_coffee"],     standing: ["d_standlean"],  seatedClose: ["d_neckroll", "d_bootswing"] },
 ];
 
+export const DANTE_HARD_PLAN_CYCLE_SEC = DANTE_PLAN_HOURS.length * 3600;
+export const DANTE_HARD_PLAN: DirectorPlanBeat[] = buildHourPlan(DANTE_PLAN_HOURS);
+
 export const DANTE_ACTIONS: DirectorAction[] = [
-  { id: "d_glanceover", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_bootswing", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_neckroll", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_jacketflick", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_knuckles", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_hairswipe", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_sigh", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_sitedge", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_phone", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_fingerguns", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_coffee", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_layback", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_standlean", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "d_crouchpeer", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "sitswing", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "sitcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "sitthink", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "leanback", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "laugh", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "checkwatch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "yawn", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "nap", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "stretch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "shrug", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "headtilt", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "lookout", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "cleansword", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "coin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "swordspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "pizza", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "dance", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "headbang", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "deviltrigger", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "devilform", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_glanceover", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_bootswing", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_neckroll", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_jacketflick", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_knuckles", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_hairswipe", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_sigh", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_sitedge", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_phone", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_fingerguns", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_coffee", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_layback", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_standlean", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "d_crouchpeer", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "sitswing", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "sitcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "sitthink", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "leanback", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "laugh", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "checkwatch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "yawn", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  // Спать — только глубокой ночью, после ночной стражи 00:40 и до 05:00
+  // (user-directed). Общее условие позволяло заснуть в 14:00.
+  { id: "nap", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music && s.hour >= 0 && s.hour < 5 ? 1 : 0) },
+  { id: "stretch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "shrug", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "headtilt", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "lookout", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "cleansword", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "coin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "swordspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "pizza", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "dance", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "headbang", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "deviltrigger", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "devilform", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  // Мото — единственная крупная, которую музыка НЕ глушит (user-directed):
+  // ехать под трек это и есть быть с тобой в теме, а не перебивать её.
   { id: "moto", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "dive", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "shoot", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "gunspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "taunt", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "cheer", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "stagger", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "standcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "swordmove", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "dive", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "shoot", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "gunspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "taunt", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "cheer", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "stagger", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "standcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "swordmove", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
 ];
 const danteSeatedActionIds = new Set([
   "sitswing",
@@ -289,10 +287,10 @@ export const KAEL_ACTIONS: DirectorAction[] = [
   { id: "razlomtap", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? (s.present ? 0.9 : 0.35) : 0) },
   { id: "swordplant", kind: "big", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && s.sinceSceneSec > 1200 ? 1 : 0) },
   { id: "platypus_sniff", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? (s.present ? 0.9 : 0.35) : 0) },
-  { id: "armcheck", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "platypus", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "scarf", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
-  { id: "repair", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "armcheck", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "platypus", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "scarf", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
+  { id: "repair", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && !s.music ? 1 : 0) },
   { id: "rest", kind: "big", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && s.sinceSceneSec > 900 ? 1 : 0) },
   { id: "voidorgan", kind: "big", cooldownSec: 4 * 24 * 3600, base: (s) => (!s.typing && !s.gaming && s.present && (evening(s) || night(s)) ? 1.25 : 0) },
   { id: "voidstitch", kind: "big", cooldownSec: 12 * 3600, base: (s) => (!s.typing && s.present && (s.errStreak > 1 || night(s)) ? 0.75 : 0) },
@@ -307,9 +305,6 @@ export interface DirectorState {
 export class Director {
   st: DirectorState;
   private readonly actions: DirectorAction[];
-  // Which planned actions already used their one allowed skip. In-memory on
-  // purpose: a restart must not let an action defer twice running.
-  private readonly deferred = new Set<string>();
 
   constructor(saved?: Partial<DirectorState>, actions: DirectorAction[] = ACTIONS) {
     this.st = { weights: {}, lastPlayed: {}, ...saved };
@@ -360,20 +355,17 @@ export class Director {
   takePlanned(id: string, s: Situation, allowBig: boolean): DirectorAction | null {
     const action = this.actions.find((candidate) => candidate.id === id && candidate.planned);
     if (!action || (action.kind === "big" && !allowBig) || action.base(s) <= 0) return null;
-    // Learning applies here too. Every one of Dante's 43 actions is planned, so
-    // with the weight ignored his `feedback()` wrote to story.json and nothing
-    // ever read it back — the pack looked like it learned and did not.
+    // NO WEIGHT, NO DICE (user-directed). A scheduled beat is scheduled: the only
+    // things that may stop it are the situational veto above (`base(s) <= 0` —
+    // wrong hour, typing, mid-game) and the big-scene gap.
     //
-    // A low weight may only THIN a beat, never silence it: the skip happens at
-    // most once in a row per action, so the worst a disliked scene suffers is
-    // appearing every second cycle. Coverage stays guaranteed, which is the
-    // whole point of the hard plan.
-    const w = this.st.weights[action.id] ?? 1;
-    if (w < 1 && !this.deferred.has(action.id) && Math.random() > w) {
-      this.deferred.add(action.id);
-      return null;
-    }
-    this.deferred.delete(action.id);
+    // A learned weight was briefly consulted here so that Dante's feedback()
+    // stopped writing to state nothing read. That was the wrong trade: every one
+    // of his actions is planned, so the weight put a lottery back inside the one
+    // mechanism that exists to remove it, and a scene could silently sit out its
+    // slot. Guaranteed coverage is the point — an unreachable scene is a scene
+    // that may as well not have been drawn. Learning stays where randomness is
+    // already allowed: pick(), the ambient path.
     this.st.lastPlayed[action.id] = Date.now();
     return action;
   }
