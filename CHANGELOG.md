@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.5 - 2026-08-02
+
+### Fixed
+
+- Video sites now actually start the shared watch. Detection trusted the Windows
+  media session, but Chrome reports `play=none` for a playing YouTube tab and
+  labels video as `Music` when it does register, so every film was routed into
+  the music branch and the watch never ran. The visible window title decides;
+  the media session only adds what titles cannot see, such as a background tab.
+- Reaction to opening a video dropped from up to 10 s to under 3 s. Titles and
+  the media session are polled every 3 s, while the DNS cache — which shells out
+  to `ipconfig` — moved to every 30 s and costs less than before.
+- The плакат, Corvin's guitar and Kael's void organ fire when a video opens,
+  with the watch following, instead of being unreachable behind an end-of-film
+  gate. The wish is held until the stage is free, so an edge that lands
+  mid-scene is no longer lost. The gif and `song.mp3` stay Dante's alone.
+- A music beat landing within three minutes of any other scene was dropped for
+  twenty minutes; it now plays. Added a music heartbeat so an hour of listening
+  no longer reads as an empty desk.
+- Dante holds one posture through a working session — standing once when work
+  begins, sitting once when it ends. Thinking and idle previously mapped to the
+  seated pose while the work states are standing, so he stood and sat every few
+  seconds for as long as a session lasted.
+- Director posture tags are enforced by the dispatcher instead of being
+  decorative, so no pack can swap silhouettes without a sit/stand transition.
+- Dante walks at an even pace again; a gait pulse had been swinging his speed
+  ±20% twice per step cycle. Corvin and Kael keep their contact timing.
+- Arriving at his corner is now step, settle, sit — no stand-up followed by
+  sitting back down, and no mirrored "glances" that flipped the whole sprite.
+- Ambient clips breathe with mood again after being flattened to a hard 1.0,
+  which had made everything about 14% slower at full energy. Walking, sitting,
+  the intro and staged scenes stay locked to 1.0 so sound and window movement
+  cannot drift.
+- `d_coffee` could never be selected: it was marked as planned but had no slot
+  in the hard plan. The runtime audit now fails the build when any scene is
+  unreachable, dispatched without an action, or scheduled without a catalogue
+  entry.
+
 ## 0.2.4 - 2026-08-01
 
 ### Added
