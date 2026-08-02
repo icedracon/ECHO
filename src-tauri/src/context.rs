@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-
 #[derive(Clone, Serialize)]
 pub struct ContextEvent {
     pub kind: &'static str, // "typing" | "media" | "gaming"
@@ -36,7 +35,11 @@ fn clog(msg: &str) {
             let _ = std::fs::rename(&path, dir.join("echo.log.1"));
         }
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         use std::io::Write;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -104,7 +107,9 @@ fn idle_ms() -> u32 {
 #[cfg(windows)]
 fn any_typing_key_down() -> bool {
     // backspace, tab, enter, space, 0-9, A-Z, and common punctuation
-    const KEYS: &[i32] = &[0x08, 0x09, 0x0D, 0x20, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0];
+    const KEYS: &[i32] = &[
+        0x08, 0x09, 0x0D, 0x20, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0,
+    ];
     unsafe {
         for &k in KEYS {
             if GetAsyncKeyState(k) as u16 & 0x8000 != 0 {
@@ -222,11 +227,12 @@ fn spawn_typing(app: AppHandle) {
                         // poll can land between the two and read "". Deleting
                         // then would eat the word before it was written — only
                         // consume the file once there is content in it.
-                        if s.trim().is_empty() {
+                        let command = s.trim().trim_start_matches('\u{feff}').trim();
+                        if command.is_empty() {
                             continue;
                         }
                         let _ = std::fs::remove_file(&p);
-                        let kind = match s.trim() {
+                        let kind = match command {
                             "devil" => "demo_devil",
                             "sword" => "demo_sword",
                             "poster" => "demo_poster",
@@ -237,6 +243,7 @@ fn spawn_typing(app: AppHandle) {
                             "wake" => "demo_wake",
                             // Fan-facing switches: `echo corvin` / `echo dante`.
                             "corvin" | "be corvin" => "demo_be_corvin",
+                            "kael" | "be kael" => "demo_be_kael",
                             "dante" | "be dante" => "demo_be_dante",
                             "reel" => "demo_corvin", // the full showcase reel
                             "cleave" => "demo_cleave",
@@ -267,9 +274,19 @@ fn spawn_typing(app: AppHandle) {
                             "door" => "demo_door",
                             "form" => "demo_form",
                             "moto" => "demo_moto",
+                            "motolegacy" | "moto_legacy" => "demo_moto_legacy",
                             "watch" => "demo_watch",
+                            "videoreview" | "video_review" => "demo_video_review",
+                            "youtube" | "yt" | "youtube_poster" => "demo_youtube_poster",
+                            "dantreview" | "dante_review" => "demo_dante_review",
+                            "fullreview" | "full_review" | "oldreview" | "old_review"
+                            | "polishreview" | "polish_review" => "demo_full_review",
                             "nightwatch" => "demo_nightwatch",
                             "ride" => "demo_ride",
+                            "organ" | "voidorgan" => "demo_voidorgan",
+                            "voidstitch" => "demo_voidstitch",
+                            "fullweapon" => "demo_fullweapon",
+                            "kaelreview" | "kael_review" => "demo_kael_review",
                             _ => "",
                         };
                         if !kind.is_empty() {
@@ -285,12 +302,34 @@ fn spawn_typing(app: AppHandle) {
 
 // --- DNS cache: what sites you've opened -> media dances, games shoot --------
 const MEDIA: &[&str] = &[
-    "youtube", "ytimg", "googlevideo", "spotify", "scdn.co", "soundcloud",
-    "twitch", "ttvnw", "netflix", "nflxvideo", "music.apple",
+    "youtube",
+    "ytimg",
+    "googlevideo",
+    "twitch",
+    "ttvnw",
+    "netflix",
+    "nflxvideo",
+];
+const MUSIC_DOMAINS: &[&str] = &[
+    "spotify",
+    "scdn.co",
+    "soundcloud",
+    "music.apple",
+    "music.yandex",
+    "music.yandex.ru",
 ];
 const GAMES: &[&str] = &[
-    "steampowered", "steamcommunity", "steamstatic", "steam-", "epicgames",
-    "riotgames", "riotcdn", "battle.net", "blizzard", "ubisoft", "ea.com",
+    "steampowered",
+    "steamcommunity",
+    "steamstatic",
+    "steam-",
+    "epicgames",
+    "riotgames",
+    "riotcdn",
+    "battle.net",
+    "blizzard",
+    "ubisoft",
+    "ea.com",
 ];
 
 fn read_dns() -> HashSet<String> {
@@ -325,6 +364,9 @@ fn classify(domain: &str) -> Option<&'static str> {
     if GAMES.iter().any(|p| domain.contains(p)) {
         return Some("gaming");
     }
+    if MUSIC_DOMAINS.iter().any(|p| domain.contains(p)) {
+        return Some("music");
+    }
     if MEDIA.iter().any(|p| domain.contains(p)) {
         return Some("media");
     }
@@ -334,15 +376,92 @@ fn classify(domain: &str) -> Option<&'static str> {
 // Browsers use DNS-over-HTTPS, so the OS DNS cache never sees youtube/spotify.
 // Window TITLES do ("... - YouTube - Google Chrome"), so we read those too.
 const MEDIA_TITLES: &[&str] = &[
-    "youtube", "spotify", "twitch", "netflix", "soundcloud", "vk видео", "vk video",
-    "кинопоиск", "rutube", "vlc", "mpv", "iina", "rhythmbox", "celluloid",
+    "youtube",
+    "twitch",
+    "netflix",
+    "vk видео",
+    "vk video",
+    "кинопоиск",
+    "rutube",
+    "vlc",
+    "mpv",
+    "iina",
+    "celluloid",
     // more video sites (user-directed: "not only youtube") — these only guard
     // the fullscreen-game exclusion; playback itself is judged by the OS.
-    "hdrezka", "rezka", "ivi.ru", "okko", "kinopoisk", "premier", "start.ru",
-    "amediateka", "twitch.tv", "primevideo", "hulu", "disney+", "plex", "jellyfin",
-    "кино", "сериал", "фильм",
+    "hdrezka",
+    "rezka",
+    "ivi.ru",
+    "okko",
+    "kinopoisk",
+    "premier",
+    "start.ru",
+    "amediateka",
+    "twitch.tv",
+    "primevideo",
+    "hulu",
+    "disney+",
+    "plex",
+    "jellyfin",
+    "кино",
+    "сериал",
+    "фильм",
 ];
 const GAME_TITLES: &[&str] = &["steam", "epic games", "battle.net", "riot client"];
+
+// Music sources. Only consulted when the OS reports playback of an UNKNOWN
+// kind (which is what browsers usually report) — a definite Music/Video answer
+// from the media session always wins over this list.
+const MUSIC_TITLES: &[&str] = &[
+    "spotify",
+    "soundcloud",
+    "music.apple",
+    "apple music",
+    // Stem, not the nominative: the tab is "Яндекс Музыка" when idle but
+    // "… слушать онлайн на Яндекс МузыкЕ" while a track plays, and the exact
+    // form matched neither.
+    "яндекс музык",
+    "yandex music",
+    "music.yandex",
+    // Russian stem, kept as escapes so source encoding cannot corrupt it.
+    "\u{44f}\u{43d}\u{434}\u{435}\u{43a}\u{441} \u{43c}\u{443}\u{437}\u{44b}\u{43a}",
+    "музыка вконтакте",
+    "vk музыка",
+    "deezer",
+    "tidal",
+    "bandcamp",
+    "last.fm",
+    "foobar2000",
+    "aimp",
+    "winamp",
+    "rhythmbox",
+    "audacious",
+];
+
+// The VISIBLE TITLE decides, and SMTC only fills the gap. This is the older
+// ECHO build's rule and it is the one that actually works here: on this machine
+// Chrome reports `play=none` for a playing YouTube tab, and when it does
+// register a session it labels the video `Music` (Chrome picks MediaPlaybackType
+// from the audio track, not the page). Trusting SMTC's kind therefore routed
+// every film into the music branch — a poster scene once per 20 minutes and
+// never a watch. A window that says "… - YouTube -" is a video, whatever the OS
+// thinks. SMTC still owns the case titles can never see: playback from a
+// background or minimized tab.
+fn resolve_media_state(play_kind: &str, video_title: bool, music_title: bool) -> (bool, bool) {
+    if video_title {
+        return (true, false);
+    }
+    if music_title {
+        return (false, true);
+    }
+    match play_kind {
+        "music" => (false, true),
+        // "unknown" is what browsers usually answer. The old build treated any
+        // playback as something to watch; keep that rather than dropping it.
+        "video" | "unknown" => (true, false),
+        _ => (false, false),
+    }
+}
 
 // `tasklist /v` reports browser titles as "N/A", so it can never see a YouTube
 // tab. Enumerating top-level windows and reading their captions does work.
@@ -429,11 +548,19 @@ fn foreground_fullscreen() -> bool {
             return false;
         }
         let mon = MonitorFromWindow(h, 2); // MONITOR_DEFAULTTONEAREST
-        let mut mi = MonitorInfo { cb_size: std::mem::size_of::<MonitorInfo>() as u32, monitor: [0; 4], work: [0; 4], flags: 0 };
+        let mut mi = MonitorInfo {
+            cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+            monitor: [0; 4],
+            work: [0; 4],
+            flags: 0,
+        };
         if GetMonitorInfoW(mon, &mut mi) == 0 {
             return false;
         }
-        r[0] <= mi.monitor[0] && r[1] <= mi.monitor[1] && r[2] >= mi.monitor[2] && r[3] >= mi.monitor[3]
+        r[0] <= mi.monitor[0]
+            && r[1] <= mi.monitor[1]
+            && r[2] >= mi.monitor[2]
+            && r[3] >= mi.monitor[3]
     }
 }
 
@@ -472,26 +599,69 @@ fn steam_running_app() -> bool {
 /// §10 flagship: the system media session (SMTC). Browsers register here, so
 /// music playing in a BACKGROUND tab is finally visible — window titles only
 /// ever saw the foreground tab.
+/// What is playing right now: "" (nothing), "music", "video" or "unknown".
+/// Windows reports the kind itself via PlaybackType, so a Spotify album and a
+/// film are finally distinguishable — they used to fire the exact same event,
+/// and putting music on made him turn his back and "watch" a black window.
 #[cfg(windows)]
-fn media_session_playing() -> bool {
+fn media_playback_kind() -> &'static str {
     use windows::Media::Control::{
         GlobalSystemMediaTransportControlsSessionManager,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
     };
-    (|| -> windows::core::Result<bool> {
+    use windows::Media::MediaPlaybackType;
+    let probe = (|| -> windows::core::Result<&'static str> {
         let mgr = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.join()?;
         let sessions = mgr.GetSessions()?;
+        let mut found = "";
         for i in 0..sessions.Size()? {
             let s = sessions.GetAt(i)?;
-            if let Ok(info) = s.GetPlaybackInfo() {
-                if info.PlaybackStatus()? == Status::Playing {
-                    return Ok(true);
-                }
+            let Ok(info) = s.GetPlaybackInfo() else {
+                continue;
+            };
+            if info.PlaybackStatus()? != Status::Playing {
+                continue;
             }
+            // A definite answer wins; keep scanning past an Unknown session in
+            // case a second one (a real player) states its kind outright.
+            let kind = match info.PlaybackType().and_then(|t| t.Value()) {
+                Ok(MediaPlaybackType::Music) => "music",
+                Ok(MediaPlaybackType::Video) => "video",
+                _ => "unknown",
+            };
+            if kind != "unknown" {
+                return Ok(kind);
+            }
+            found = "unknown";
         }
-        Ok(false)
-    })()
-    .unwrap_or(false)
+        Ok(found)
+    })();
+    match probe {
+        Ok(v) => v,
+        Err(e) => {
+            // A silent `unwrap_or(false)` made a BROKEN media session look
+            // exactly like "nothing is playing" — which is the whole reason a
+            // YouTube video failing to turn him around was undiagnosable.
+            // Log it once; the poll runs every ten seconds.
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                clog(&format!("media session query failed: {e}"));
+            }
+            ""
+        }
+    }
+}
+
+/// Non-Windows: MPRIS/AppleScript only report "something is playing", so the
+/// kind is resolved from window titles by the caller.
+#[cfg(not(windows))]
+fn media_playback_kind() -> &'static str {
+    if media_session_playing() {
+        "unknown"
+    } else {
+        ""
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -500,15 +670,23 @@ fn media_session_playing() -> bool {
     // reader when installed; gdbus is the dependency-free fallback available
     // on the GTK desktops required by Tauri.
     let playerctl = command_stdout("playerctl", &["--all-players", "status"]);
-    if playerctl.lines().any(|line| line.trim().eq_ignore_ascii_case("playing")) {
+    if playerctl
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("playing"))
+    {
         return true;
     }
 
     let names = command_stdout(
         "gdbus",
         &[
-            "call", "--session", "--dest", "org.freedesktop.DBus",
-            "--object-path", "/org/freedesktop/DBus", "--method",
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.DBus",
+            "--object-path",
+            "/org/freedesktop/DBus",
+            "--method",
             "org.freedesktop.DBus.ListNames",
         ],
     );
@@ -519,10 +697,16 @@ fn media_session_playing() -> bool {
         let status = command_stdout(
             "gdbus",
             &[
-                "call", "--session", "--dest", name,
-                "--object-path", "/org/mpris/MediaPlayer2", "--method",
+                "call",
+                "--session",
+                "--dest",
+                name,
+                "--object-path",
+                "/org/mpris/MediaPlayer2",
+                "--method",
                 "org.freedesktop.DBus.Properties.Get",
-                "org.mpris.MediaPlayer2.Player", "PlaybackStatus",
+                "org.mpris.MediaPlayer2.Player",
+                "PlaybackStatus",
             ],
         );
         if status.contains("Playing") {
@@ -568,7 +752,14 @@ fn battery_low() -> bool {
         fn GetSystemPowerStatus(s: *mut PowerStatus) -> i32;
     }
     unsafe {
-        let mut s = PowerStatus { ac_line: 255, flag: 255, percent: 255, _reserved: 0, _lifetime: 0, _full_lifetime: 0 };
+        let mut s = PowerStatus {
+            ac_line: 255,
+            flag: 255,
+            percent: 255,
+            _reserved: 0,
+            _lifetime: 0,
+            _full_lifetime: 0,
+        };
         if GetSystemPowerStatus(&mut s) == 0 {
             return false;
         }
@@ -625,7 +816,13 @@ fn command_stdout(program: &str, args: &[&str]) -> String {
 #[cfg(not(windows))]
 fn native_media_processes() -> Vec<String> {
     const PLAYERS: &[&str] = &[
-        "spotify", "vlc", "mpv", "iina", "rhythmbox", "totem", "celluloid",
+        "spotify",
+        "vlc",
+        "mpv",
+        "iina",
+        "rhythmbox",
+        "totem",
+        "celluloid",
     ];
     command_stdout("ps", &["-Ao", "comm=,args="])
         .lines()
@@ -695,34 +892,101 @@ fn window_titles() -> Vec<String> {
     native_media_processes()
 }
 
+// Window titles and SMTC are the fast signals — they decide whether he turns
+// around, so they set the felt latency of the whole feature. DNS shells out to
+// `ipconfig`, so it rides a much slower cadence underneath.
+const POLL_MS: u64 = 3_000;
+const DNS_EVERY_TICKS: u64 = 10; // 30 s
+const HEARTBEAT_EVERY_TICKS: u64 = 60; // 3 min
+
 fn spawn_dns(app: AppHandle) {
     std::thread::spawn(move || {
+        // This thread only ever logged on an EDGE, so silence was ambiguous:
+        // "no video was played" and "the poll died / SMTC sees nothing" looked
+        // identical in the log. The typing watcher has a heartbeat for exactly
+        // this reason; without one here, a YouTube trigger that does nothing
+        // cannot be diagnosed at all. See `ticks` below.
+        clog("media watcher started");
+        let mut ticks: u64 = 0;
+        let mut last_shot = String::new();
         // Seed with what's already there so we only react to NEW activity
         // (Steam already running at launch shouldn't trigger a shoot).
         let mut seen = read_dns();
         let titles = window_titles();
-        let mut had_media = titles.iter().any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
-        let mut had_game = titles.iter().any(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
+        // The hard title fallback below also emits heartbeats, so an already-open
+        // film can wake ECHO after launch. Keep both edges unlatched here: the
+        // first poll then records and routes the exact video/music kind once.
+        let mut had_media = false;
+        let mut had_music = false;
+        let mut had_media_title = titles
+            .iter()
+            .any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
+        // Seeded from TITLES, matching the fullscreen discriminator it feeds.
+        let mut last_media_seen = if titles
+            .iter()
+            .any(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)))
+        {
+            Instant::now()
+        } else {
+            ago(600)
+        };
+        let mut had_game = titles
+            .iter()
+            .any(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
         let mut had_fullscreen = false;
         let mut had_steam_game = false;
         let mut had_battery = false;
         let mut last_media = ago(600);
         let mut last_game = ago(600);
+        // A throttled edge must be HELD, not dropped — see the emit block below.
+        let mut pending_media = false;
+        let mut pending_music = false;
+        let mut pending_game = false;
+        // The song is a SCENE, not a mood: once every 20 minutes at most, so a
+        // full album doesn't turn into a guitar solo every other track.
+        let mut last_music = ago(3600);
+        // When a video SITE was last opened (DNS). Used only to tell a
+        // fullscreen film apart from a fullscreen game.
+        let mut media_site_at = ago(3600);
         loop {
-            std::thread::sleep(Duration::from_secs(10));
+            // Titles and SMTC are polled fast: at the old flat 10 s, opening
+            // YouTube could sit dead for ten seconds before he turned around,
+            // which on a screen recording is a very long nothing. Reading
+            // window captions is cheap (one EnumWindows pass).
+            std::thread::sleep(Duration::from_millis(POLL_MS));
+            ticks += 1;
             let mut fire_media = false;
+            let mut fire_music = false;
             let mut fire_game = false;
 
-            // 1) DNS cache (catches native apps like Steam)
-            let now = read_dns();
-            for d in now.difference(&seen) {
-                match classify(d) {
-                    Some("gaming") => fire_game = true,
-                    Some("media") => fire_media = true,
-                    _ => {}
+            // 1) DNS cache (catches native apps like Steam). This one shells
+            // out to `ipconfig /displaydns`, so it stays on a slow cadence —
+            // a process spawn every 3 s would be pure waste, and a site that
+            // has just been opened is caught by its window title anyway.
+            if ticks % DNS_EVERY_TICKS == 0 {
+                let now = read_dns();
+                for d in now.difference(&seen) {
+                    match classify(d) {
+                        Some("gaming") => fire_game = true,
+                        Some("media") => {
+                            fire_media = true;
+                            // The DNS edge is the only signal that says "this
+                            // browser is a video site". It fires once, when the
+                            // page opens, and `seen` means it never repeats.
+                            // Remember it: a fullscreen window minutes later is
+                            // then knowably a film, not a game.
+                            media_site_at = Instant::now();
+                            clog(&format!("media site opened: {d}"));
+                        }
+                        Some("music") => {
+                            fire_music = true;
+                            clog(&format!("music site opened: {d}"));
+                        }
+                        _ => {}
+                    }
                 }
+                seen = now;
             }
-            seen = now;
 
             // 2) Window titles (catches browser tabs — YouTube etc.), edge-triggered.
             // Log WHICH title matched — substring matching is trigger-happy (a
@@ -732,6 +996,9 @@ fn spawn_dns(app: AppHandle) {
             let media_hit = titles
                 .iter()
                 .find(|t| MEDIA_TITLES.iter().any(|k| t.contains(k)));
+            let music_hit = titles
+                .iter()
+                .find(|t| MUSIC_TITLES.iter().any(|k| t.contains(k)));
             let game_hit = titles
                 .iter()
                 .find(|t| GAME_TITLES.iter().any(|k| t.contains(k)));
@@ -740,24 +1007,66 @@ fn spawn_dns(app: AppHandle) {
             // around. The OS media session reports real playback for ANY
             // site or player — YouTube, Netflix, HDrezka, Twitch, VLC —
             // and keeps working when the video plays in a background tab.
-            let playing = media_session_playing();
+            // Windows states the kind outright; browsers usually say "unknown",
+            // so fall back to the window title. Music must NOT reach the watch
+            // scene: he plays along with it instead (guitar / плакат), which is
+            // what the media trigger did before the watch scene took it over.
+            let play_kind = media_playback_kind();
+            let playing = !play_kind.is_empty();
+            let (media_now, music_now) =
+                resolve_media_state(play_kind, media_hit.is_some(), music_hit.is_some());
             // Titles stay useful for one thing: a fullscreen video page must
-            // never be mistaken for a fullscreen game.
-            let media_titles = media_hit.is_some() || playing;
-            let media_now = playing;
+            // never be mistaken for a fullscreen game. This discriminator is
+            // TITLE-based on purpose (see the gaming comment below): SMTC
+            // reports playback for the WHOLE machine, so folding `playing` in
+            // here meant any background music cancelled fullscreen-game
+            // detection entirely — no gaming_fg, and the watch scene then sat
+            // him down on top of a running match. The grace window is anchored
+            // on the title hit so a player that briefly drops its caption while
+            // going fullscreen still counts as media.
+            if media_hit.is_some() {
+                last_media_seen = Instant::now();
+            }
+            let media_titles =
+                media_hit.is_some() || last_media_seen.elapsed() < Duration::from_secs(45);
+            // Only VIDEO drives the watch scene now; music has its own pair of
+            // events and its own scenes (Corvin's guitar, Dante's плакат).
             let game_now = game_hit.is_some();
             if media_now && !had_media {
                 fire_media = true;
                 match media_hit {
                     Some(t) => clog(&format!("video playing: {t:?}")),
-                    None => clog("video playing (media session)"),
+                    None => clog(&format!("video playing (media session, {play_kind})")),
                 }
             }
+            if music_now && !had_music {
+                fire_music = true;
+                clog(&format!("music playing ({play_kind})"));
+            }
+            // Browsers use DNS-over-HTTPS, so the DNS edge above almost never
+            // sees youtube. The window TITLE appearing is the same event, and
+            // it is the one that actually fires on this machine.
+            let media_title_now = media_hit.is_some();
+            if media_title_now && !had_media_title {
+                fire_media = true;
+                clog(&format!(
+                    "media site opened (title): {:?}",
+                    media_hit.unwrap()
+                ));
+            }
+            had_media_title = media_title_now;
+            // No hard playback gate (user-directed). Requiring a live SMTC
+            // session meant that on a machine where Chrome reports `play=none`
+            // — this one, per echo.log — opening YouTube or Netflix produced
+            // exactly nothing, forever. Opening the site IS the signal; if
+            // nothing follows it, the 45 s heartbeat grace turns him back on
+            // its own.
             if game_now && !had_game {
                 fire_game = true;
                 clog(&format!("game window detected: {:?}", game_hit.unwrap()));
             }
             had_media = media_now;
+            had_music = music_now;
             had_game = game_now;
 
             // A fullscreen foreground window that isn't media = a running game
@@ -767,7 +1076,19 @@ fn spawn_dns(app: AppHandle) {
             // Fullscreen counts as gaming judged by TITLES only — background
             // music via SMTC must not cancel the gaming mood mid-match.
             let steam_game = steam_running_app();
-            let fullscreen_game = foreground_fullscreen() && !media_titles;
+            // A fullscreen window is a GAME only without positive evidence that
+            // it is a film. Evidence is a media title, OR: playback is live AND
+            // a video site was opened in the last half hour AND Steam is not
+            // running anything. Watching YouTube fullscreen used to satisfy
+            // none of that when the window caption didn't carry the site name,
+            // so the browser was read as a game — which emits gaming_fg every
+            // ten seconds, and gaming_fg zeroes mediaUntil and holds
+            // gamingForeground() true. He could never sit down for it.
+            let media_fullscreen = media_titles
+                || (playing
+                    && !steam_game
+                    && media_site_at.elapsed() < Duration::from_secs(30 * 60));
+            let fullscreen_game = foreground_fullscreen() && !media_fullscreen;
             if fullscreen_game && !had_fullscreen && !steam_game {
                 clog("fullscreen foreground -> gaming mood");
                 // A fullscreen flip is a launch edge only for non-Steam games.
@@ -785,17 +1106,57 @@ fn spawn_dns(app: AppHandle) {
             }
             had_steam_game = steam_game;
 
-            if fire_game && last_game.elapsed() > Duration::from_secs(120) {
+            // Both edges are per-tick flags, so an `else if` here DISCARDED a
+            // video that started in the same ten-second poll as a game hit —
+            // the media edge was gone by the next tick and never came back.
+            // They have separate throttles; let each fire on its own.
+            //
+            // The throttle must DELAY an edge, never eat it: `had_*` has already
+            // latched by now, so a rejected edge was gone for good. Quitting one
+            // game and launching another inside two minutes silently lost the
+            // whole opening beat. Hold it until the throttle opens instead.
+            pending_game |= fire_game;
+            pending_media |= fire_media;
+            // A held video edge is void once the video is really gone — but a
+            // DNS hit lands seconds BEFORE the tab gets its caption, so "no
+            // title yet" must not count as gone or the throttle eats the edge
+            // it was only supposed to delay.
+            if !media_now && media_site_at.elapsed() > Duration::from_secs(120) {
+                pending_media = false;
+            }
+            if pending_game && last_game.elapsed() > Duration::from_secs(120) {
+                pending_game = false;
                 last_game = Instant::now();
                 let _ = app.emit("context-event", ContextEvent { kind: "gaming" });
-            } else if fire_media && last_media.elapsed() > Duration::from_secs(120) {
+            }
+            if pending_media && last_media.elapsed() > Duration::from_secs(120) {
+                pending_media = false;
                 last_media = Instant::now();
                 let _ = app.emit("context-event", ContextEvent { kind: "media" });
+            }
+            // Music gets its own edge on its own clock: he plays ALONG with it
+            // (guitar / плакат) instead of turning his back on you to watch.
+            // NOT cleared when nothing is playing: the song now fires on
+            // opening a video site too, which by definition happens before any
+            // playback exists.
+            pending_music |= fire_music;
+            if !music_now && !fire_music {
+                pending_music = false;
+            }
+            if pending_music && last_music.elapsed() > Duration::from_secs(20 * 60) {
+                pending_music = false;
+                last_music = Instant::now();
+                let _ = app.emit("context-event", ContextEvent { kind: "music" });
             }
 
             // Heartbeats: game / video still active -> he stays in that mood.
             if game_now || fullscreen_game || steam_game {
-                let _ = app.emit("context-event", ContextEvent { kind: "gaming_active" });
+                let _ = app.emit(
+                    "context-event",
+                    ContextEvent {
+                        kind: "gaming_active",
+                    },
+                );
             }
             // A game that is actually IN FRONT is the only thing that outranks
             // watching a video (user-directed). Steam merely running in the
@@ -805,15 +1166,85 @@ fn spawn_dns(app: AppHandle) {
                 let _ = app.emit("context-event", ContextEvent { kind: "gaming_fg" });
             }
             if media_now {
-                let _ = app.emit("context-event", ContextEvent { kind: "media_active" });
+                let _ = app.emit(
+                    "context-event",
+                    ContextEvent {
+                        kind: "media_active",
+                    },
+                );
+            }
+            // Music had an edge but no heartbeat, so an hour of Yandex Music
+            // with no keystrokes read as an empty desk and he wandered off.
+            // This says "someone is still here" without starting a scene.
+            if music_now {
+                let _ = app.emit(
+                    "context-event",
+                    ContextEvent {
+                        kind: "music_active",
+                    },
+                );
             }
             // Battery: one edge when he starts running on fumes.
             let batt = battery_low();
             if batt && !had_battery {
                 clog("battery low + discharging");
-                let _ = app.emit("context-event", ContextEvent { kind: "battery_low" });
+                let _ = app.emit(
+                    "context-event",
+                    ContextEvent {
+                        kind: "battery_low",
+                    },
+                );
             }
             had_battery = batt;
+
+            // Heartbeat every 3 minutes, plus one line on any state change.
+            // This is the whole picture in one row: what the OS says is
+            // playing, whether a title matched, and who owns the foreground.
+            let shot = format!(
+                "play={} music={} title={:?} fullscreen={} steam={} windows={}",
+                if play_kind.is_empty() {
+                    "none"
+                } else {
+                    play_kind
+                },
+                music_now,
+                media_hit.map(|t| t.as_str()).unwrap_or(""),
+                fullscreen_game,
+                steam_game,
+                titles.len(),
+            );
+            if shot != last_shot || ticks % HEARTBEAT_EVERY_TICKS == 0 {
+                clog(&format!("media watcher: {shot}"));
+                last_shot = shot;
+            }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify, resolve_media_state};
+
+    #[test]
+    fn media_domains_keep_video_and_music_separate() {
+        assert_eq!(classify("www.youtube.com"), Some("media"));
+        assert_eq!(classify("www.netflix.com"), Some("media"));
+        assert_eq!(classify("music.yandex.ru"), Some("music"));
+        assert_eq!(classify("open.spotify.com"), Some("music"));
+    }
+
+    #[test]
+    fn visible_titles_decide_and_smtc_only_fills_the_gap() {
+        // Chrome answers `none` for a playing YouTube tab on this machine.
+        assert_eq!(resolve_media_state("", true, false), (true, false));
+        assert_eq!(resolve_media_state("", false, true), (false, true));
+        // ...and labels the same video `Music`. The title outranks it, or every
+        // film becomes a song and nobody ever sits down to watch.
+        assert_eq!(resolve_media_state("music", true, false), (true, false));
+        assert_eq!(resolve_media_state("video", false, true), (false, true));
+        // Background tab, no caption to read: SMTC is all there is.
+        assert_eq!(resolve_media_state("unknown", false, false), (true, false));
+        assert_eq!(resolve_media_state("music", false, false), (false, true));
+        assert_eq!(resolve_media_state("", false, false), (false, false));
+    }
 }

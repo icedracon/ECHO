@@ -34,7 +34,15 @@ fn raise_topmost(window: tauri::WebviewWindow) {
     const SWP_NOMOVE_NOSIZE_NOACTIVATE: u32 = 0x1 | 0x2 | 0x10;
     if let Ok(h) = window.hwnd() {
         unsafe {
-            SetWindowPos(h.0 as isize, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE_NOSIZE_NOACTIVATE);
+            SetWindowPos(
+                h.0 as isize,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE_NOSIZE_NOACTIVATE,
+            );
         }
     }
 }
@@ -64,7 +72,12 @@ impl Store {
     }
 
     fn save(&self) {
-        let _ = fs::write(&self.path, format!("{{\"stars\":{}}}", self.stars));
+        // Same write-then-rename contract as story_save: a truncated stars.json
+        // loads as `.unwrap_or(0)`, silently resetting the whole star count.
+        let tmp = self.path.with_extension("json.tmp");
+        if fs::write(&tmp, format!("{{\"stars\":{}}}", self.stars)).is_ok() {
+            let _ = fs::rename(&tmp, &self.path);
+        }
     }
 }
 
@@ -98,11 +111,7 @@ pub struct Shared {
 fn get_state(shared: tauri::State<Shared>) -> AgentEvent {
     // A poisoned lock must not abort the app (panic=abort) — the data is a
     // star counter, not an invariant worth dying for.
-    let stars = shared
-        .store
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .stars;
+    let stars = shared.store.lock().unwrap_or_else(|p| p.into_inner()).stars;
     AgentEvent {
         state: "idle".into(),
         phrase: None,
@@ -145,7 +154,10 @@ async fn voice_clips() -> Vec<(String, String)> {
             continue;
         };
         // Keep it sane: skip anything huge for a one-liner clip.
-        if p.metadata().map(|m| m.len() > 4 * 1024 * 1024).unwrap_or(true) {
+        if p.metadata()
+            .map(|m| m.len() > 4 * 1024 * 1024)
+            .unwrap_or(true)
+        {
             continue;
         }
         if let Ok(bytes) = fs::read(&p) {
@@ -167,12 +179,40 @@ async fn poster_media() -> Vec<(String, String)> {
     };
     let dir = home.join(".echo").join("media");
     let want: [(&str, &[(&str, &str)]); 4] = [
-        ("poster", &[("gif", "image/gif"), ("png", "image/png"), ("webp", "image/webp")]),
-        ("song", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+        (
+            "poster",
+            &[
+                ("gif", "image/gif"),
+                ("png", "image/png"),
+                ("webp", "image/webp"),
+            ],
+        ),
+        (
+            "song",
+            &[
+                ("mp3", "audio/mpeg"),
+                ("wav", "audio/wav"),
+                ("ogg", "audio/ogg"),
+            ],
+        ),
         // Corvin's midnight ritual: ~/.echo/media/nightsong.mp3 (user's own file)
-        ("nightsong", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+        (
+            "nightsong",
+            &[
+                ("mp3", "audio/mpeg"),
+                ("wav", "audio/wav"),
+                ("ogg", "audio/ogg"),
+            ],
+        ),
         // The 23:40 requiem — its own track if you want one, else nightsong.
-        ("sadsong", &[("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("ogg", "audio/ogg")]),
+        (
+            "sadsong",
+            &[
+                ("mp3", "audio/mpeg"),
+                ("wav", "audio/wav"),
+                ("ogg", "audio/ogg"),
+            ],
+        ),
     ];
     for (stem, exts) in want {
         for (ext, mime) in exts {
@@ -180,7 +220,10 @@ async fn poster_media() -> Vec<(String, String)> {
             if !p.is_file() {
                 continue;
             }
-            if p.metadata().map(|m| m.len() > 12 * 1024 * 1024).unwrap_or(true) {
+            if p.metadata()
+                .map(|m| m.len() > 12 * 1024 * 1024)
+                .unwrap_or(true)
+            {
                 continue; // sane cap: it's a 15s poster beat, not a movie
             }
             if let Ok(bytes) = fs::read(&p) {
@@ -210,14 +253,25 @@ fn story_save(data: String) {
     if let Some(home) = dirs::home_dir() {
         let dir = home.join(".echo");
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join("story.json"), data);
+        // Write-then-rename. `fs::write` truncates BEFORE writing, and this is
+        // called about once a minute, so a kill in that window (with
+        // panic = "abort", any panic anywhere is a kill) left a truncated
+        // story.json. The frontend cannot repair that — it discards the file
+        // whole and overwrites it with a fresh state, so tenure, firsts, ritual
+        // clocks, the novel pointer and the learned director weights all went.
+        // Rename is atomic on NTFS and POSIX alike: the old file survives.
+        let tmp = dir.join("story.json.tmp");
+        if std::fs::write(&tmp, data).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("story.json"));
+        }
     }
 }
 
 /// Character pack selection. Precedence:
-/// 1. The exe's own name — ECHO-Corvin.exe / ECHO-Dante.exe are LOCKED builds
-///    (one binary, two names): fans download their hero and always boot him.
-/// 2. ~/.echo/character ("dante" / "corvin"), written by the live switch
+/// 1. The exe's own name — ECHO-Corvin.exe / ECHO-Dante.exe / ECHO-Kael.exe
+///    are LOCKED builds (one binary, three names): fans download their hero and
+///    always boot him.
+/// 2. ~/.echo/character ("dante" / "corvin" / "kael"), written by the live switch
 ///    `echo corvin > ~/.echo/demo`. Plain ECHO.exe uses this.
 #[tauri::command]
 fn character_load() -> String {
@@ -226,6 +280,9 @@ fn character_load() -> String {
             let s = stem.to_lowercase();
             if s.contains("corvin") {
                 return "corvin".into();
+            }
+            if s.contains("kael") {
+                return "kael".into();
             }
             if s.contains("dante") {
                 return "dante".into();
@@ -296,6 +353,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let characters = SubmenuBuilder::new(app, "Персонаж")
         .item(&item("ev:demo_be_corvin", "🦅  Корвин — Страж").build(app)?)
         .item(&item("ev:demo_be_dante", "🔴  Данте — охотник").build(app)?)
+        .item(&item("ev:demo_be_kael", "🟣  Каэль — Разлом").build(app)?)
         .build()?;
     let menu = MenuBuilder::new(app)
         .item(&characters)
@@ -324,6 +382,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 let word = match kind {
                     "demo_be_corvin" => Some("corvin"),
                     "demo_be_dante" => Some("dante"),
+                    "demo_be_kael" => Some("kael"),
                     "demo_corvin" => Some("reel"),
                     "demo_fly" => Some("fly"),
                     "demo_tale" => Some("tale"),
@@ -341,10 +400,18 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let _ = std::fs::write(home.join(".echo").join("demo"), w);
                 }
                 if kind == "hotkey_song" {
-                    let _ = app.emit("context-event", context::ContextEvent { kind: "hotkey_song" });
+                    let _ = app.emit(
+                        "context-event",
+                        context::ContextEvent {
+                            kind: "hotkey_song",
+                        },
+                    );
                 }
                 if kind == "quiet_hour" {
-                    let _ = app.emit("context-event", context::ContextEvent { kind: "quiet_hour" });
+                    let _ = app.emit(
+                        "context-event",
+                        context::ContextEvent { kind: "quiet_hour" },
+                    );
                 }
             } else if id == "help" {
                 let _ = app.emit(
@@ -371,7 +438,11 @@ fn clog_tray(kind: &str) {
     if let Some(home) = dirs::home_dir() {
         let dir = home.join(".echo");
         let _ = fs::create_dir_all(&dir);
-        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("echo.log")) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("echo.log"))
+        {
             use std::io::Write;
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -406,7 +477,16 @@ pub fn run() {
 
             watcher::spawn(app.handle().clone(), store, phrases);
             context::spawn(app.handle().clone()); // typing / media / gaming awareness
-            build_tray(app.handle())?; // the mouse-only control panel by the clock
+            // The tray is a convenience, not the product. Propagating this `?`
+            // made every menu/icon construction error abort `setup`, which the
+            // `.expect` on Builder::run turns into an instant silent death —
+            // no window, no console (windows_subsystem), no dialog. build_tray
+            // already degrades gracefully when the ICON is missing ("the app
+            // LIVES"); honour the same contract for the rest of it, e.g. a
+            // Linux box without a working appindicator backend.
+            if let Err(e) = build_tray(app.handle()) {
+                clog_tray(&format!("tray unavailable, continuing without it: {e}"));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

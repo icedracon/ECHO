@@ -13,7 +13,7 @@ export interface CorvinClip {
 }
 
 const cc = (dir: string, count: number, ms: number, loop: boolean, settle = 0, msSeq?: number[]): CorvinClip => ({
-  frames: Array.from({ length: count }, (_, i) => `/pixel/corvin/${dir}/frame_${i}.png?v=1`),
+  frames: Array.from({ length: count }, (_, i) => `/pixel/corvin/${dir}/frame_${i}.png?v=2`),
   ms,
   loop,
   settle,
@@ -28,14 +28,26 @@ export const CORVIN = {
   walkin: cc("walkin", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   walkout: cc("walkout", 9, 110, true, 0, [115, 105, 130, 105, 115, 105, 130, 105, 115]),
   sit: cc("sit", 9, 190, false, 8, [140, 150, 160, 175, 190, 205, 220, 240, 320]),
-  // Media watch: sit with the sword across his lap, turn toward the monitor,
-  // then hold a quiet breathing loop. The turn is reversed exactly on exit.
-  watchturn: cc("c_watchturn", 6, 280, false, 5, [260, 260, 280, 300, 340, 520]),
+  // Media watch: turn all the way away from the user and sit facing the monitor.
+  // The same transition is reversed on exit, so the seated silhouette never jumps.
+  watchturn: cc("c_watchturn", 13, 240, false, 12,
+    [300, 220, 200, 200, 210, 220, 230, 240, 260, 280, 320, 380, 620]),
   watchloop: cc("c_watchloop", 9, 420, true),
-  // Seated snack loop, pinned to watchloop frame 0 at both ends. Keeping the
-  // sword across his lap prevents a pose jump when he resumes the film.
+  // Rift snack: he returns already carrying the food in rear three-quarter,
+  // sits without crossing through a front view, eats, then puts the skewer away.
+  bbqwalk: cc("c_bbqwalk", 9, 170, true, 0,
+    [180, 160, 150, 160, 180, 160, 150, 160, 180]),
+  bbqsit: cc("c_bbqsit", 13, 220, false, 12,
+    [260, 190, 180, 180, 190, 200, 220, 240, 260, 290, 330, 400, 620]),
   barbecue: cc("barbecue", 11, 260, true, 0,
     [420, 280, 240, 220, 240, 320, 300, 260, 240, 280, 420]),
+  bbqfinish: cc("c_bbqfinish", 9, 230, false, 8,
+    [300, 220, 210, 200, 220, 250, 300, 380, 620]),
+  // Long-film rest: still rear-facing, now against a stone with the sword planted.
+  // His anatomical left arm is visibly demonic throughout the held loop.
+  mediarest: cc("c_mediarest", 13, 230, false, 12,
+    [320, 210, 200, 200, 210, 220, 230, 250, 280, 300, 340, 400, 650]),
+  mediarestloop: cc("c_mediarestloop", 9, 520, true),
   bow: cc("bow", 9, 200, false, 8, [180, 190, 210, 240, 420, 240, 210, 190, 200]),
   meditate: cc("meditate", 9, 320, true, 0, [300, 320, 340, 360, 380, 360, 340, 320, 300]),
   // shadow aura (the FULL flare, three stitched stages)

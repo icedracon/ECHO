@@ -37,6 +37,11 @@ Plays a pose, then **holds still** a random time, then shifts. The full list of
 
 Change: edit the `hold: [min,max]` per row. Bigger = calmer/stiller.
 
+All current and legacy Dante clip folders remain in the runtime inventory.
+`dantreview` runs the old/new movement reel with real window root motion;
+`motolegacy` keeps the earlier full motorcycle tour as a separate rare scene.
+Broken clips may be classified `needs-fix`, but are never silently deleted.
+
 ---
 
 ## C. Working (reactive — follows your AI activity)
@@ -105,7 +110,15 @@ Voice clips: `~/.echo/voice/<slug>.mp3` (your files win); else stylized blip.
 | Trigger | What | Clips | Knob |
 |---|---|---|---|
 | **You type** (Win32 keys) | laptop OUT once → typing loop while you type → laptop AWAY (reversed) | `typing` (one-shot) → `typetap` (4-frame loop) | session extend 9 s/keystroke, `typingUntil` |
-| **Video/music opens** | sits and turns toward the monitor centre; exact reverse on close | `d_watchturn` → `d_watchloop`, or `sit` → `c_watchturn` → `c_watchloop` | Dante in 2.99 s; Corvin in 3.76 s; 10 s heartbeat |
+| **Video opens** | active companion sits and turns toward the monitor centre; exact reverse on close; the visible title decides, so Chrome's `play=none` and its `Music` mislabel cannot block it | Dante/Corvin/Kael watch enter → loop → exit | 3 s poll, 45 s grace |
+| **Music opens** | character-specific performance instead of watching an empty screen | Dante poster / Corvin guitar / Kael organ | Yandex Music, Spotify and SMTC music |
+| **Film ends** | the same performance follows the watch instead of replacing it — `poster.gif` + `song.mp3` after the credits | Dante poster / Corvin guitar / Kael organ | needs ≥60 s watched, once per 20 min, skipped if a game cut it short |
+
+The gif window and `song.mp3` are **Dante's плакат only**. The gif is a Dante
+dance loop, so hanging it over Corvin (guitar, Artsiv on his shoulder) or Kael
+(a composed 36-second organ piece with its own track) read as another
+character's poster wandering into frame. Each answers a video in his own
+language: плакат for Dante, guitar for Corvin, void organ for Kael.
 | **Game launches** | persistent session clock; Alt+Tab does not reset it; Director keeps small/pose variety between fights | `shoot` / Corvin hunt table + learned Director | Unchained 3, cleave 7, breach 10, Door 15; Dante spin 6, sword 7, coin 12, pizza 18 |
 
 Hard priority order for Corvin: **23:40 Requiem** → a currently finishing clip →
@@ -187,3 +200,17 @@ sparks and tendrils.
 Knobs: `BACKSTEP_WINDOW_BEATS`, `stepWindowX()`, and the Door `REACH`,
 `LUNGE_REACH`, `EMERGE0`, `EMERGE1`, `LASH`, `CLING`, `PUSH0`, `GONE` constants
 in `src/main.ts`.
+
+---
+
+## L. Full release QA
+
+The developer-only `fullreview` trigger runs the connected watch sequence for
+all three companions, the Dante old/new reel and both motorcycle paths, Corvin's
+reel plus Door/night, and Kael's connected review. It restores the originally
+selected companion without changing the saved tray selection.
+
+Clip folders are classified by the runtime audit as `runtime`, `director`,
+`qa-demo`, `legacy`, `needs-fix`, or `post-release art`. The release audit fails
+on uncatalogued Corvin/Kael folders, unused Dante/general folders, missing
+handlers, duplicate trigger ownership, broken frame numbering, or bad `msSeq`.

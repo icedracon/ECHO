@@ -13,7 +13,7 @@ Desktop pixel-art companion. Download one file for your system and open it norma
 - **Mac M1/M2/M3/M4:** `ECHO-macOS-Apple-Silicon.dmg`
 - **Mac Intel:** `ECHO-macOS-Intel.dmg`
 
-На Windows также доступны версия без установки `ECHO-Windows-Portable.exe` и файлы с уже выбранным героем: `ECHO-Corvin.exe`, `ECHO-Dante.exe`.
+На Windows также доступны версия без установки `ECHO-Windows-Portable.exe` и файлы с уже выбранным героем: `ECHO-Corvin.exe`, `ECHO-Dante.exe`, `ECHO-Kael.exe`.
 
 ## Что нового
 
@@ -23,6 +23,7 @@ Desktop pixel-art companion. Download one file for your system and open it norma
 - Steam-сессия сохраняет жёсткие таймеры боёв после Alt+Tab и быстрого перезапуска ECHO: 3, 7, 10 и 15 минут.
 - Requiem Корвина запускается в 23:40 с высшим приоритетом; Director продолжает живые небольшие движения между обязательными сценами.
 - Корвин и Данте переключаются мышкой через меню ECHO возле часов.
+- Каэль добавлен в меню персонажей и в отдельный Windows-файл `ECHO-Kael.exe`.
 - Корвин теперь действительно отступает шагами в сцене Двери; лапа появляется медленнее и не дотягивается до него.
 - Тентакли выходят из поднятой руки Корвина и держатся за лапу.
 - Длинный текст больше не закрывает персонажа.

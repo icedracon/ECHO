@@ -83,8 +83,12 @@ export function pickIdle(
   lastClip: string | null,
   learned?: Record<string, number>,
 ): IdleUrge {
-  const pool = URGES.filter((u) => u.clip !== lastClip);
-  const list = pool.length ? pool : URGES;
+  // Dante's generated d_* polish pack is owned by the hard living reel in
+  // main.ts. Keeping it in this lottery made those clips fire both randomly
+  // and on schedule, destroying the intended spacing.
+  const randomUrges = URGES.filter((u) => !u.clip.startsWith("d_"));
+  const pool = randomUrges.filter((u) => u.clip !== lastClip);
+  const list = pool.length ? pool : randomUrges;
   const weights = list.map((u) =>
     Math.max(0.01, u.weight(life) * Math.min(2.5, Math.max(0.3, learned?.[u.clip] ?? 1))),
   );
@@ -95,6 +99,13 @@ export function pickIdle(
     if (r <= 0) return list[i];
   }
   return list[list.length - 1];
+}
+
+export function dantePolishUrge(clip: string): IdleUrge | null {
+  // The hard reel also reuses Dante's original seated library. Return its
+  // authored repeats/hold contract for any known idle clip, not only d_*.
+  const urge = URGES.find((candidate) => candidate.clip === clip);
+  return urge ? { clip: urge.clip, plays: urge.plays, hold: urge.hold } : null;
 }
 
 // ---- Win magnitude: small wins ≠ big wins ------------------------------------

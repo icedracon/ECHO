@@ -33,7 +33,8 @@ interface StoryState {
     lastBreachAt?: number; // the Breach — the big fight
     lastRequiemAt?: number; // the 23:40 requiem — the whole grief line
     lastDoorAt?: number; // the Door fight — the monitor-edge boss scene
-    lastHourSlot?: string; // "YYYY-MM-DD-H" of the last daily-hour move
+    lastHourSlot?: string; // legacy single-slot marker, migrated on load
+    lastHourSlots?: Record<string, number>; // character/date/hour -> played at
   };
   unlocks: string[];
   // Corvin the storyteller: per-arc fragment pointers — he NEVER repeats
@@ -47,6 +48,7 @@ interface StoryState {
   // The director's learned weights and per-action cooldown history.
   director?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
   danteDirector?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
+  kaelDirector?: { weights: Record<string, number>; lastPlayed: Record<string, number> };
 }
 
 export const dateKey = (t = Date.now()) => {
@@ -78,18 +80,67 @@ export class Story {
     }
     // There is no clean shutdown hook, so a truncated/hand-edited story.json
     // must not brick the pipeline: repair every field whose shape we rely on.
-    const s = this.s as unknown as Record<string, unknown>;
-    if (!Array.isArray(this.s.firsts)) this.s.firsts = [];
-    if (!Array.isArray(this.s.unlocks)) this.s.unlocks = [];
-    if (typeof s.days !== "object" || s.days === null || Array.isArray(s.days)) this.s.days = {};
-    if (typeof s.gags !== "object" || s.gags === null) this.s.gags = fresh().gags;
-    if (this.s.novel) {
-      const ch = Number(this.s.novel.ch);
-      this.s.novel.ch = Number.isInteger(ch) && ch >= 0 ? ch : 0;
+    // The repair itself must never throw either — this runs before the event
+    // listeners, the presence loop and the frame loop are installed, so an
+    // exception here leaves a dead transparent window with nothing logged.
+    try {
+      const s = this.s as unknown as Record<string, unknown>;
+      const obj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
+      if (!Array.isArray(this.s.firsts)) this.s.firsts = [];
+      if (!Array.isArray(this.s.unlocks)) this.s.unlocks = [];
+      if (!obj(s.days)) this.s.days = {};
+      if (!obj(s.gags)) this.s.gags = fresh().gags;
+      const hourSlots = obj(this.s.gags.lastHourSlots)
+        ? this.s.gags.lastHourSlots as Record<string, number>
+        : {};
+      this.s.gags.lastHourSlots = hourSlots;
+      if (this.s.gags.lastHourSlot) {
+        hourSlots[this.s.gags.lastHourSlot] ??= Date.now();
+      }
+      for (const [key, value] of Object.entries(hourSlots)) {
+        if (!Number.isFinite(value) || Date.now() - value > 14 * 86_400_000)
+          delete hourSlots[key];
+      }
+      if (!Number.isFinite(this.s.totalMinutes) || this.s.totalMinutes < 0)
+        this.s.totalMinutes = 0;
+      // `novel`/`tales` were repaired by ASSIGNING INTO them — on a string or a
+      // number that is a TypeError in strict mode, thrown outside the catch
+      // above. Check the container before touching it.
+      if (s.novel !== undefined && !obj(s.novel)) delete s.novel;
+      if (this.s.novel) {
+        const ch = Number(this.s.novel.ch);
+        this.s.novel.ch = Number.isInteger(ch) && ch >= 0 ? ch : 0;
+      }
+      if (s.tales !== undefined && !obj(s.tales)) delete s.tales;
+      if (this.s.tales) {
+        if (!obj(this.s.tales.ptr)) this.s.tales.ptr = {};
+        // A NaN/string pointer silently drops an arc forever (the `< length`
+        // comparison is false) and indexes fragments[NaN] in the midnight arc.
+        for (const [id, v] of Object.entries(this.s.tales.ptr)) {
+          const n = Number(v);
+          if (!Number.isInteger(n) || n < 0) this.s.tales.ptr[id] = 0;
+        }
+      }
+      // The three Directors are spread straight into their state; a null
+      // `weights` makes Director.pick throw inside a setTimeout chain, which
+      // kills the idle/urge loop for the rest of the session.
+      for (const key of ["director", "danteDirector", "kaelDirector"] as const) {
+        const d = this.s[key];
+        if (d === undefined) continue;
+        if (!obj(d) || !obj(d.weights) || !obj(d.lastPlayed)) delete this.s[key];
+      }
+      // `days` is keyed by date and nothing ever pruned it, so it grew forever
+      // and was re-serialised on every one of the ~1500 saves a day. Only
+      // today and yesterday are read; keep a fortnight for future use and
+      // drop the rest, which bounds the file and the corruption window.
+      const keepDays = new Set(
+        Array.from({ length: 14 }, (_, i) => dateKey(Date.now() - i * 86_400_000)),
+      );
+      for (const d of Object.keys(this.s.days)) if (!keepDays.has(d)) delete this.s.days[d];
+      if (!this.s.installedAt) this.s.installedAt = Date.now();
+    } catch {
+      this.s = fresh();
     }
-    if (this.s.tales && (typeof this.s.tales.ptr !== "object" || this.s.tales.ptr === null))
-      this.s.tales.ptr = {};
-    if (!this.s.installedAt) this.s.installedAt = Date.now();
   }
 
   save(): void {

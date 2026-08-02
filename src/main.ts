@@ -5,9 +5,23 @@ import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Life } from "./life";
 import { Story, dateKey } from "./story";
+import { KAEL, kaelClipTotal } from "./kael";
 import { CORVIN, corvinClipTotal, type CorvinClip } from "./corvin";
-import { DANTE_ACTIONS, Director, type Situation } from "./director";
 import {
+  CORVIN_HARD_PLAN,
+  CORVIN_HARD_PLAN_CYCLE_SEC,
+  DANTE_ACTIONS,
+  DANTE_HARD_PLAN,
+  DANTE_HARD_PLAN_CYCLE_SEC,
+  KAEL_ACTIONS,
+  KAEL_HARD_PLAN,
+  KAEL_HARD_PLAN_CYCLE_SEC,
+  Director,
+  type DirectorAction,
+  type Situation,
+} from "./director";
+import {
+  dantePolishUrge,
   pickIdle,
   type IdleUrge,
   voiceLineOk,
@@ -843,7 +857,7 @@ interface Clip {
   msSeq?: number[];
 }
 const clip = (name: string, ms: number, loop: boolean, settle = 0, count = 9): Clip => ({
-  frames: Array.from({ length: count }, (_, i) => `/pixel/${name}/frame_${i}.png?v=15`),
+  frames: Array.from({ length: count }, (_, i) => `/pixel/${name}/frame_${i}.png?v=16`),
   ms,
   loop,
   settle,
@@ -879,19 +893,46 @@ DANTE_WATCH_TURN.msSeq = [220, 180, 170, 170, 180, 190, 200, 210, 220, 240, 260,
 const DANTE_WATCH_LOOP = clip("d_watchloop", 380, true, 0, 9);
 const DANTE_MOTORIDE = clip("d_motoride", 128, true, 0, 10);
 DANTE_MOTORIDE.msSeq = [132, 124, 128, 120, 130, 134, 130, 120, 128, 124];
-const DANTE_BLANKET_DOWN = clip("d_blanketdown", 220, false, 10, 11);
-DANTE_BLANKET_DOWN.msSeq = [300, 210, 190, 190, 200, 210, 220, 240, 260, 320, 620];
+const DANTE_BLANKET_DOWN = clip("d_blanketdown", 220, false, 16, 17);
+DANTE_BLANKET_DOWN.msSeq = [
+  320, 220, 200, 190, 190, 200, 210, 220, 230, 240, 250, 270, 300, 340, 400, 480, 680,
+];
 const DANTE_BLANKET_LOOP = clip("d_blanketloop", 460, true, 0, 9);
-const DANTE_BLANKET_CHECK = clip("d_blanketcheck", 220, false, 12, 13);
-DANTE_BLANKET_CHECK.msSeq = [360, 220, 200, 190, 190, 210, 360, 300, 240, 220, 220, 260, 520];
+const DANTE_BLANKET_CHECK = clip("d_blanketcheck", 260, false, 8, 9);
+DANTE_BLANKET_CHECK.msSeq = [360, 260, 240, 300, 520, 300, 240, 280, 560];
 // ---- Character packs ---------------------------------------------------------
 // "dante" (default) or "corvin" — read from ~/.echo/character at boot, switched
 // live with `echo be corvin > ~/.echo/demo`. Corvin swaps the state clips and
 // every big scene; the engine (states, streaks, budgets, story) is shared.
-let character: "dante" | "corvin" = "dante";
+type CharacterName = "dante" | "corvin" | "kael";
+let character: CharacterName = "dante";
+const isDante = () => character === "dante";
 const isCorvin = () => character === "corvin";
+// Kael is the third character pack: Abyss arm, Razlom, cloak, platypus.
+const isKael = () => character === "kael";
+type KaelMode = "idle" | "work" | "watch" | "combat" | "night" | "away" | "scene";
+type KaelWeaponForm = "dormant" | "sword" | "scythe";
+let kaelMode: KaelMode = "idle";
+let kaelModeToken = 0;
+let kaelWeaponForm: KaelWeaponForm = "dormant";
+let kaelWorkTask: Promise<void> | null = null;
+let kaelPendingDraw = false;
+let kaelPendingStow = false;
 const ANIMS_DANTE: Record<State, Clip> = { ...ANIMS };
 function applyCharacter() {
+  if (isKael()) {
+    // Kael state events stay in a quiet base pose. Work and reactions are
+    // explicit connected sequences, never raw loops entered in the middle.
+    ANIMS.idle = KAEL.breathe as Clip;
+    ANIMS.thinking = KAEL.breathe as Clip;
+    ANIMS.coding = KAEL.breathe as Clip;
+    ANIMS.searching = KAEL.breathe as Clip;
+    ANIMS.speaking = KAEL.breathe as Clip;
+    ANIMS.success = KAEL.breathe as Clip;
+    ANIMS.error = KAEL.breathe as Clip;
+    dbg(`character: ${character}`);
+    return;
+  }
   if (isCorvin()) {
     ANIMS.idle = CORVIN.windidle as Clip; // the watch, coat moving in the wind
     ANIMS.thinking = CORVIN.windidle as Clip;
@@ -910,6 +951,17 @@ function applyCharacter() {
 }
 
 function resetCharacterStage() {
+  // A character reset owns the window position. Cancel an old sit/walk/drop
+  // tween first; otherwise its next animation frame can drag the restored
+  // companion back below the taskbar after this function has placed him.
+  cancelAnimationFrame(winTween);
+  winTween = 0;
+  kaelModeToken += 1;
+  kaelMode = "idle";
+  kaelWeaponForm = "dormant";
+  kaelWorkTask = null;
+  kaelPendingDraw = false;
+  kaelPendingStow = false;
   afterClip = null;
   curUrge = null;
   idlePlaysLeft = 0;
@@ -924,6 +976,9 @@ function resetCharacterStage() {
   corvinTickArmed = false;
   corvinQuietPose = "watch";
   corvinQuietRuns = 0;
+  corvinSeatedNow = false;
+  corvinPostureTransition = null;
+  dantePostureTransition = null;
   if (bubbleTimer) {
     window.clearTimeout(bubbleTimer);
     bubbleTimer = undefined;
@@ -933,19 +988,26 @@ function resetCharacterStage() {
   stage.dataset.state = "idle";
   document.documentElement.style.setProperty("--accent", ACCENT.idle);
   if (home) {
-    seatedNow = !isCorvin();
+    seatedNow = isDante();
     postureChangedAt = Date.now();
     window.clearTimeout(postureRetry);
     window.clearTimeout(postureSettle);
-    home.lastY = isCorvin() ? home.y : home.sitY;
-    void home.win.setPosition(new PhysicalPosition(home.cornerX, home.lastY)).catch(() => {});
+    home.lastX = home.cornerX;
+    home.lastY = isDante() ? home.sitY : home.y;
+    void home.win.setPosition(new PhysicalPosition(home.lastX, home.lastY)).catch(() => {});
   }
-  if (isCorvin()) {
+  if (isKael()) {
+    resetKaelHardPlan("character reset");
+    startClip(KAEL.breathe as Clip);
+  } else if (isCorvin()) {
+    resetCorvinHardPlan("character reset");
+    lastCorvinDirectorAt = Date.now();
     curClip = CORVIN.windidle as Clip;
     frameIdx = 0;
     afterClip = null;
     if (home) corvinIdleCycle();
   } else {
+    resetDanteHardPlan("character reset");
     curClip = idleClip("sitswing");
     frameIdx = 0;
     afterClip = idleStepDone;
@@ -965,6 +1027,9 @@ const DANTE_DEMOS = new Set([
   "demo_form",
   "demo_ride",
   "demo_moto",
+  "demo_moto_legacy",
+  "demo_dante_review",
+  "demo_youtube_poster",
 ]);
 const CORVIN_DEMOS = new Set([
   "demo_corvin",
@@ -995,15 +1060,79 @@ const CORVIN_DEMOS = new Set([
   "demo_fly",
   "demo_chapter",
 ]);
+const KAEL_DEMOS = new Set([
+  "demo_voidorgan",
+  "demo_voidstitch",
+  "demo_fullweapon",
+  "demo_kael_review",
+]);
 
-function switchCharacter(next: "dante" | "corvin", announce = true) {
+let qaReturnTarget: CharacterName | null = null;
+let qaReturnTimer = 0;
+let qaReturnStartedAt = 0;
+let qaRecoveryUntil = 0;
+let ownedMediaUntil = 0;
+function cancelQaReturn(reason: string) {
+  if (!qaReturnTarget) return;
+  window.clearTimeout(qaReturnTimer);
+  dbg(`QA return cancelled: ${reason}`);
+  qaReturnTarget = null;
+}
+function armQaReturn(target: CharacterName) {
+  qaReturnTarget = target;
+  qaReturnStartedAt = Date.now();
+  window.clearTimeout(qaReturnTimer);
+  const poll = () => {
+    if (!qaReturnTarget) return;
+    const busy =
+      gagActive || showcasing || introActive || wandering || away || returning ||
+      committed() || mediaWatching;
+    if (busy && Date.now() - qaReturnStartedAt < 5 * 60_000) {
+      qaReturnTimer = window.setTimeout(poll, 700);
+      return;
+    }
+    const restore = qaReturnTarget;
+    qaReturnTarget = null;
+    qaRecoveryUntil = Date.now() + 6_000;
+    // A QA scene may create its own media/game/typing heartbeats. They describe
+    // the test, not a new user request, and must not turn into a burst of scenes
+    // on the companion we restore. Keep explicit demo/hotkey commands queued.
+    for (let i = contextQueue.length - 1; i >= 0; i--) {
+      if (!isManualContext(contextQueue[i])) contextQueue.splice(i, 1);
+    }
+    if (character === restore) resetCharacterStage();
+    else switchCharacter(restore, false, false);
+    if (restore === "kael" && isKael() && gamingActive()) {
+      window.setTimeout(() => void ensureKaelCombatReady("QA return"), 0);
+    }
+    dbg(`QA test returned to ${restore}`);
+  };
+  qaReturnTimer = window.setTimeout(poll, 1200);
+}
+
+function switchCharacter(
+  next: CharacterName,
+  announce = true,
+  persist = true,
+) {
+  if (persist) cancelQaReturn("manual character selection");
   if (character === next) return;
   character = next;
   applyCharacter();
-  void invoke("character_save", { name: character }).catch(() => {});
+  if (persist) void invoke("character_save", { name: character }).catch(() => {});
   resetCharacterStage();
+  // A companion selected halfway through an existing game inherits the live
+  // session, not the other character's missed choreography. Future hunt marks
+  // stay armed; already overdue ones are folded into the switch baseline.
+  if (persist && gamingActive()) {
+    if (isCorvin()) consumeOverdueHuntClocks("character switch");
+    else if (isDante()) consumeOverdueDanteClocks("character switch");
+  }
+  if (isKael() && gamingActive()) {
+    window.setTimeout(() => void ensureKaelCombatReady("character switch"), 0);
+  }
   if (announce)
-    showBubble(isCorvin() ? "Корвин. Страж." : "Dante's back.", PRIO.NOTABLE);
+    showBubble(isCorvin() ? "Корвин. Страж." : isKael() ? "Каэль. Разлом." : "Dante's back.", PRIO.NOTABLE);
 }
 
 // Walk = the legs-visible side walk (regenerated upright-posture version).
@@ -1011,6 +1140,13 @@ const WALK = clip("sidewalk", 110, true, 0, 8);
 // Contact frames (footfalls) hold a beat longer — ground stops feet, feet
 // don't slide over ground.
 WALK.msSeq = [105, 95, 128, 98, 105, 95, 128, 98];
+// Released v0.2.4 walked at `slideWindow(cornerX, 150)` — constant 150 px/s.
+// The footstep rewrite that replaced it quietly dropped to 130, i.e. 13%
+// slower, which is the "previous build walked better, not fast and not slow"
+// regression (user-directed). The gait pulse in slideFootstepWindow averages
+// to exactly 1.0, so restoring 150 restores the ORIGINAL average speed while
+// keeping the contact timing that stops the feet sliding.
+const DANTE_WALK_PACE = 150;
 // Scene clips hold their final pose (settle=8) so the gag orchestrator controls
 // every transition — no flicker back to idle mid-sequence.
 // Error gag: falls, then climbs back up. Slower ms so both read clearly.
@@ -1156,6 +1292,18 @@ function idleClip(name: string): Clip {
   return idleClipCache[name];
 }
 const IDLE_CYCLE = ["sitswing", "sitcross", "sitthink"].map(idleClip); // showcase demos
+// These older held poses end away from the neutral seated frame. Reversing the
+// authored entrance gives them a physical exit instead of teleporting into the
+// first frame of the next idle action.
+const REVERSIBLE_IDLE_POSES = new Set([
+  "sitcross",
+  "sitthink",
+  "checkwatch",
+  "laugh",
+  "yawn",
+  "leanback",
+  "d_layback",
+]);
 // When a one-shot clip ends, run this instead of the default idle fallback.
 let afterClip: (() => void) | null = null;
 
@@ -1202,6 +1350,7 @@ preloadClips([
   // The whole Corvin pack too — an unloaded frame on a clip switch flashes the
   // broken-image icon mid-scene (caught by the capture rig, twice per reel).
   ...Object.values(CORVIN),
+  ...Object.values(KAEL),
 ]);
 
 // Context awareness (from the Rust context watcher): you typing -> he types;
@@ -1225,6 +1374,21 @@ function scheduleContextDrain() {
   window.clearTimeout(contextDrainTimer);
   contextDrainTimer = window.setTimeout(() => {
     if (!contextQueue.length) return;
+    const shouldWake = contextQueue.some((kind) =>
+      isManualContext(kind) ||
+      kind === "typing" ||
+      kind === "media" ||
+      kind === "media_active" ||
+      kind === "music" ||
+      kind === "music_active" ||
+      kind === "gaming"
+    );
+    if (away && !returning && shouldWake) {
+      dbg("queued context wakes companion from off-screen");
+      void returnScene();
+      scheduleContextDrain();
+      return;
+    }
     if (!home || gagActive || showcasing || returning || wandering || away || introActive) {
       scheduleContextDrain();
       return;
@@ -1248,6 +1412,8 @@ function onContext(kind: string) {
     kind === "typing" ||
     kind === "media" ||
     kind === "media_active" ||
+    kind === "music" ||
+    kind === "music_active" ||
     kind === "gaming" ||
     kind === "gaming_active" ||
     kind === "game_start" ||
@@ -1259,8 +1425,17 @@ function onContext(kind: string) {
   // owns the stage. Media heartbeats arrive every 10 s; a 45 s grace absorbs a
   // missed poll without leaving him seated minutes after the video is closed.
   if (kind === "media" || kind === "media_active") {
-    mediaUntil = Date.now() + MEDIA_HEARTBEAT_GRACE;
-    mediaWanted = Date.now();
+    if (Date.now() >= manualMediaPauseUntil) {
+      mediaUntil = Date.now() + MEDIA_HEARTBEAT_GRACE;
+      mediaWanted = Date.now();
+      // The YouTube moment is claimed HERE, with the other bookkeeping, because
+      // everything below this point sits behind the busy-stage `return`. The
+      // media edge almost always lands while something owns the stage — during
+      // the walk-in, mid-scene — so recording the wish further down meant it
+      // was never recorded at all, and only the watch ever ran. Measured: edge
+      // at intro+2 s, watch served at intro+22 s, no плакат.
+      if (kind === "media") mediaSongWanted = Date.now();
+    }
   }
   // A real game always outranks passive watching. If one opens mid-turn or
   // mid-loop, the watch scene finishes its current transition and exits cleanly.
@@ -1271,10 +1446,18 @@ function onContext(kind: string) {
     if (Date.now() >= mediaDemoUntil) mediaUntil = 0;
   }
   if (kind === "gaming_fg") gamingFgUntil = Date.now() + 45_000;
-  // QA/showcase only: an explicit ride request should not wait forever behind
-  // the very media-watch scene it is meant to demonstrate. The current turn
-  // finishes, exits cleanly, then the normal manual-context queue runs it.
-  if (kind === "demo_ride" && mediaWatching) {
+  // The bundled poster song appears in the OS media session. Without this
+  // ownership guard it emits `music` back into ECHO and tries to start a second
+  // presentation immediately after the first one.
+  if ((kind === "music" || kind === "music_active") && Date.now() < ownedMediaUntil) {
+    dbg("music ignored: owned by ECHO poster scene");
+    return;
+  }
+  // Manual QA/hotkey scenes must not wait forever behind continuous playback.
+  // Suppress two media heartbeats, let the watch exit cleanly, then run the
+  // queued scene. Playback is remembered again while that scene owns the stage.
+  if (isManualContext(kind) && kind !== "demo_watch" && mediaWatching) {
+    manualMediaPauseUntil = Date.now() + 25_000;
     mediaUntil = 0;
     mediaWanted = 0;
   }
@@ -1284,6 +1467,15 @@ function onContext(kind: string) {
     if (kind === "quiet_hour" && home) {
       quietUntil = Date.now() + 60 * 60_000;
       dbg("quiet hour engaged (mid-scene)");
+      return;
+    }
+    // Battery is a one-shot EDGE from the backend — it never repeats while the
+    // battery stays low. Dropping it here meant that if any scene happened to
+    // be running at the moment it crossed the threshold, the energy cap and
+    // the line were lost for that whole discharge.
+    if (kind === "battery_low") {
+      life.v.energy = Math.min(life.v.energy, 0.3);
+      dbg("battery low -> energy capped (mid-scene)");
       return;
     }
     if (kind === "gaming") gamingUntil = Date.now() + 3 * 60 * 1000;
@@ -1297,6 +1489,31 @@ function onContext(kind: string) {
       startGamingSession("game_start (mid-scene)");
       return;
     }
+    // The drain's wake list names typing/media/gaming, but ONLY manual kinds
+    // were ever queued — so those branches could never run. Starting a film or
+    // sitting back down to type while he was off-screen therefore did nothing,
+    // and he only reappeared on the blind AWAY_RETURN_MS timer (or an AI
+    // event). Queue the ambient kinds that mean "someone is here" so the wake
+    // path is reachable; queueContext coalesces the 10-second heartbeats.
+    if (
+      away &&
+      !returning &&
+      (kind === "typing" ||
+        kind === "media" ||
+        kind === "media_active" ||
+        kind === "music" ||
+        kind === "music_active" ||
+        kind === "gaming")
+    ) {
+      queueContext(kind);
+      return;
+    }
+    // The song fires at most once every 20 minutes, so losing it to a scene
+    // that happens to be running would mean losing it entirely. Wait instead.
+    if (kind === "music") {
+      queueContext(kind);
+      return;
+    }
     // User commands wait for the current scene instead of expiring after 25 s.
     if (isManualContext(kind)) queueContext(kind);
     return;
@@ -1305,8 +1522,22 @@ function onContext(kind: string) {
   // active (or vice versa) switches the whole pack first, then starts frame 0.
   // The old per-handler guards silently discarded the click or briefly mixed
   // both characters on the same stage.
-  if (DANTE_DEMOS.has(kind) && isCorvin()) switchCharacter("dante", false);
-  if (CORVIN_DEMOS.has(kind) && !isCorvin()) switchCharacter("corvin", false);
+  // persist=false: showing ONE scene must not rewrite who lives on the
+  // taskbar. `persist` defaults to true, so `echo devil` once — to show a
+  // friend the Devil Trigger — used to make Dante the saved character for
+  // every reboot afterwards. The explicit switches (`echo be corvin`, the
+  // tray) still persist; they are handled further down.
+  const qaOriginalCharacter = character;
+  if (DANTE_DEMOS.has(kind) && !isDante()) switchCharacter("dante", false, false);
+  if (CORVIN_DEMOS.has(kind) && !isCorvin()) switchCharacter("corvin", false, false);
+  if (KAEL_DEMOS.has(kind) && !isKael()) switchCharacter("kael", false, false);
+  if (
+    kind.startsWith("demo_") &&
+    kind !== "demo_be_corvin" && kind !== "demo_be_dante" && kind !== "demo_be_kael" &&
+    kind !== "demo_full_review" && kind !== "demo_video_review"
+  ) {
+    armQaReturn(qaOriginalCharacter);
+  }
   if (kind === "typing") {
     // Never mid-walk-in, and only once he's home in his corner.
     if (introActive) return;
@@ -1329,28 +1560,40 @@ function onContext(kind: string) {
       maybeTellNovel();
       // A committed one-shot finishes its bite before the whetstone comes out
       // (the commit contract names typing as a trigger that must WAIT).
-      if (curClip !== (CORVIN.whetstone as Clip) && !committed()) {
+      if (
+        curClip !== (CORVIN.whetstone as Clip) &&
+        !corvinTypingTransition &&
+        !committed()
+      ) {
         stage.dataset.state = "idle";
-        curClip = CORVIN.whetstone as Clip;
-        frameIdx = 0;
-        afterClip = null;
-        dbg("typing -> whetstone (corvin)");
-        tickTyping();
+        void enterCorvinTyping();
       }
       return;
     }
-    if (curClip !== TYPING && curClip !== TYPETAP && !committed()) {
+    if (isKael()) {
+      lastTypingEventAt = Date.now();
+      stage.dataset.state = "coding";
+      delete stage.dataset.facing;
+      dbg("typing -> connected rune work (kael)");
+      void kaelWorkSession();
+      return;
+    }
+    // Only the Corvin and Kael branches above ever stamped this, so for Dante
+    // it stayed 0 forever — and two Dante-only gates read it. The 20-minute
+    // shrug collapsed to "no game in 20 min" and interrupted him mid-typing,
+    // and watchReaction's `during` check (`0 > 0`) was always false, so his
+    // Director received a POSITIVE verdict for every action it ever played and
+    // could only ever learn upward. Must be stamped after the branches above:
+    // Corvin's novel clock reads the PREVIOUS value to detect a 90 s gap.
+    lastTypingEventAt = Date.now();
+    if (
+      curClip !== TYPING &&
+      curClip !== TYPETAP &&
+      !danteTypingTransition &&
+      !committed()
+    ) {
       stage.dataset.state = "idle";
-      posture("idle", true); // laptop needs him seated
-      curClip = TYPING;
-      frameIdx = 0;
-      // take-out is a one-shot; when it finishes, settle into the typing loop
-      afterClip = () => {
-        curClip = TYPETAP;
-        frameIdx = 0;
-      };
-      dbg("typing -> laptop out");
-      tickTyping();
+      void enterDanteTyping();
     }
     return;
   }
@@ -1444,9 +1687,34 @@ function onContext(kind: string) {
     void danteVideoRideDemo();
     return;
   }
+  if (kind === "demo_video_review") {
+    void videoReviewScene();
+    return;
+  }
+  // Let the restored companion breathe before automatic activity resumes.
+  // Bookkeeping above has already preserved media/game clocks; manual commands
+  // still pass through so the user remains in control.
+  if (Date.now() < qaRecoveryUntil && !isManualContext(kind)) {
+    if (kind === "gaming") gamingUntil = Date.now() + 3 * 60_000;
+    if (kind === "gaming_active") noteGamingHeartbeat();
+    dbg(`context ${kind} held during QA recovery`);
+    return;
+  }
+  if (kind === "demo_youtube_poster") {
+    markScene();
+    dbg("YouTube QA presentation: Dante GIF + MP3");
+    void posterScene(15_000);
+    return;
+  }
+  if (kind === "demo_full_review") {
+    void fullReviewScene();
+    return;
+  }
   // Character pack switch (live, persisted): `echo be corvin > ~/.echo/demo`.
-  if (kind === "demo_be_corvin" || kind === "demo_be_dante") {
-    switchCharacter(kind === "demo_be_corvin" ? "corvin" : "dante");
+  if (kind === "demo_be_corvin" || kind === "demo_be_dante" || kind === "demo_be_kael") {
+    switchCharacter(
+      kind === "demo_be_corvin" ? "corvin" : kind === "demo_be_kael" ? "kael" : "dante",
+    );
     return;
   }
   // Corvin scene QA hooks — same names you'd guess: echo cleave > ~/.echo/demo
@@ -1469,6 +1737,7 @@ function onContext(kind: string) {
   // Dante raises the плакат. Same busy-gate as demos: never mid-scene.
   if (kind === "hotkey_song") {
     if (isCorvin()) void nightSongScene();
+    else if (isKael()) void kaelVoidOrganScene(true);
     else posterScene(30_000);
     return;
   }
@@ -1492,8 +1761,12 @@ function onContext(kind: string) {
   if (kind === "demo_stone") return void stoneRestScene(18_000);
   if (kind === "demo_flask") return void corvinScene(() => playCorvin(CORVIN.flask));
   if (kind === "demo_door") { if (isCorvin()) void doorFightScene(true); return; }
-  if (kind === "demo_form") { if (!isCorvin()) void devilFormScene(); return; }
-  if (kind === "demo_moto") { if (!isCorvin()) void motoScene(); return; }
+  if (kind === "demo_form") { if (isDante()) void devilFormScene(); return; }
+  if (kind === "demo_moto" || kind === "demo_moto_legacy") {
+    if (isDante()) void motoScene();
+    return;
+  }
+  if (kind === "demo_dante_review") return void danteReviewScene();
   if (kind === "demo_combo") return void comboFlowScene();
   if (kind === "demo_parry") return void parryBeat();
   if (kind === "demo_ritual") {
@@ -1501,6 +1774,10 @@ function onContext(kind: string) {
     maybeDailyRitual();
     return;
   }
+  if (kind === "demo_voidorgan") return void kaelVoidOrganScene(true);
+  if (kind === "demo_voidstitch") return void kaelVoidStitchScene();
+  if (kind === "demo_fullweapon") return void kaelFullWeaponScene();
+  if (kind === "demo_kael_review") return void kaelReviewScene();
   if (kind === "demo_scan") return void magicscanScene();
   if (kind === "demo_fly") return void artsivCycleScene();
   if (kind === "demo_chapter") {
@@ -1531,9 +1808,33 @@ function onContext(kind: string) {
     serviceMediaWish();
     return;
   }
+  // The music heartbeat's whole job is the lastActivity stamp above: it says
+  // someone is still listening, so he stays. It must reach the away-branch
+  // above (which queues it and wakes him), but it never starts a scene —
+  // that is the once-per-20-minutes `music` edge's job.
+  if (kind === "music_active") return;
+  // MUSIC, not video: he plays ALONG instead of turning his back to watch.
+  // This is what the media trigger did before mediaWatchScene took the slot
+  // (commit 1640ef4 replaced guitarScene/posterScene with the watch scene, so
+  // putting a record on started staging a film with nothing on screen).
+  if (kind === "music") {
+    // No sceneAllowed() gate. The comment here promised a retry that does not
+    // exist — the `return` DROPPED the edge, and Rust only sends another in
+    // twenty minutes, so putting a record on within 3 min of any other beat
+    // did nothing at all. That 20-minute throttle IS the rate limit; the
+    // stage-busy guard above already prevents stacking. Rust's own throttle IS
+    // the rate limit. Same beat as the video edge, so it shares one gap and one
+    // per-character dispatch instead of two copies drifting apart.
+    lastWatchSongAt = Date.now();
+    markScene();
+    dbg(`music playing -> the song: ${character}`);
+    if (isCorvin()) void guitarScene(15_000);
+    else if (isKael()) void kaelVoidOrganScene(true);
+    else posterScene(15_000);
+    return;
+  }
   if (kind === "media") {
-    // The edge fires once and the heartbeat keeps the session alive. If another
-    // scene is finishing, the wish waits and starts as soon as the stage is free.
+    // The wish itself is claimed above, before the busy-stage return.
     serviceMediaWish();
   } else if (kind === "gaming") {
     // Mood only — the devil/sword clocks are armed by "game_start" (the real
@@ -1549,6 +1850,7 @@ function onContext(kind: string) {
     lastGamingSpecial = Date.now();
     markScene();
     if (isCorvin()) void magicscanScene(); // the hunt opens with a perimeter scan
+    else if (isKael()) void kaelGameReadyScene();
     else shootScene(3); // launched a game -> a longer 3-shot burst
   }
 }
@@ -1561,6 +1863,54 @@ function onContext(kind: string) {
 // Typing keeps going while you keep typing; each key event pushes this out.
 let typingUntil = 0;
 let cursorGlance = 0;
+let danteTypingTransition = false;
+let corvinTypingTransition = false;
+
+async function enterDanteTyping() {
+  if (!isDante() || danteTypingTransition || Date.now() >= typingUntil) return;
+  danteTypingTransition = true;
+  try {
+    await ensureDantePosture(true);
+    if (!isDante() || Date.now() >= typingUntil) return;
+    // Laptop take-out begins only after the sitpanel contact frame. The callback
+    // owns the exact existing typing-loop timing.
+    startClip(TYPING, () => startClip(TYPETAP));
+    dbg("typing -> seated laptop out");
+    tickTyping();
+  } finally {
+    danteTypingTransition = false;
+  }
+}
+
+async function enterCorvinTyping() {
+  if (!isCorvin() || corvinTypingTransition || Date.now() >= typingUntil) return;
+  corvinTypingTransition = true;
+  try {
+    await ensureCorvinSeated("typing whetstone");
+    if (!isCorvin() || Date.now() >= typingUntil) return;
+    corvinQuietPose = "whet";
+    corvinSeatedNow = true;
+    startClip(CORVIN.whetstone as Clip);
+    dbg("typing -> seated whetstone (corvin)");
+    tickTyping();
+  } finally {
+    corvinTypingTransition = false;
+  }
+}
+
+async function leaveCorvinTyping() {
+  if (!isCorvin() || corvinTypingTransition) return;
+  corvinTypingTransition = true;
+  try {
+    await ensureCorvinStanding("typing finished");
+    if (!isCorvin()) return;
+    finishSceneIdle("corvin typing");
+  } finally {
+    corvinTypingTransition = false;
+    if (isCorvin() && Date.now() < typingUntil) void enterCorvinTyping();
+  }
+}
+
 function tickTyping() {
   window.setTimeout(() => {
     if (isCorvin()) {
@@ -1570,8 +1920,12 @@ function tickTyping() {
         tickTyping();
         return;
       }
-      curClip = ANIMS.idle;
-      frameIdx = 0;
+      void leaveCorvinTyping();
+      return;
+    }
+    if (isKael()) {
+      // Kael owns one connected work task. Keystrokes only extend typingUntil;
+      // they never restart the enter pose or reset the rune loop.
       return;
     }
     if (curClip !== TYPING && curClip !== TYPETAP) return; // something else took over
@@ -1628,6 +1982,8 @@ function startGamingSession(source: string) {
 
   if (canResume) {
     restoreGamingClocks(gameSessionStartedAt, now);
+    if (isCorvin()) consumeOverdueHuntClocks("session resume", now);
+    else if (isDante()) consumeOverdueDanteClocks("session resume", now);
   } else {
     localStorage.removeItem(GAME_SESSION_CLOCKS_KEY);
     lastGamingDevil = gameSessionStartedAt - GAMING_DEVIL_EVERY + 3 * 60_000;
@@ -1641,6 +1997,7 @@ function startGamingSession(source: string) {
     `game session ${canResume ? "resumed" : "started"}: source=${source} ` +
       `elapsed=${Math.floor((now - gameSessionStartedAt) / 1000)}s`,
   );
+  if (isKael()) void ensureKaelCombatReady(canResume ? "game resumed" : "game started");
 }
 
 function noteGamingHeartbeat() {
@@ -1666,12 +2023,17 @@ function clearGamingSession() {
   lastDanteSpin = 0;
   lastDanteCoin = 0;
   lastDantePizza = 0;
+  if (isKael()) {
+    kaelPendingStow = true;
+    void ensureKaelWeaponDormant("game ended");
+  }
 }
 // Media session: stay turned toward the monitor while video/music is detected.
 let mediaUntil = 0;
 const MEDIA_HEARTBEAT_GRACE = 45_000;
 let mediaWatching = false;
 let mediaDemoUntil = 0;
+let manualMediaPauseUntil = 0;
 const CORVIN_MEDIA_RIFT_AFTER_MS = 4 * 60_000;
 const CORVIN_MEDIA_RIFT_DEMO_AFTER_MS = 4_000;
 const CORVIN_MEDIA_RIFT_AWAY_MS = 4_000;
@@ -1683,6 +2045,8 @@ const CORVIN_MEDIA_SWORD_REST_MAX_MS = 20 * 60_000;
 const CORVIN_MEDIA_SWORD_REST_MS = 3 * 60_000;
 const CORVIN_MEDIA_SWORD_REST_DEMO_AFTER_MS = 30_000;
 const CORVIN_MEDIA_SWORD_REST_DEMO_MS = 8_000;
+const KAEL_MEDIA_GLANCE_AFTER_MS = 4 * 60_000;
+const KAEL_MEDIA_GLANCE_DEMO_AFTER_MS = 12_000;
 const gamingActive = () => Date.now() < gamingUntil;
 // A game in the FOREGROUND (fullscreen) — the only gaming state that beats the
 // shared-screen watch. Background Steam keeps the hunt clocks, not the veto.
@@ -1746,11 +2110,11 @@ async function playSwordMove() {
 
 // Demo helpers: play a seated one-shot in place, or the standing fiery twirl.
 async function demoSeated(c: Clip, line?: string) {
-  if (!home || gagActive || isCorvin()) return;
+  if (!home || gagActive || !isDante()) return;
   gagActive = true;
   try {
     stage.dataset.state = "idle";
-    posture("idle", true); // seated payoffs need the seat, wherever he was
+    await ensureDantePosture(true);
     if (line) showBubble(line, PRIO.NOTABLE);
     startClip(c);
     await sleep(danteClipTotal(c) + 80);
@@ -1782,10 +2146,9 @@ async function demoSpin() {
 // cycle, meditation, exit. A rehearsal for the character pack — Dante's stage,
 // Corvin's reel.
 async function playCorvin(c: (typeof CORVIN)[keyof typeof CORVIN], passes = 1) {
-  // Scenes render at pace 1.0 (frameLoop skips paceMul while gagActive), so
-  // the raw msSeq total IS the wall-clock duration — awaits, sprite frames
-  // and the hand-synced overlays (the Door) all agree exactly.
-  const total = corvinClipTotal(c) * passes;
+  // Await the same scaled duration frameLoop renders. Otherwise the director
+  // can replace a slow clip before its final frames have reached the screen.
+  const total = corvinClipTotal(c) * paceMul(c as Clip) * passes;
   commitFor(total + 300); // session events must not flash Dante mid-reel
   // Paint frame zero immediately. Waiting for the breathing RAF observer made
   // short links inherit part of the previous clip's hold and look disconnected.
@@ -1801,7 +2164,16 @@ async function demoCorvin() {
     stage.dataset.state = "idle";
     await standUp();
     showBubble("Corvin. The Sentinel.", PRIO.NOTABLE);
-    await playCorvin(CORVIN.walkin, 2); // steps onto the stage
+    // Exercise both walk sheets with real root motion. The old reel played two
+    // cycles in place, which looked like a frozen/gliding character.
+    const reviewX = Math.max(home.ox + 8, home.cornerX - Math.min(420, home.winW));
+    stage.dataset.facing = "left";
+    startClip(CORVIN.walkout as Clip);
+    await slideFootstepWindow(reviewX, CORVIN.walkout, 125);
+    stage.dataset.facing = "right";
+    startClip(CORVIN.walkin as Clip);
+    await slideFootstepWindow(home.cornerX, CORVIN.walkin, 125);
+    delete stage.dataset.facing;
     await playCorvin(CORVIN.bow);
     await playCorvin(CORVIN.idle);
     await playCorvin(CORVIN.charge); // the blade ignites
@@ -1810,10 +2182,11 @@ async function demoCorvin() {
     await playCorvin(CORVIN.aurarise); // the shadow monarch aura
     await playCorvin(CORVIN.auraburn, 2);
     await playCorvin(CORVIN.aurasink);
-    await playCorvin(CORVIN.sit);
+    await ensureCorvinSeated("showcase story");
     showBubble("The bird thinks your code is sloppy.", PRIO.NOTABLE);
     await playCorvin(CORVIN.whetstone, 2); // storyteller strokes
     await playCorvin(CORVIN.guitar, 3); // the YouTube moment
+    await ensureCorvinStanding("showcase vigil");
     await playCorvin(CORVIN.idle); // neutral beat before the vigil
     await playCorvin(CORVIN.kneeldown);
     await playCorvin(CORVIN.eaglehop);
@@ -1821,11 +2194,11 @@ async function demoCorvin() {
     await playCorvin(CORVIN.takeoff); // Artsiv flies...
     await sleep(900);
     await playCorvin(CORVIN.landing); // ...and returns
+    await ensureCorvinSeated("showcase meditation");
     await playCorvin(CORVIN.meditate, 2);
-    stage.dataset.facing = "left";
-    await playCorvin(CORVIN.walkout, 2); // leaves the way knights do
   } finally {
-    stage.dataset.facing = "right";
+    await ensureCorvinStanding("showcase exit");
+    delete stage.dataset.facing;
     gagActive = false;
     finishSceneIdle("corvin showcase");
   }
@@ -1970,10 +2343,12 @@ async function tellStory(lines: string[], title?: string, pose?: Clip) {
   const target = pose ?? NUZZLE_LOOP;
   if (SEATED_CLIPS.has(curClip) && !SEATED_CLIPS.has(target)) {
     commitFor(2000);
+    corvinSeatedNow = false;
+    corvinQuietPose = "watch";
     curClip = CORVIN_SIT_REV; // rise first — no teleporting to his feet
     frameIdx = 0;
     afterClip = null;
-    await sleep(corvinClipTotal(CORVIN_SIT_REV));
+    await sleep(corvinClipTotal(CORVIN_SIT_REV) * paceMul(CORVIN_SIT_REV));
   }
   curClip = target;
   frameIdx = 0;
@@ -2011,8 +2386,395 @@ async function corvinScene(body: () => Promise<void>, accent?: string) {
     await standUp();
     await body();
   } finally {
+    // Every Corvin Director scene owns a standing contract. If its body used a
+    // seated prop/pose and forgot the exit link, repair it here before idle.
+    await ensureCorvinStanding("scene exit");
+    corvinQuietPose = "watch";
     gagActive = false;
     finishSceneIdle("corvin scene");
+  }
+}
+
+function beginKaelMode(mode: KaelMode): number {
+  kaelMode = mode;
+  kaelModeToken += 1;
+  dbg(`kael mode=${mode} token=${kaelModeToken} weapon=${kaelWeaponForm}`);
+  return kaelModeToken;
+}
+
+const kaelModeCurrent = (token: number, mode?: KaelMode) =>
+  isKael() && token === kaelModeToken && (!mode || kaelMode === mode);
+
+const KAEL_MODE_CANCELLED = Symbol("kael-mode-cancelled");
+type KaelModePlay = (c: CorvinClip, passes?: number) => Promise<void>;
+
+function requireKaelMode(token: number) {
+  if (!kaelModeCurrent(token)) throw KAEL_MODE_CANCELLED;
+}
+
+function startKaelModeClip(token: number, c: CorvinClip) {
+  requireKaelMode(token);
+  startClip(c as Clip);
+}
+
+async function playKaelMode(token: number, c: CorvinClip, passes = 1, commit = true) {
+  requireKaelMode(token);
+  const total = kaelClipTotal(c) * passes;
+  if (commit) commitFor(total + 300);
+  startKaelModeClip(token, c);
+  await sleep(total);
+  requireKaelMode(token);
+}
+
+function settleKaelMode(token: number, source: string) {
+  if (!kaelModeCurrent(token)) return;
+  committedUntil = 0;
+  const combat = gamingActive() && kaelWeaponForm === "sword";
+  kaelMode = combat ? "combat" : "idle";
+  startClip((combat ? KAEL.combat_idle_v2 : KAEL.breathe) as Clip);
+  dbg(`${source} -> ${kaelMode} weapon=${kaelWeaponForm}`);
+  window.setTimeout(() => {
+    if (kaelPendingStow) void ensureKaelWeaponDormant("pending stow");
+    else if (kaelPendingDraw) void ensureKaelCombatReady("pending draw");
+  }, 0);
+}
+
+async function kaelWorkSession() {
+  if (kaelWorkTask || !home || !isKael() || gagActive || introActive || away || returning) return;
+  const token = beginKaelMode("work");
+  kaelWorkTask = (async () => {
+    await playKaelMode(token, KAEL.work_enter, 1, false);
+    while (kaelModeCurrent(token, "work") && Date.now() < typingUntil && !gagActive) {
+      await playKaelMode(token, KAEL.typing_runes, 1, false);
+    }
+    if (!kaelModeCurrent(token, "work") || gagActive) return;
+    await playKaelMode(token, KAEL.work_exit, 1, false);
+    settleKaelMode(token, "kael work");
+  })().catch((error) => {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael work cancelled token=${token}`);
+  }).finally(() => {
+    kaelWorkTask = null;
+  });
+  await kaelWorkTask;
+}
+
+async function ensureKaelCombatReady(source: string): Promise<boolean> {
+  if (!isKael() || !home || away || returning) return false;
+  if (kaelWeaponForm === "sword") {
+    kaelPendingDraw = false;
+    return true;
+  }
+  if (gagActive || introActive || wandering) {
+    kaelPendingDraw = true;
+    dbg(`kael draw deferred: ${source}`);
+    return false;
+  }
+  kaelPendingDraw = false;
+  kaelPendingStow = false;
+  const token = beginKaelMode("scene");
+  gagActive = true;
+  try {
+    await playKaelMode(token, KAEL.weapon_draw_sword);
+    kaelWeaponForm = "sword";
+    return true;
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    return false;
+  } finally {
+    if (kaelModeCurrent(token)) {
+      gagActive = false;
+      kaelMode = "combat";
+      startClip(KAEL.combat_idle_v2 as Clip);
+      dbg(`kael Rift ready: ${source}`);
+    }
+  }
+}
+
+async function ensureKaelWeaponDormant(source: string): Promise<boolean> {
+  if (!isKael() || !home) return false;
+  if (kaelWeaponForm === "dormant") {
+    kaelPendingStow = false;
+    return true;
+  }
+  if (gagActive || introActive || wandering || away || returning) {
+    kaelPendingStow = true;
+    dbg(`kael stow deferred: ${source}`);
+    return false;
+  }
+  kaelPendingStow = false;
+  kaelPendingDraw = false;
+  const token = beginKaelMode("scene");
+  gagActive = true;
+  try {
+    if (kaelWeaponForm === "scythe") await playKaelMode(token, KAEL.fullweapon_v2);
+    await playKaelMode(token, REV(KAEL.weapon_draw_sword));
+    kaelWeaponForm = "dormant";
+    return true;
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    return false;
+  } finally {
+    if (kaelModeCurrent(token)) {
+      gagActive = false;
+      settleKaelMode(token, `kael stow: ${source}`);
+    }
+  }
+}
+
+async function kaelScene(body: (play: KaelModePlay, token: number) => Promise<void>, accent?: string) {
+  if (!home || gagActive || introActive || wandering || away || returning) {
+    dbg(
+      `kael scene refused: home=${!!home} gag=${gagActive} intro=${introActive} com=${committed()}`,
+    );
+    return;
+  }
+  dbg("kael scene start");
+  const token = beginKaelMode("scene");
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    if (accent) document.documentElement.style.setProperty("--accent", accent);
+    await standUp();
+    requireKaelMode(token);
+    const play: KaelModePlay = (c, passes = 1) => playKaelMode(token, c, passes);
+    await body(play, token);
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael scene cancelled token=${token}`);
+  } finally {
+    if (kaelModeCurrent(token)) {
+      delete stage.dataset.facing;
+      gagActive = false;
+      settleKaelMode(token, "kael scene");
+    }
+  }
+}
+
+async function kaelLightSuccess() {
+  await kaelScene(async (play) => {
+    await play(kaelWeaponForm === "sword" ? KAEL.combat_idle_v2 : KAEL.success_v2);
+  }, ACCENT.success);
+}
+
+async function kaelStreakScene() {
+  if (!(await ensureKaelCombatReady("streak"))) return;
+  await kaelScene(async (play) => {
+    await play(KAEL.streak_v2);
+  }, ACCENT.success);
+  if (!gamingActive()) await ensureKaelWeaponDormant("streak complete");
+}
+
+async function kaelLightError() {
+  await kaelScene(async (play) => {
+    sfxTendrilWhip();
+    await play(kaelWeaponForm === "sword" ? KAEL.combat_idle_v2 : KAEL.error_v2);
+  }, ACCENT.error);
+}
+
+async function kaelOverloadScene() {
+  await kaelScene(async (play) => {
+    sfxAura();
+    await play(KAEL.overload_v2);
+  }, ACCENT.error);
+}
+
+async function kaelGameReadyScene() {
+  await ensureKaelCombatReady("game ready");
+}
+
+async function kaelHuntLoopPass() {
+  if (!(await ensureKaelCombatReady("hunt watch"))) return;
+  await kaelScene(async (play) => {
+    await play(KAEL.combat_idle_v2, 2);
+  }, ACCENT.success);
+}
+
+async function kaelFullWeaponScene() {
+  if (!(await ensureKaelCombatReady("full weapon"))) return;
+  await kaelScene(async (play) => {
+    sfxIgnite();
+    kaelWeaponForm = "scythe";
+    await play(KAEL.fullweapon_v2);
+    kaelWeaponForm = "sword";
+  }, ACCENT.success);
+  if (!gamingActive()) await ensureKaelWeaponDormant("full weapon complete");
+}
+
+async function kaelRestScene() {
+  await kaelScene(async (play) => {
+    await play(KAEL.rest_enter);
+    await play(KAEL.rest_loop_v2, 2);
+    await play(REV(KAEL.rest_enter));
+  });
+}
+
+async function kaelSwordPlantScene(holdMs = 3 * 60_000) {
+  await kaelScene(async (play) => {
+    await play(KAEL.swordplant);
+    commitFor(holdMs + 500);
+    await sleep(holdMs);
+    await play(REV(KAEL.swordplant));
+  });
+}
+
+async function kaelRepairScene() {
+  await kaelScene(async (play) => {
+    await play(KAEL.work_enter);
+    await play(KAEL.work_loop_v2, 3);
+    await play(KAEL.work_exit);
+  });
+}
+
+async function kaelVoidStitchScene() {
+  await kaelScene(async (play) => {
+    sfxClawScrape();
+    await play(KAEL.voidstitch_alarm);
+    kaelWeaponForm = "scythe";
+    await play(KAEL.voidstitch_pull);
+    await play(KAEL.voidstitch_seal);
+    kaelWeaponForm = gamingActive() ? "sword" : "dormant";
+  }, ACCENT.error);
+}
+
+const KAEL_ORGAN_TRACK_URL = "/media/kael-passacaglia.mp3";
+
+// No плакат gif here either (user-directed, same reason as Corvin): it is a
+// Dante dance loop, and Kael's organ is already a composed 36-second piece with
+// its own track. The performance is the answer to the video.
+async function kaelVoidOrganScene(_songBeat = false) {
+  await kaelScene(async (_play, token) => {
+    const audio = new Audio(KAEL_ORGAN_TRACK_URL);
+    audio.preload = "auto";
+    audio.volume = 0.52;
+    audio.load();
+    let soundtrackRunning = false;
+    const playFor = async (c: CorvinClip, durationMs: number) => {
+      startKaelModeClip(token, c);
+      commitFor(durationMs + 400);
+      const until = performance.now() + durationMs;
+      while (performance.now() < until) {
+        requireKaelMode(token);
+        await sleep(Math.min(80, Math.max(12, until - performance.now())));
+      }
+    };
+
+    try {
+      // The first eleven seconds are a silent ritual. Music belongs to the
+      // instrument, so it cannot begin while Kael is still standing or while
+      // the keys are assembling.
+      await playFor(KAEL.organ_sense_v2, 5_000); // eye, arm segments, platypus
+      await playFor(KAEL.organ_summon_v2, 6_000); // crack -> keys -> pipes -> seated
+
+      // Start the first playing frame and the Audio element in the same event
+      // turn. From here the soundtrack clock owns every remaining boundary.
+      startKaelModeClip(token, KAEL.organ_play_v2);
+      let performanceStart = performance.now();
+      try {
+        const startAudio = audio.play();
+        performanceStart = performance.now();
+        await startAudio;
+        soundtrackRunning = true;
+        performanceStart = performance.now() - audio.currentTime * 1000;
+        dbg("kael organ soundtrack started at seated first note");
+      } catch {
+        dbg("kael organ soundtrack unavailable -> performance wall clock");
+      }
+      // His own track is registered with the OS media session; claim it so the
+      // watcher does not read it back as "music started" and stage a second beat.
+      ownedMediaUntil = Date.now() + 40_000;
+
+      const positionMs = () => {
+        if (soundtrackRunning && !audio.paused && !audio.ended) return audio.currentTime * 1000;
+        return performance.now() - performanceStart;
+      };
+      const waitUntil = async (endSec: number, fadeAudio = false) => {
+        commitFor(Math.max(0, endSec * 1000 - positionMs()) + 400);
+        while (positionMs() < endSec * 1000) {
+          requireKaelMode(token);
+          if (fadeAudio && soundtrackRunning) {
+            const left = Math.max(0, endSec * 1000 - positionMs());
+            audio.volume = 0.52 * Math.min(1, left / 4000);
+          }
+          await sleep(Math.min(80, Math.max(12, endSec * 1000 - positionMs())));
+        }
+      };
+      const playUntil = async (c: CorvinClip, endSec: number, fadeAudio = false) => {
+        startKaelModeClip(token, c);
+        await waitUntil(endSec, fadeAudio);
+      };
+
+      await waitUntil(20); // seamless living performance loop, already started
+      await playUntil(KAEL.organ_memory_v3, 28); // three knights, hands still play
+      await playUntil(KAEL.organ_platypus_v2, 32); // one pedal, one softened glance
+      await playUntil(KAEL.organ_fade_v3, 36, true); // visible dissolve + weighted rise -> idle
+    } finally {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+  }, ACCENT.success);
+}
+
+// Developer-only contact reel. It never enters the user menu and deliberately
+// excludes the already-approved 47-second organ film.
+async function kaelReviewScene() {
+  if (!home || !isKael() || gagActive || introActive || wandering || away || returning) return;
+  const token = beginKaelMode("scene");
+  const restoreWeapon: KaelWeaponForm = gamingActive() ? "sword" : "dormant";
+  gagActive = true;
+  afterClip = null;
+  try {
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+    const play: KaelModePlay = (c, passes = 1) => playKaelMode(token, c, passes);
+    await play(KAEL.idle_v2, 2);
+    await play(KAEL.scarf_adjust);
+    await play(KAEL.armcheck_v2);
+    await play(KAEL.platypus_v2);
+    await play(KAEL.work_enter);
+    await play(KAEL.work_loop_v2, 2);
+    await play(KAEL.work_exit);
+    await play(KAEL.success_v2);
+    await play(KAEL.error_v2);
+    await play(KAEL.search_v2);
+    await play(KAEL.overload_v2);
+    await play(KAEL.weapon_draw_sword);
+    kaelWeaponForm = "sword";
+    await play(KAEL.combat_idle_v2, 2);
+    await play(KAEL.streak_v2);
+    kaelWeaponForm = "scythe";
+    await play(KAEL.fullweapon_v2);
+    kaelWeaponForm = "sword";
+    await play(REV(KAEL.weapon_draw_sword));
+    kaelWeaponForm = "dormant";
+    await play(KAEL.watch_enter_v3);
+    await play(KAEL.watch_loop_v3, 2);
+    await play(REV(KAEL.watch_enter_v3));
+    await play(KAEL.rest_enter);
+    await play(KAEL.rest_loop_v2, 2);
+    await play(REV(KAEL.rest_enter));
+    await play(KAEL.night_enter_v2);
+    await play(KAEL.night_loop_v2, 2);
+    await play(KAEL.night_glance_v2);
+    await play(REV(KAEL.night_enter_v2));
+    await play(KAEL.voidstitch_alarm);
+    kaelWeaponForm = "scythe";
+    await play(KAEL.voidstitch_pull);
+    await play(KAEL.voidstitch_seal);
+    kaelWeaponForm = "dormant";
+    await play(KAEL.leave_v2);
+    await play(KAEL.return_v2);
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael review cancelled token=${token}`);
+  } finally {
+    if (kaelModeCurrent(token)) {
+      kaelWeaponForm = restoreWeapon;
+      gagActive = false;
+      settleKaelMode(token, "kael review");
+    }
   }
 }
 
@@ -2085,7 +2847,7 @@ const REV = (c: CorvinClip): Clip => ({
   settle: c.frames.length - 1,
 });
 async function corvinTakeGuitar() {
-  await playCorvin(CORVIN.sit);
+  await ensureCorvinSeated("guitar");
   await playCorvin(CORVIN.swordaway); // the blade crumbles, tip first
   await playCorvin(CORVIN.guitartake); // reaches down, lifts it, Artsiv rises
 }
@@ -2095,10 +2857,15 @@ async function corvinPutGuitar() {
 }
 
 // The плакат moment, Corvin's way: he sits and plays for the music you opened.
+// NO gif and NO song.mp3 (user-directed). Both are Dante's плакат — the gif is
+// literally a Dante dance loop — and hanging it over the Sentinel with Artsiv on
+// his shoulder looked like another character's poster had wandered in. Corvin's
+// answer to a video is the guitar itself.
 async function guitarScene(durationMs: number) {
   await corvinScene(async () => {
     await corvinTakeGuitar();
-    const passes = Math.max(2, Math.round(durationMs / corvinClipTotal(CORVIN.guitar)));
+    const passMs = corvinClipTotal(CORVIN.guitar) * paceMul(CORVIN.guitar as Clip);
+    const passes = Math.max(2, Math.round(durationMs / passMs));
     await playCorvin(CORVIN.guitar, passes);
     await corvinPutGuitar();
   });
@@ -2139,14 +2906,36 @@ async function whetstoneTaleScene() {
 // backwards; no menu or CLI action is required from ordinary users.
 let mediaWanted = 0;
 const DANTE_BORED_RIDE_AFTER_MS = 75_000;
+// The original v0.2.4 full-width bike tour remains a second, much rarer film
+// beat. It does not replace the newer boredom/fall scene above.
+const DANTE_LEGACY_MOTO_AFTER_MS = 12 * 60_000;
 function serviceMediaWish() {
   if (!mediaWanted || mediaWatching) return;
   if (Date.now() >= mediaUntil) {
     mediaWanted = 0;
+    mediaSongWanted = 0;
     return;
   }
   const forcedDemo = Date.now() < mediaDemoUntil;
+  // Stage busy — keep BOTH wishes and retry on the next heartbeat (every 3 s).
   if (!beatReady() || (gamingForeground() && !forcedDemo)) return;
+  // The YouTube moment goes first, if it is still owed. It used to be decided
+  // inline on the edge, which meant that opening a video while he was busy —
+  // mid-intro, mid-scene — dropped it for good: the edge fires once, and the
+  // heartbeats after it only ever asked for the watch. Remembering the wish is
+  // the whole fix (the same bug the music edge had).
+  if (mediaSongWanted && !forcedDemo) {
+    mediaSongWanted = 0;
+    if (Date.now() - lastWatchSongAt >= WATCH_SONG_GAP) {
+      lastWatchSongAt = Date.now();
+      markScene();
+      dbg(`the YouTube moment: ${character}`);
+      if (isCorvin()) void guitarScene(15_000);
+      else if (isKael()) void kaelVoidOrganScene(true);
+      else posterScene(15_000);
+      return; // the shared watch follows on the next heartbeat
+    }
+  }
   mediaWanted = 0;
   markScene();
   dbg("media watch served");
@@ -2157,7 +2946,7 @@ function serviceMediaWish() {
 // edge, one full-screen motorcycle pass, then a gravity-driven return. Mounting
 // happens entirely off-screen; only the finished riding silhouette is shown.
 async function danteVideoRideBeat(resumeWatch: () => boolean): Promise<boolean> {
-  if (!home || isCorvin()) return false;
+  if (!home || !isDante()) return false;
   const h = home;
   dbg("dante ride: bored line");
   showBubble("Скучно.", PRIO.MAJOR, 2400);
@@ -2176,7 +2965,7 @@ async function danteVideoRideBeat(resumeWatch: () => boolean): Promise<boolean> 
   const offRight = h.scrRight + 12;
   stage.dataset.facing = "right";
   playWalk();
-  await slideWindow(offRight, 140);
+  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE);
   dbg("dante ride: fully off-screen right");
   await sleep(550); // mounting remains fully beyond the screen edge
 
@@ -2226,13 +3015,13 @@ async function danteVideoRideBeat(resumeWatch: () => boolean): Promise<boolean> 
 }
 
 async function danteVideoRideDemo() {
-  if (!home || gagActive || isCorvin()) return;
+  if (!home || gagActive || !isDante()) return;
   gagActive = true;
   afterClip = null;
   try {
     stage.dataset.state = "idle";
     delete stage.dataset.facing;
-    posture("idle", true);
+    await ensureDantePosture(true);
     if (Math.abs(home.lastY - home.sitY) > 4) await sleep(820);
     await playDante(DANTE_WATCH_TURN);
     startClip(DANTE_WATCH_LOOP);
@@ -2248,6 +3037,133 @@ async function danteVideoRideDemo() {
   }
 }
 
+async function danteLegacyMotoWatchBeat(resumeWatch: () => boolean): Promise<boolean> {
+  if (!home || !isDante()) return false;
+  const h = home;
+  dbg("dante legacy motorcycle: leaving shared watch");
+  await playDante(reversedClip(DANTE_WATCH_TURN));
+  const rise = reversedClip(SITDOWN);
+  startClip(rise);
+  seatedNow = false;
+  postureChangedAt = Date.now();
+  moveWindowY(h.y, 900);
+  await sleep(danteClipTotal(rise) + 80);
+
+  await danteLegacyMotoTourBody();
+
+  startClip(SITDOWN);
+  posture("idle", true);
+  await sleep(danteClipTotal(SITDOWN) + 80);
+  if (!resumeWatch()) {
+    startClip(ANIMS_DANTE.idle);
+    return false;
+  }
+  await playDante(DANTE_WATCH_TURN);
+  startClip(DANTE_WATCH_LOOP);
+  dbg("dante legacy motorcycle: resumed shared watch");
+  return true;
+}
+
+// Internal QA reel: the exact automatic watch entry, living loop and exit for
+// all three companions. Character persistence is deliberately untouched.
+async function videoReviewScene() {
+  if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+  const original = character;
+  const prepare = (next: "dante" | "corvin" | "kael") => {
+    if (character === next) resetCharacterStage();
+    else switchCharacter(next, false, false);
+    gagActive = true;
+    showcasing = true;
+    afterClip = null;
+    stage.dataset.state = "idle";
+    delete stage.dataset.facing;
+  };
+  try {
+    dbg("video review: Dante");
+    prepare("dante");
+    await sleep(450);
+    await playDante(DANTE_WATCH_TURN);
+    startClip(DANTE_WATCH_LOOP);
+    await sleep(2800);
+    await playDante(reversedClip(DANTE_WATCH_TURN));
+
+    dbg("video review: Corvin");
+    prepare("corvin");
+    await sleep(450);
+    await ensureCorvinSeated("video review");
+    await playCorvin(CORVIN.watchturn);
+    startClip(CORVIN.watchloop as Clip);
+    await sleep(2800);
+    await playCorvin(REV(CORVIN.watchturn));
+    await ensureCorvinStanding("video review exit");
+
+    dbg("video review: Kael");
+    prepare("kael");
+    await sleep(450);
+    const token = beginKaelMode("watch");
+    await playKaelMode(token, KAEL.watch_enter_v3);
+    startKaelModeClip(token, KAEL.watch_loop_v3);
+    await sleep(2800);
+    await playKaelMode(token, REV(KAEL.watch_enter_v3));
+  } finally {
+    gagActive = false;
+    showcasing = false;
+    if (character === original) resetCharacterStage();
+    else switchCharacter(original, false, false);
+    if (original === "kael" && isKael() && gamingActive()) {
+      window.setTimeout(() => void ensureKaelCombatReady("video review restore"), 0);
+    }
+    dbg("video review ended; original character restored");
+  }
+}
+
+// Release QA sequence. It reuses the real scene functions and intentionally
+// does not persist temporary character switches.
+async function fullReviewScene() {
+  if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
+  const original = character;
+  const restoreGamingSword = original === "kael" && gamingActive();
+  const jump = async (next: "dante" | "corvin" | "kael") => {
+    if (character === next) resetCharacterStage();
+    else switchCharacter(next, false, false);
+    await sleep(650);
+  };
+  try {
+    dbg("full polish review: shared video scenes");
+    await videoReviewScene();
+    await sleep(1400);
+
+    dbg("full polish review: Dante old and current scenes");
+    await jump("dante");
+    await danteReviewScene();
+    await sleep(1400);
+    await danteVideoRideDemo();
+    await sleep(1400);
+    await motoScene();
+    await sleep(1400);
+
+    dbg("full polish review: Corvin scenes");
+    await jump("corvin");
+    await demoCorvin();
+    await sleep(1400);
+    await doorFightScene(true);
+    await sleep(1400);
+    await nightWatchScene(true);
+    await sleep(1400);
+
+    dbg("full polish review: Kael connected scenes");
+    await jump("kael");
+    await kaelReviewScene();
+  } finally {
+    if (character === original) resetCharacterStage();
+    else switchCharacter(original, false, false);
+    if (restoreGamingSword && isKael()) {
+      window.setTimeout(() => void ensureKaelCombatReady("full review restore"), 0);
+    }
+    dbg("full polish review ended; original character restored");
+  }
+}
+
 async function corvinVideoRiftSnackBeat(resumeWatch: () => boolean): Promise<boolean> {
   if (!home || !isCorvin()) return false;
   const h = home;
@@ -2257,32 +3173,34 @@ async function corvinVideoRiftSnackBeat(resumeWatch: () => boolean): Promise<boo
 
   delete stage.dataset.facing;
   await playCorvin(REV(CORVIN.watchturn));
-  await playCorvin(REV(CORVIN.sit));
+  await ensureCorvinStanding("media rift exit");
   await playCorvin(CORVIN.turnleft);
 
   const offRight = h.scrRight + 18;
   stage.dataset.facing = "right";
   playWalk(true);
-  await slideWindow(offRight, 260);
+  await slideFootstepWindow(offRight, CORVIN.walkout, 125);
   dbg("corvin media rift: fully inside");
   await sleep(CORVIN_MEDIA_RIFT_AWAY_MS);
 
-  stage.dataset.facing = "left";
-  playWalk(false);
-  await slideWindow(h.cornerX, 260);
+  // He returns already carrying the food in a rear three-quarter walk. These
+  // frames are authored toward screen-left, so mirroring would put his gaze and
+  // demonic arm on the wrong side.
   delete stage.dataset.facing;
-  dbg("corvin media rift: returned after 4 seconds");
+  startClip(CORVIN.bbqwalk as Clip);
+  await slideFootstepWindow(h.cornerX, CORVIN.bbqwalk, 110);
+  dbg("corvin media rift: returned after 4 seconds with barbecue in hand");
 
-  await playCorvin(CORVIN.turnback);
-  await playCorvin(CORVIN.sit);
-  await playCorvin(CORVIN.watchturn);
+  await playCorvin(CORVIN.bbqsit);
   startClip(CORVIN.barbecue as Clip);
   commitFor(CORVIN_MEDIA_EAT_MS + 800);
   dbg("corvin media rift: eating barbecue for 10 seconds");
   await sleep(CORVIN_MEDIA_EAT_MS);
+  await playCorvin(CORVIN.bbqfinish);
 
   if (!resumeWatch()) {
     await playCorvin(REV(CORVIN.watchturn));
+    await ensureCorvinStanding("media rift end");
     return false;
   }
   startClip(CORVIN.watchloop as Clip);
@@ -2299,43 +3217,69 @@ async function holdWhileWatching(ms: number, resumeWatch: () => boolean): Promis
   return resumeWatch();
 }
 
-// During a long film he occasionally settles like a tired sentinel: down on the
-// ground against the cairn, sword released beside him, Artsiv on the stones.
+// During a long film he remains turned toward the screen, but settles against a
+// stone with his sword planted and his demonic left arm resting on the hilt.
 // If playback ends, the three-minute hold releases within one second.
 async function corvinVideoSwordRestBeat(
   resumeWatch: () => boolean,
   holdMs: number,
 ): Promise<boolean> {
   if (!home || !isCorvin()) return false;
-  dbg(`corvin media cairn rest: seated for ${Math.round(holdMs / 1000)} seconds`);
+  dbg(`corvin media rear rest: seated for ${Math.round(holdMs / 1000)} seconds`);
   delete stage.dataset.facing;
-  await playCorvin(REV(CORVIN.watchturn));
-  await playCorvin(REV(CORVIN.sit));
   if (!resumeWatch()) return false;
-  await playCorvin(CORVIN.sitstone);
-  const cairnFrame = CORVIN.sitstone.frames[CORVIN.sitstone.frames.length - 1];
-  startClip({ frames: [cairnFrame], ms: 700, loop: true, settle: 0 });
+  await playCorvin(CORVIN.mediarest);
+  startClip(CORVIN.mediarestloop as Clip);
   const watchedThrough = await holdWhileWatching(holdMs, resumeWatch);
-  await playCorvin(REV(CORVIN.sitstone));
-  if (!watchedThrough || !resumeWatch()) return false;
-  await playCorvin(CORVIN.sit);
-  await playCorvin(CORVIN.watchturn);
+  await playCorvin(REV(CORVIN.mediarest));
+  if (!watchedThrough || !resumeWatch()) {
+    await playCorvin(REV(CORVIN.watchturn));
+    await ensureCorvinStanding("media rest end");
+    return false;
+  }
   startClip(CORVIN.watchloop as Clip);
-  dbg("corvin media cairn rest: resumed shared watch");
+  dbg("corvin media rear rest: resumed shared watch");
   return true;
 }
+
+// THE YOUTUBE MOMENT. corvin.ts names it outright above CORVIN.guitartake —
+// "the YouTube moment: guitar + Artsiv hovering" — and Dante's плакат is the
+// same beat in his own language. So it belongs to the media EDGE, the instant
+// the video opens, not to the end of the film: parking it on the exit meant it
+// needed a 40-second sitting and an 8-minute gap just to be seen once, and in
+// practice it never played at all.
+//
+// The watch is not lost by going first. `media_active` keeps arriving every
+// 3 s, so serviceMediaWish starts the shared watch the moment the song lets go
+// of the stage — greet the video, then sit down and watch it together.
+// Held, not decided on the spot: serviceMediaWish plays it as soon as the stage
+// is free (see there). The edge only records that it is owed.
+let lastWatchSongAt = 0;
+let mediaSongWanted = 0;
+const WATCH_SONG_GAP = 8 * 60_000;
 
 async function mediaWatchScene() {
   const forcedDemo = Date.now() < mediaDemoUntil;
   if (!home || gagActive || mediaWatching || (gamingForeground() && !forcedDemo)) return;
+  const watchingCharacter = character;
+  const watchStartedAt = Date.now();
   const watchingCorvin = isCorvin();
+  const watchingKael = isKael();
+  const watchingDante = isDante();
   mediaWatching = true;
   gagActive = true;
+  const kaelWatchToken = watchingKael ? beginKaelMode("watch") : 0;
   afterClip = null;
   let corvinWatchingPose = watchingCorvin;
-  let danteWatchingPose = !watchingCorvin;
+  let kaelWatchingPose = watchingKael;
+  let danteWatchingPose = watchingDante;
   let danteRideDone = false;
   const danteRideAt = Date.now() + DANTE_BORED_RIDE_AFTER_MS;
+  let danteLegacyMotoDone = false;
+  const danteLegacyMotoAt = Date.now() + DANTE_LEGACY_MOTO_AFTER_MS;
+  let kaelScreenGlanceDone = false;
+  const kaelScreenGlanceAt = Date.now() +
+    (forcedDemo ? KAEL_MEDIA_GLANCE_DEMO_AFTER_MS : KAEL_MEDIA_GLANCE_AFTER_MS);
   let corvinRiftDone = false;
   const corvinRiftAt = Date.now() + (forcedDemo ? CORVIN_MEDIA_RIFT_DEMO_AFTER_MS : CORVIN_MEDIA_RIFT_AFTER_MS);
   let corvinSwordRestDone = false;
@@ -2354,14 +3298,19 @@ async function mediaWatchScene() {
     delete stage.dataset.facing;
     document.documentElement.style.setProperty("--accent", ACCENT.idle);
 
-    if (watchingCorvin) {
+    if (watchingKael) {
+      delete stage.dataset.facing;
+      await playKaelMode(kaelWatchToken, KAEL.watch_enter_v3);
+      startKaelModeClip(kaelWatchToken, KAEL.watch_loop_v3);
+    } else if (watchingCorvin) {
       // Corvin's media watch uses true back-left frames. Do not mirror them.
       delete stage.dataset.facing;
+      await ensureCorvinStanding("media watch entry");
+      await ensureCorvinSeated("media watch");
       await playCorvin(CORVIN.watchturn);
       startClip(CORVIN.watchloop as Clip);
     } else {
-      posture("idle", true);
-      if (home && Math.abs(home.lastY - home.sitY) > 4) await sleep(820);
+      await ensureDantePosture(true);
       await playDante(DANTE_WATCH_TURN);
       startClip(DANTE_WATCH_LOOP);
     }
@@ -2369,7 +3318,7 @@ async function mediaWatchScene() {
     while (
       Date.now() < mediaUntil &&
       (forcedDemo || !gamingForeground()) &&
-      isCorvin() === watchingCorvin
+      character === watchingCharacter
     ) {
       if (watchingCorvin && !corvinRiftDone && Date.now() >= corvinRiftAt) {
         corvinRiftDone = true;
@@ -2402,34 +3351,66 @@ async function mediaWatchScene() {
           Math.random() * (CORVIN_MEDIA_LINE_MAX_MS - CORVIN_MEDIA_LINE_MIN_MS);
         continue;
       }
-      if (!watchingCorvin && !danteRideDone && Date.now() >= danteRideAt) {
+      if (watchingDante && !danteRideDone && Date.now() >= danteRideAt) {
         danteRideDone = true;
         danteWatchingPose = await danteVideoRideBeat(
           () =>
             Date.now() < mediaUntil &&
             (forcedDemo || !gamingForeground()) &&
-            !isCorvin(),
+            isDante(),
         );
+        continue;
+      }
+      if (watchingDante && !danteLegacyMotoDone && Date.now() >= danteLegacyMotoAt) {
+        danteLegacyMotoDone = true;
+        danteWatchingPose = await danteLegacyMotoWatchBeat(
+          () =>
+            Date.now() < mediaUntil &&
+            (forcedDemo || !gamingForeground()) &&
+            isDante(),
+        );
+        if (!danteWatchingPose) break;
+        continue;
+      }
+      if (watchingKael && kaelWatchingPose && !kaelScreenGlanceDone && Date.now() >= kaelScreenGlanceAt) {
+        kaelScreenGlanceDone = true;
+        await playKaelMode(kaelWatchToken, KAEL.screen_glance);
+        if (!kaelModeCurrent(kaelWatchToken, "watch")) break;
+        startKaelModeClip(kaelWatchToken, KAEL.watch_loop_v3);
+        continue;
+      }
+      if (watchingKael && kaelWatchingPose) {
+        commitFor(1500);
+        await sleep(1000);
         continue;
       }
       commitFor(1500);
       await sleep(1000);
     }
 
-    if (watchingCorvin && corvinWatchingPose) {
+    if (watchingKael && kaelWatchingPose && kaelModeCurrent(kaelWatchToken, "watch")) {
+      delete stage.dataset.facing;
+      await playKaelMode(kaelWatchToken, REV(KAEL.watch_enter_v3));
+      delete stage.dataset.facing;
+    } else if (watchingCorvin && corvinWatchingPose) {
       delete stage.dataset.facing;
       await playCorvin(REV(CORVIN.watchturn));
+      await ensureCorvinStanding("media watch exit");
       delete stage.dataset.facing;
     } else if (danteWatchingPose) {
       await playDante(reversedClip(DANTE_WATCH_TURN));
     }
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael media watch cancelled token=${kaelWatchToken}`);
   } finally {
+    const staleKaelWatch = watchingKael && !kaelModeCurrent(kaelWatchToken);
     mediaWatching = false;
     mediaDemoUntil = 0;
-    if (watchingCorvin) delete stage.dataset.facing;
+    if (!staleKaelWatch && (watchingCorvin || watchingKael)) delete stage.dataset.facing;
     // A closed video or interrupted beat must never strand the companion in a
     // portal, above the taskbar, or between two physical window positions.
-    if (home) {
+    if (home && !staleKaelWatch) {
       cancelAnimationFrame(winTween);
       winTween = 0;
       home.lastX = home.cornerX;
@@ -2438,9 +3419,12 @@ async function mediaWatchScene() {
         .setPosition(new PhysicalPosition(home.cornerX, home.y))
         .catch(() => {});
     }
-    gagActive = false;
-    finishSceneIdle("media watch");
-    dbg("media watch ended");
+    if (!staleKaelWatch) {
+      gagActive = false;
+      if (watchingKael) settleKaelMode(kaelWatchToken, "media watch");
+      else finishSceneIdle("media watch");
+    }
+    dbg(`media watch ended after ${Math.round((Date.now() - watchStartedAt) / 1000)}s`);
   }
 }
 
@@ -2489,6 +3473,12 @@ function maybeDailyRitual() {
     } else {
       void magicscanScene(); // midday: sweep the perimeter
     }
+  } else if (isKael()) {
+    // Kael had no branch at all and fell into Dante's, where demoSeated bails
+    // on !isDante(). The day was still stamped and the scene gap still taken,
+    // so his morning ceremony rendered NOTHING and could never retry.
+    if (part === "night") void kaelRestScene();
+    else void kaelRepairScene();
   } else {
     // Dante: a stretch and a word, then back to it.
     demoSeated(WAKEUP, part === "morning" ? "Morning." : "Alright. Where were we?");
@@ -2652,7 +3642,8 @@ async function nightSongScene() {
       stopMelody = playNightMelody(NIGHT_SONG_MS);
     }
     try {
-      const passes = Math.max(2, Math.round(NIGHT_SONG_MS / corvinClipTotal(CORVIN.guitar)));
+      const passMs = corvinClipTotal(CORVIN.guitar) * paceMul(CORVIN.guitar as Clip);
+      const passes = Math.max(2, Math.round(NIGHT_SONG_MS / passMs));
       await playCorvin(CORVIN.guitar, passes); // he's already holding it
     } finally {
       // A soft fade instead of a hard cut — it's a ritual, not an alarm.
@@ -2671,11 +3662,7 @@ async function nightSongScene() {
     // Song over: the guitar goes back to the floor, the sword reassembles out
     // of the motes, and he rises. Only then does the shadow come out.
     await corvinPutGuitar();
-    commitFor(2000);
-    curClip = CORVIN_SIT_REV;
-    frameIdx = 0;
-    afterClip = null;
-    await sleep(corvinClipTotal(CORVIN_SIT_REV));
+    await ensureCorvinStanding("night song aura");
     // After the song: the shadow rises (he lets it out once a night), and half
     // a minute later — one quiet, bitter line. No story, no explanation.
     await playCorvin(CORVIN.aurarise);
@@ -2702,6 +3689,7 @@ async function nightSongScene() {
 // without waiting hours) — same mechanics as Corvin's: once per day per hour,
 // presence-gated, remembered in story.json.
 const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
+  { h: 10, name: "coffee", run: () => void demoSeated(idleClip("d_coffee")) },
   { h: 12, name: "coinflip", run: () => void coinFlourish() },
   { h: 14, name: "swordspin", run: () => void demoSpin() },
   { h: 15, name: "pizza", run: () => demoSeated(PIZZA, "Finally.") },
@@ -2712,8 +3700,22 @@ const DANTE_DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
 ];
 
 const NIGHT_WATCH_FIRST_REST_MS = 10 * 60_000;
-const NIGHT_WATCH_STONE_TOSS_MS = 60_000;
+const CORVIN_NIGHT_STONE_TOSSES = 3;
 const NIGHT_WATCH_FINAL_REST_MS = 7 * 60_000;
+const CORVIN_STONE_TOSS_CATCH: Clip = {
+  // Reusing the source arc in reverse keeps one pebble on one physical path.
+  frames: [
+    ...CORVIN.stonetoss.frames.slice(0, 10),
+    ...CORVIN.stonetoss.frames.slice(0, 9).reverse(),
+  ],
+  ms: 180,
+  msSeq: [
+    260, 190, 180, 170, 170, 180, 200, 230, 280, 430,
+    280, 230, 200, 180, 170, 170, 180, 220, 360,
+  ],
+  loop: false,
+  settle: 18,
+};
 const CORVIN_NIGHT_GUARD_LINES = [
   "Ты всё ещё не спишь. Тогда я останусь на страже.",
   "Ночь глубже, чем кажется. Работай. Я рядом.",
@@ -2735,6 +3737,18 @@ async function holdNightLoop(c: Clip, ms: number) {
   startClip(c);
   commitFor(ms + 750);
   await sleep(ms);
+}
+
+async function holdKaelModeLoop(token: number, c: CorvinClip, ms: number) {
+  if (ms <= 0) return;
+  startKaelModeClip(token, c);
+  commitFor(ms + 750);
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    requireKaelMode(token);
+    await sleep(Math.min(250, until - Date.now()));
+  }
+  requireKaelMode(token);
 }
 
 async function danteNightWatch(demo: boolean) {
@@ -2765,7 +3779,6 @@ async function danteNightWatch(demo: boolean) {
 
 async function corvinNightWatch(demo: boolean) {
   const firstRest = demo ? 3_000 : NIGHT_WATCH_FIRST_REST_MS;
-  const tossFor = demo ? 6_000 : NIGHT_WATCH_STONE_TOSS_MS;
   const finalRest = demo ? 3_000 : NIGHT_WATCH_FINAL_REST_MS;
   await playCorvin(CORVIN.sitstone);
   await playCorvin(CORVIN.nightdoze);
@@ -2779,8 +3792,12 @@ async function corvinNightWatch(demo: boolean) {
     showBubble(line, PRIO.NOTABLE, 6500, false);
     await speakLine(line);
     dbg(`night watch corvin: user still working — ${line}`);
-    await holdNightLoop(CORVIN.stonetoss as Clip, tossFor);
-    dbg("night watch corvin: final pebble toss, drop begins");
+    for (let toss = 1; toss <= CORVIN_NIGHT_STONE_TOSSES; toss += 1) {
+      dbg(`night watch corvin: pebble toss ${toss}/${CORVIN_NIGHT_STONE_TOSSES}`);
+      await playCorvin(CORVIN_STONE_TOSS_CATCH);
+      if (toss < CORVIN_NIGHT_STONE_TOSSES) await sleep(demo ? 180 : 420);
+    }
+    dbg("night watch corvin: three catches complete, drop begins");
     await playCorvin(CORVIN.stonedrop);
     dbg("night watch corvin: pebble dropped, guard resumes");
   } else {
@@ -2793,10 +3810,31 @@ async function corvinNightWatch(demo: boolean) {
   await playCorvin(REV(CORVIN.sitstone));
 }
 
+async function kaelNightWatch(demo: boolean, token: number) {
+  const firstRest = demo ? 3_000 : NIGHT_WATCH_FIRST_REST_MS;
+  const finalRest = demo ? 3_000 : NIGHT_WATCH_FINAL_REST_MS;
+  await playKaelMode(token, KAEL.night_enter_v2);
+  dbg("night watch kael: black mirror opened");
+  await holdKaelModeLoop(token, KAEL.night_loop_v2, firstRest);
+
+  const working = demo || nightUserWorking();
+  if (working) {
+    dbg("night watch kael: user still working, quiet glance");
+    await playKaelMode(token, KAEL.night_glance_v2);
+  } else {
+    dbg("night watch kael: room quiet, mirror holds");
+  }
+
+  await holdKaelModeLoop(token, KAEL.night_loop_v2, finalRest);
+  await playKaelMode(token, REV(KAEL.night_enter_v2));
+}
+
 async function nightWatchScene(demo = false) {
   if (!home || gagActive || showcasing || introActive || wandering || away || returning) return;
   const h = home;
   const corvin = isCorvin();
+  const kael = isKael();
+  const kaelNightToken = kael ? beginKaelMode("night") : 0;
   gagActive = true;
   afterClip = null;
   try {
@@ -2804,18 +3842,26 @@ async function nightWatchScene(demo = false) {
     delete stage.dataset.facing;
     document.documentElement.style.setProperty("--accent", ACCENT.idle);
     await standUp();
-    dbg(`night watch start: ${corvin ? "corvin" : "dante"}${demo ? " (demo)" : ""}`);
-    if (corvin) await corvinNightWatch(demo);
+    dbg(`night watch start: ${corvin ? "corvin" : kael ? "kael" : "dante"}${demo ? " (demo)" : ""}`);
+    if (kael) await kaelNightWatch(demo, kaelNightToken);
+    else if (corvin) await corvinNightWatch(demo);
     else await danteNightWatch(demo);
+  } catch (error) {
+    if (error !== KAEL_MODE_CANCELLED) throw error;
+    dbg(`kael night watch cancelled token=${kaelNightToken}`);
   } finally {
-    cancelAnimationFrame(winTween);
-    winTween = 0;
-    h.lastX = h.cornerX;
-    h.lastY = h.y;
-    await h.win.setPosition(new PhysicalPosition(h.cornerX, h.y)).catch(() => {});
-    delete stage.dataset.facing;
-    gagActive = false;
-    finishSceneIdle("night watch");
+    const staleKaelNight = kael && !kaelModeCurrent(kaelNightToken);
+    if (!staleKaelNight) {
+      cancelAnimationFrame(winTween);
+      winTween = 0;
+      h.lastX = h.cornerX;
+      h.lastY = h.y;
+      await h.win.setPosition(new PhysicalPosition(h.cornerX, h.y)).catch(() => {});
+      delete stage.dataset.facing;
+      gagActive = false;
+      if (kael) settleKaelMode(kaelNightToken, "night watch");
+      else finishSceneIdle("night watch");
+    }
   }
 }
 
@@ -2828,6 +3874,26 @@ function requiemPendingNow(at = new Date()) {
   );
 }
 
+function nightWatchWindowNow(at = new Date()) {
+  const h = at.getHours();
+  const minute = at.getMinutes();
+  // 00:40 is the appointment. A companion launched late must still notice the
+  // same night, so keep a catch-up window through 04:59; the 12h story guard
+  // below guarantees that this remains one scene, never an hourly repeat.
+  return (h === 0 && minute >= 40) || (h >= 1 && h < 5);
+}
+
+function hourSlotPlayed(key: string): boolean {
+  return Boolean(story.s.gags.lastHourSlots?.[key]);
+}
+
+function rememberHourSlot(key: string) {
+  story.s.gags.lastHourSlots ??= {};
+  story.s.gags.lastHourSlots[key] = Date.now();
+  story.s.gags.lastHourSlot = key; // keep older builds able to read the newest mark
+  story.save();
+}
+
 function scheduleMidnight() {
   window.setInterval(() => {
     if (!home) return;
@@ -2835,47 +3901,70 @@ function scheduleMidnight() {
     const h = now.getHours();
     const minute = now.getMinutes();
     const requiemWindow = h === 23 && minute >= 40;
-    const nightWatchWindow = h === 0 && minute >= 40 && minute < 50;
+    const nightWatchWindow = nightWatchWindowNow(now);
     const busy =
-      gagActive || showcasing || introActive || wandering || away || returning || quietNow();
+      gagActive || showcasing || introActive || wandering || returning || committed() || quietNow();
     if (busy) return;
-    // The 23:40 requiem owns the last twenty minutes of the day; every other
-    // ritual keeps its ten-minute window at the top of its hour, except the
-    // shared 00:40 night watch which gets its own retry window.
-    if (minute >= 10 && !requiemWindow && !nightWatchWindow) return;
+    // Rituals used to be silently LOST whenever he happened to be off-screen:
+    // `away` aborted the tick, the ten-minute window ran out, and the slot was
+    // never stamped or played. He leaves after 15 quiet minutes, so this ate
+    // daily moments constantly. If a ritual window is open and somebody is
+    // actually at the machine, walk him back in and let the next tick run it.
+    if (away) {
+      const dailyWindow = isDante()
+        ? DANTE_DAILY_HOURS.some((slot) => slot.h === h)
+        : isCorvin()
+          ? DAILY_HOURS.some((slot) => slot.h === h) || h === 0 || h === 1 || h === 13 || h === 17
+          : false;
+      const inWindow = dailyWindow || requiemWindow || nightWatchWindow;
+      const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
+      if (inWindow && Date.now() - seen <= 30 * 60_000) {
+        dbg("ritual window while off-screen -> walking back in first");
+        void returnScene();
+      }
+      return;
+    }
+    // Hour-table appointments remain due until the hour ends. A scene that owns
+    // the stage at :00 delays the appointment; it never deletes it at :10.
+    // The 23:40 requiem still owns the final twenty minutes of the day.
     if (nightWatchWindow) {
       const last = story.s.gags.lastNightWatchAt ?? 0;
-      if (Date.now() - last < 12 * 3_600_000) return;
-      story.s.gags.lastNightWatchAt = Date.now();
-      story.save();
-      markScene();
-      dbg(`night watch ritual (00:40, ${isCorvin() ? "corvin" : "dante"})`);
-      void nightWatchScene();
-      return;
+      if (Date.now() - last >= 12 * 3_600_000 && sceneAllowed()) {
+        story.s.gags.lastNightWatchAt = Date.now();
+        story.save();
+        markScene();
+        dbg(`night watch ritual (00:40, ${isCorvin() ? "corvin" : isKael() ? "kael" : "dante"})`);
+        void nightWatchScene();
+        return;
+      }
     }
     // Dante's day: the hour table is all he needs — the rituals below are
     // Corvin's alone.
-    if (!isCorvin()) {
+    if (isDante()) {
       const slot = DANTE_DAILY_HOURS.find((s) => s.h === h);
       if (slot) {
         if (gamingActive()) return; // in a game the session clocks own the stage
         if (!sceneAllowed()) return; // retry next minute instead of stacking scenes
-        const key = `${dateKey()}-${h}`;
-        if (story.s.gags.lastHourSlot === key) return;
+        // Keyed by CHARACTER too: both hour tables share this one field and
+        // overlap at 12/14/15/17/19/21/22, so switching companions inside an
+        // hour made the second one skip his slot for the whole day.
+        const key = `${character}-${dateKey()}-${h}`;
+        if (hourSlotPlayed(key)) return;
         const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
         if (Date.now() - seen > 30 * 60_000) return; // nobody's watching
         markScene();
-        story.s.gags.lastHourSlot = key;
-        story.save();
+        rememberHourSlot(key);
         dbg(`dante daily hour ${h}:00 -> ${slot.name}`);
         slot.run();
       }
       return;
     }
+    if (isKael()) return;
     // 17:00 — the Breach, hard (user-directed). The day's one real fight.
     if (h === 17) {
       const last = story.s.gags.lastBreachAt ?? 0;
       if (Date.now() - last < 6 * 3_600_000) return;
+      if (!sceneAllowed()) return;
       dbg("breach ritual (17:00)");
       void breachScene(); // it stamps lastBreachAt itself
       return;
@@ -2887,12 +3976,13 @@ function scheduleMidnight() {
     // requiem check ever ran.
     const slot = DAILY_HOURS.find((s) => s.h === h);
     if (slot && !requiemWindow && !gamingActive()) {
-      const key = `${dateKey()}-${h}`;
+      // Keyed by character — see the Dante table above.
+      const key = `${character}-${dateKey()}-${h}`;
       const seen = Math.max(lastActivity, lastTypingEventAt, gamingUntil - 60_000);
-      // Presence-gated and once per day; a miss just skips (retries next minute).
-      if (story.s.gags.lastHourSlot !== key && Date.now() - seen <= 30 * 60_000) {
-        story.s.gags.lastHourSlot = key;
-        story.save();
+      // Presence-gated and once per day; a busy stage retries inside the hour.
+      if (!hourSlotPlayed(key) && Date.now() - seen <= 30 * 60_000 && sceneAllowed()) {
+        markScene();
+        rememberHourSlot(key);
         dbg(`daily hour ${h}:00 -> ${slot.name}`);
         slot.run();
         return; // the slot owns this tick — nothing else may double-fire
@@ -2903,8 +3993,10 @@ function scheduleMidnight() {
     if (requiemWindow) {
       const last = story.s.gags.lastRequiemAt ?? 0;
       if (Date.now() - last < 12 * 3_600_000) return; // once a night
+      if (!sceneAllowed()) return;
       story.s.gags.lastRequiemAt = Date.now();
       story.save();
+      markScene();
       dbg("requiem ritual (23:40)");
       void requiemScene();
       return;
@@ -2913,8 +4005,10 @@ function scheduleMidnight() {
     if (h === 0) {
       const last = story.s.gags.lastNightSongAt ?? 0;
       if (Date.now() - last < 12 * 3_600_000) return; // once per night
+      if (!sceneAllowed()) return;
       story.s.gags.lastNightSongAt = Date.now();
       story.save();
+      markScene();
       dbg("midnight ritual");
       void nightSongScene();
       return;
@@ -2924,12 +4018,14 @@ function scheduleMidnight() {
     if (h === 1 || h === 13) {
       const last = story.s.gags.lastBreakdownAt ?? 0;
       if (Date.now() - last < 6 * 3_600_000) return;
+      if (!sceneAllowed()) return;
       story.s.gags.lastBreakdownAt = Date.now();
       story.save();
+      markScene();
       dbg(`breakdown ritual (${h}:00)`);
       void breakdownScene();
     }
-  }, 60_000);
+  }, 15_000);
 }
 
 // ---- The breakdown (01:00 and 13:00) ----------------------------------------
@@ -3062,7 +4158,8 @@ async function rainScene(ms = 22_000) {
   await corvinScene(async () => {
     const stopWind = playWind();
     try {
-      const passes = Math.max(2, Math.round(ms / corvinClipTotal(CORVIN.rain)));
+      const passMs = corvinClipTotal(CORVIN.rain) * paceMul(CORVIN.rain as Clip);
+      const passes = Math.max(2, Math.round(ms / passMs));
       await playCorvin(CORVIN.rain, passes);
     } finally {
       stopWind();
@@ -3126,6 +4223,17 @@ const CAIRN_EVERY = 30 * 86_400_000; // once a month
 function griefUrge(): (() => Promise<void>) | null {
   const now = Date.now();
   const g = story.s.gags;
+  // An unset clock meant 1970, so on a FRESH INSTALL the monthly cairn fired
+  // within the first minute and the weekly letter on the very next tick — the
+  // two rarest, most private scenes both spent before the user had any
+  // relationship with him at all. Anchor an unset clock to the install
+  // instant, the same way the pizza payoff already does.
+  if (g.lastCairnAt === undefined || g.lastLetterAt === undefined) {
+    const base = story.s.installedAt || now;
+    g.lastCairnAt ??= base;
+    g.lastLetterAt ??= base;
+    story.save();
+  }
   if (now - (g.lastCairnAt ?? 0) > CAIRN_EVERY) {
     g.lastCairnAt = now;
     story.save();
@@ -3144,16 +4252,14 @@ function griefUrge(): (() => Promise<void>) | null {
 // ---- The fight line ---------------------------------------------------------
 // A block instead of a hit: sparks, boots skidding, back into guard.
 function parryBeat() {
-  stage.dataset.state = "error";
-  document.documentElement.style.setProperty("--accent", ACCENT.error);
-  commitFor(corvinClipTotal(CORVIN.parry) * paceMul() + 300);
-  curClip = CORVIN.parry as Clip;
-  frameIdx = 0;
-  afterClip = null; // a stale idle callback must not fire mid-reaction
-  window.setTimeout(() => {
-    sfxGunshot(); // the steel-on-steel crack lands on the spark frame
-    shake(220);
-  }, 170 * paceMul());
+  void corvinScene(async () => {
+    stage.dataset.state = "error";
+    window.setTimeout(() => {
+      sfxGunshot();
+      shake(220);
+    }, 170 * paceMul());
+    await playCorvin(CORVIN.parry);
+  }, ACCENT.error);
 }
 
 // Every big fight now ends with him breathing — this is what gives them weight.
@@ -3365,13 +4471,11 @@ function reactErrorCorvin() {
     return;
   }
   if (pick === "damage") {
-    stage.dataset.state = "error";
-    afterClip = null; // a stale idle callback must not fire mid-reaction
-    document.documentElement.style.setProperty("--accent", ACCENT.error);
-    commitFor(corvinClipTotal(CORVIN.damage) * paceMul() + 300);
-    curClip = CORVIN.damage as Clip;
-    frameIdx = 0;
-    sfxIgnite();
+    void corvinScene(async () => {
+      stage.dataset.state = "error";
+      sfxIgnite();
+      await playCorvin(CORVIN.damage);
+    }, ACCENT.error);
   }
 }
 
@@ -3391,8 +4495,10 @@ const CORVIN_SIT_REV: Clip = {
 let corvinIdleTimer = 0;
 let corvinQuietPose = "watch";
 let corvinQuietRuns = 0;
+let corvinSeatedNow = false;
+let corvinPostureTransition: "seated" | "standing" | null = null;
 function corvinSetQuiet(pose: string) {
-  const wasSeated = corvinQuietPose === "meditate" || corvinQuietPose === "whet";
+  const wasSeated = corvinSeatedNow;
   const willSit = pose === "meditate" || pose === "whet";
   corvinQuietPose = pose;
   const target = (): Clip =>
@@ -3401,23 +4507,52 @@ function corvinSetQuiet(pose: string) {
     : pose === "whet" ? (CORVIN.whetstone as Clip)
     : ANIMS.idle;
   if (willSit && !wasSeated) {
-    curClip = CORVIN.sit as Clip; // ease down first
-    frameIdx = 0;
-    afterClip = () => {
-      curClip = target();
-      frameIdx = 0;
-    };
+    corvinSeatedNow = true;
+    corvinPostureTransition = "seated";
+    commitFor(corvinClipTotal(CORVIN.sit) * paceMul(CORVIN.sit as Clip) + 200);
+    startClip(CORVIN.sit as Clip, () => {
+      if (corvinPostureTransition === "seated") corvinPostureTransition = null;
+      if (isCorvin()) startClip(target());
+    });
   } else if (!willSit && wasSeated) {
-    curClip = CORVIN_SIT_REV; // stand back up, reversed sit
-    frameIdx = 0;
-    afterClip = () => {
-      curClip = target();
-      frameIdx = 0;
-    };
+    corvinSeatedNow = false;
+    corvinPostureTransition = "standing";
+    commitFor(corvinClipTotal(CORVIN_SIT_REV) * paceMul(CORVIN_SIT_REV) + 200);
+    startClip(CORVIN_SIT_REV, () => {
+      if (corvinPostureTransition === "standing") corvinPostureTransition = null;
+      if (isCorvin()) startClip(target());
+    });
   } else {
-    curClip = target();
-    frameIdx = 0;
-    afterClip = null;
+    corvinSeatedNow = willSit;
+    startClip(target());
+  }
+}
+
+async function ensureCorvinSeated(source: string) {
+  while (isCorvin() && corvinPostureTransition !== null) await sleep(25);
+  if (!isCorvin() || corvinSeatedNow) return;
+  dbg(`corvin posture: standing -> seated (${source})`);
+  corvinSeatedNow = true;
+  corvinPostureTransition = "seated";
+  try {
+    await playCorvin(CORVIN.sit);
+  } finally {
+    if (corvinPostureTransition === "seated") corvinPostureTransition = null;
+  }
+}
+
+async function ensureCorvinStanding(source: string) {
+  while (isCorvin() && corvinPostureTransition !== null) await sleep(25);
+  const quietSeat = corvinQuietPose === "meditate" || corvinQuietPose === "whet";
+  if (!isCorvin() || (!corvinSeatedNow && !quietSeat && !SEATED_CLIPS.has(curClip))) return;
+  dbg(`corvin posture: seated -> standing (${source})`);
+  corvinSeatedNow = false;
+  corvinQuietPose = "watch";
+  corvinPostureTransition = "standing";
+  try {
+    await playCorvin(CORVIN_SIT_REV);
+  } finally {
+    if (corvinPostureTransition === "standing") corvinPostureTransition = null;
   }
 }
 // ---- The Director (src/director.ts): the local brain --------------------------
@@ -3426,6 +4561,7 @@ function corvinSetQuiet(pose: string) {
 // local, learns from your reaction, state persisted in story.json.
 const director = new Director(story.s.director);
 const danteDirector = new Director(story.s.danteDirector, DANTE_ACTIONS);
+const kaelDirector = new Director(story.s.kaelDirector, KAEL_ACTIONS);
 function saveDirector() {
   story.s.director = director.st;
   story.save();
@@ -3433,6 +4569,144 @@ function saveDirector() {
 function saveDanteDirector() {
   story.s.danteDirector = danteDirector.st;
   story.save();
+}
+function saveKaelDirector() {
+  story.s.kaelDirector = kaelDirector.st;
+  story.save();
+}
+
+const CORVIN_HARD_PLAN_CYCLE_MS = CORVIN_HARD_PLAN_CYCLE_SEC * 1000;
+const CORVIN_HARD_PLAN_GUARD_MS = 75_000;
+const CORVIN_HARD_PLAN_TICK_MS = 1000;
+const CORVIN_HARD_PLAN_RECOVERY_GAP_MS = 120_000;
+let corvinPlanStartedAt = Date.now();
+let corvinPlanCursor = 0;
+let lastCorvinHardBeatAt = 0;
+
+function resetCorvinHardPlan(source: string) {
+  corvinPlanStartedAt = Date.now();
+  corvinPlanCursor = 0;
+  lastCorvinHardBeatAt = 0;
+  dbg(`corvin hard plan reset: ${source}`);
+}
+
+function corvinPlanBeatAt(cursor: number): number {
+  const cycle = Math.floor(cursor / CORVIN_HARD_PLAN.length);
+  const beat = CORVIN_HARD_PLAN[cursor % CORVIN_HARD_PLAN.length];
+  return corvinPlanStartedAt + cycle * CORVIN_HARD_PLAN_CYCLE_MS + beat.atSec * 1000;
+}
+
+function dueCorvinHardBeat(now: number): { id: string; cursorAfter: number } | null {
+  if (corvinPlanBeatAt(corvinPlanCursor) > now) return null;
+  return {
+    id: CORVIN_HARD_PLAN[corvinPlanCursor % CORVIN_HARD_PLAN.length].id,
+    cursorAfter: corvinPlanCursor + 1,
+  };
+}
+
+function runCorvinHardPlan(now = Date.now()): boolean {
+  if (now - lastCorvinHardBeatAt < CORVIN_HARD_PLAN_RECOVERY_GAP_MS) return false;
+  const due = dueCorvinHardBeat(now);
+  if (!due || !runCorvinClock(true, due.id)) return false;
+  corvinPlanCursor = due.cursorAfter;
+  lastCorvinHardBeatAt = now;
+  dbg(`corvin hard beat: ${due.id} cursor=${corvinPlanCursor}`);
+  return true;
+}
+
+const DANTE_HARD_PLAN_CYCLE_MS = DANTE_HARD_PLAN_CYCLE_SEC * 1000;
+const DANTE_HARD_PLAN_GUARD_MS = 75_000;
+const DANTE_DIRECTOR_TICK_MS = 1000;
+const DANTE_HARD_PLAN_RECOVERY_GAP_MS = 90_000;
+const DANTE_AMBIENT_MIN_MS = 45_000;
+const DANTE_AMBIENT_MAX_MS = 90_000;
+let dantePlanStartedAt = Date.now();
+let dantePlanCursor = 0;
+let lastDanteHardBeatAt = 0;
+let danteAmbientDueAt = Date.now() + DANTE_AMBIENT_MIN_MS;
+
+const nextDanteAmbientDelay = () =>
+  DANTE_AMBIENT_MIN_MS + Math.random() * (DANTE_AMBIENT_MAX_MS - DANTE_AMBIENT_MIN_MS);
+
+function resetDanteHardPlan(source: string) {
+  const now = Date.now();
+  dantePlanStartedAt = now;
+  dantePlanCursor = 0;
+  lastDanteHardBeatAt = 0;
+  danteAmbientDueAt = now + nextDanteAmbientDelay();
+  dbg(`dante hard plan reset: ${source}`);
+}
+
+function dantePlanBeatAt(cursor: number): number {
+  const cycle = Math.floor(cursor / DANTE_HARD_PLAN.length);
+  const beat = DANTE_HARD_PLAN[cursor % DANTE_HARD_PLAN.length];
+  return dantePlanStartedAt + cycle * DANTE_HARD_PLAN_CYCLE_MS + beat.atSec * 1000;
+}
+
+function dueDanteHardBeat(now: number): { id: string; cursorAfter: number } | null {
+  if (dantePlanBeatAt(dantePlanCursor) > now) return null;
+  return {
+    id: DANTE_HARD_PLAN[dantePlanCursor % DANTE_HARD_PLAN.length].id,
+    cursorAfter: dantePlanCursor + 1,
+  };
+}
+
+function runDanteHardPlan(now = Date.now()): boolean {
+  if (now - lastDanteHardBeatAt < DANTE_HARD_PLAN_RECOVERY_GAP_MS) return false;
+  const due = dueDanteHardBeat(now);
+  if (!due || !runDanteClock(true, due.id)) return false;
+  dantePlanCursor = due.cursorAfter;
+  lastDanteHardBeatAt = now;
+  dbg(`dante hard beat: ${due.id} cursor=${dantePlanCursor}`);
+  return true;
+}
+
+const KAEL_HARD_PLAN_CYCLE_MS = KAEL_HARD_PLAN_CYCLE_SEC * 1000;
+const KAEL_HARD_PLAN_GUARD_MS = 75_000;
+const KAEL_DIRECTOR_TICK_MS = 1000;
+const KAEL_HARD_PLAN_RECOVERY_GAP_MS = 120_000;
+const KAEL_AMBIENT_MIN_MS = 75_000;
+const KAEL_AMBIENT_MAX_MS = 120_000;
+let kaelPlanStartedAt = Date.now();
+let kaelPlanCursor = 0;
+let lastKaelHardBeatAt = 0;
+let kaelAmbientDueAt = Date.now() + KAEL_AMBIENT_MIN_MS;
+
+const nextKaelAmbientDelay = () =>
+  KAEL_AMBIENT_MIN_MS + Math.random() * (KAEL_AMBIENT_MAX_MS - KAEL_AMBIENT_MIN_MS);
+
+function resetKaelHardPlan(source: string) {
+  const now = Date.now();
+  kaelPlanStartedAt = now;
+  kaelPlanCursor = 0;
+  lastKaelHardBeatAt = 0;
+  kaelAmbientDueAt = now + nextKaelAmbientDelay();
+  dbg(`kael hard plan reset: ${source}`);
+}
+
+function kaelPlanBeatAt(cursor: number): number {
+  const cycle = Math.floor(cursor / KAEL_HARD_PLAN.length);
+  const beat = KAEL_HARD_PLAN[cursor % KAEL_HARD_PLAN.length];
+  return kaelPlanStartedAt + cycle * KAEL_HARD_PLAN_CYCLE_MS + beat.atSec * 1000;
+}
+
+function dueKaelHardBeat(now: number): { id: string; cursorAfter: number } | null {
+  if (kaelPlanBeatAt(kaelPlanCursor) > now) return null;
+  return {
+    id: KAEL_HARD_PLAN[kaelPlanCursor % KAEL_HARD_PLAN.length].id,
+    cursorAfter: kaelPlanCursor + 1,
+  };
+}
+
+function runKaelHardPlan(now = Date.now()): boolean {
+  if (now - lastKaelHardBeatAt < KAEL_HARD_PLAN_RECOVERY_GAP_MS) return false;
+  const due = dueKaelHardBeat(now);
+  if (!due) return false;
+  if (!runKaelClock(true, due.id)) return false;
+  kaelPlanCursor = due.cursorAfter;
+  lastKaelHardBeatAt = now;
+  dbg(`kael hard beat: ${due.id} cursor=${kaelPlanCursor}`);
+  return true;
 }
 
 // The continuous-session clock: resets after a 10-minute silence, so
@@ -3467,10 +4741,12 @@ function currentSituation(): Situation {
 
 // A committed one-shot: the small/micro clips play inline, no gag needed.
 function playMicro(c: CorvinClip) {
+  if (c.loop) {
+    dbg("micro clip refused: looping clips require a mode owner");
+    return;
+  }
   commitFor(corvinClipTotal(c) * paceMul() + 250);
-  curClip = c as Clip;
-  frameIdx = 0;
-  afterClip = null;
+  startClip(c as Clip);
 }
 
 // Pose spells: enter, hold a while, exit — committed the whole way.
@@ -3488,7 +4764,7 @@ async function sleepScene() {
   await corvinScene(async () => {
     const start = Date.now();
     await playCorvin(CORVIN.sleepdown);
-    const loopMs = corvinClipTotal(CORVIN.sleeploop);
+    const loopMs = corvinClipTotal(CORVIN.sleeploop) * paceMul(CORVIN.sleeploop as Clip);
     while (Date.now() - start < 25 * 60_000) {
       commitFor(loopMs + 500);
       await playCorvin(CORVIN.sleeploop);
@@ -3511,42 +4787,69 @@ function watchReaction(id: string, brain: Director = director) {
     const during = lastTypingEventAt > before && Date.now() - lastTypingEventAt < 12_000;
     brain.feedback(id, !during ? true : false);
     if (brain === danteDirector) saveDanteDirector();
+    else if (brain === kaelDirector) saveKaelDirector();
     else saveDirector();
   }, 15_000);
 }
 
-function runCorvinClock(allowBigScenes = true) {
+let lastCorvinDirectorAt = 0;
+const CORVIN_DIRECTOR_GAP_MS = 60_000;
+const CORVIN_GAMING_DIRECTOR_GAP_MS = 90_000;
+function runCorvinClock(allowBigScenes = true, plannedId?: string): boolean {
+  const now = Date.now();
+  const globalGap = gamingActive() ? CORVIN_GAMING_DIRECTOR_GAP_MS : CORVIN_DIRECTOR_GAP_MS;
+  if (!plannedId && now - lastCorvinDirectorAt < globalGap) return false;
+  if (!plannedId && corvinPlanBeatAt(corvinPlanCursor) - now <= CORVIN_HARD_PLAN_GUARD_MS)
+    return false;
   // Grief outranks everything: weeks/months cadences never lose to routine.
-  if (allowBigScenes) {
+  if (!plannedId && allowBigScenes) {
     const grief = griefUrge();
     if (grief) {
+      // Grief is the biggest scene there is; every other big path stamps the
+      // shared gap. Without this the next 15-30 s tick saw sceneAllowed() and
+      // could stack another big scene straight on top of the cairn — and
+      // sinceSceneSec still read "nothing has happened in 15 minutes" seconds
+      // after the most dramatic moment in the app.
+      markScene();
       void grief();
-      return;
+      return true;
     }
   }
   const s = currentSituation();
   const allowBig = allowBigScenes && sceneAllowed();
-  const a = director.pick(s, allowBig);
+  const a = plannedId ? director.takePlanned(plannedId, s, allowBig) : director.pick(s, allowBig);
   saveDirector();
-  if (!a) return; // silence is a choice too
-  dbg(`director: ${a.id} (${a.kind})`);
+  if (!a) return false; // silence is a choice too
+  lastCorvinDirectorAt = now;
+  // Match Dante's Director contract: once a large scene wins the lottery it
+  // immediately owns the shared attention gap. Without this stamp Corvin could
+  // chain a different large scene on the very next 15-30 second idle tick.
+  if (a.kind === "big") markScene();
+  // Only the `big` cases below call watchReaction, so Corvin's 18 micro/pose
+  // actions never received feedback and their weight stayed pinned at exactly
+  // 1 forever. Feedback is asymmetric (+0.06 / -0.18) and an uninterrupted
+  // scene counts as a win, so his big scenes drifted to the 2.5 cap while the
+  // quiet beats structurally could not follow — the free-time lottery skewed
+  // toward spectacle. Dante and Kael call it for every pick; match them.
+  if (a.kind !== "big") watchReaction(a.id);
+  dbg(`director: ${a.id} (${a.kind}${plannedId ? ", hard" : ""})`);
   switch (a.id) {
     // micro
-    case "flinch": playMicro(CORVIN.flinch); break;
-    case "coatdust": playMicro(CORVIN.coatdust); break;
-    case "nodself": playMicro(CORVIN.nodself); break;
-    case "lookarm": playMicro(CORVIN.lookarm); break;
-    case "breathfog": playMicro(CORVIN.breathfog); break;
-    case "knuckle": playMicro(CORVIN.knuckle); break;
-    case "eaglelook": playMicro(CORVIN.eaglelook); break;
-    case "hairwind": playMicro(CORVIN.hairwind); break;
-    case "shiftweight": playMicro(CORVIN.shiftweight); break;
-    case "glanceback": playMicro(CORVIN.glanceback); break;
-    case "stretch2": playMicro(CORVIN.stretch2); break;
-    case "crouchcheck": playMicro(CORVIN.crouchcheck); break;
+    case "flinch": void corvinScene(() => playCorvin(CORVIN.flinch)); break;
+    case "coatdust": void corvinScene(() => playCorvin(CORVIN.coatdust)); break;
+    case "nodself": void corvinScene(() => playCorvin(CORVIN.nodself)); break;
+    case "lookarm": void corvinScene(() => playCorvin(CORVIN.lookarm)); break;
+    case "breathfog": void corvinScene(() => playCorvin(CORVIN.breathfog)); break;
+    case "knuckle": void corvinScene(() => playCorvin(CORVIN.knuckle)); break;
+    case "eaglelook": void corvinScene(() => playCorvin(CORVIN.eaglelook)); break;
+    case "hairwind": void corvinScene(() => playCorvin(CORVIN.hairwind)); break;
+    case "shiftweight": void corvinScene(() => playCorvin(CORVIN.shiftweight)); break;
+    case "glanceback": void corvinScene(() => playCorvin(CORVIN.glanceback)); break;
+    case "stretch2": void corvinScene(() => playCorvin(CORVIN.stretch2)); break;
+    case "crouchcheck": void corvinScene(() => playCorvin(CORVIN.crouchcheck)); break;
     // poses
-    case "stepright": playMicro(CORVIN.stepright); break;
-    case "crouchrest": playMicro(CORVIN.crouchrest); break;
+    case "stepright": void corvinScene(() => playCorvin(CORVIN.stepright)); break;
+    case "crouchrest": void corvinScene(() => playCorvin(CORVIN.crouchrest)); break;
     case "turnpair": void poseSpell(CORVIN.turnleft, CORVIN.turnback, 2500 + Math.random() * 4000); break;
     case "leanspell": void poseSpell(CORVIN.leanwall, CORVIN.leanoff, 9000 + Math.random() * 12000); break;
     case "swordcarry": void poseSpell(CORVIN.swordshoulder, CORVIN.swordplant, 7000 + Math.random() * 9000); break;
@@ -3566,42 +4869,209 @@ function runCorvinClock(allowBigScenes = true) {
     case "stonerest": watchReaction(a.id); void stoneRestScene(25_000 + Math.random() * 20_000); break;
     case "sleep": void sleepScene(); break;
   }
+  return true;
 }
 
-function runDanteClock() {
-  const a = danteDirector.pick(currentSituation(), sceneAllowed());
+function runDanteClock(allowBigScenes = true, plannedId?: string): boolean {
+  const situation = currentSituation();
+  const allowBig = allowBigScenes && sceneAllowed();
+  const a: DirectorAction | null = plannedId
+    ? danteDirector.takePlanned(plannedId, situation, allowBig)
+    : danteDirector.pick(situation, allowBig);
   saveDanteDirector();
-  if (!a) return;
+  if (!a) return false;
   if (a.kind === "big") markScene();
   watchReaction(a.id, danteDirector);
-  dbg(`dante director: ${a.id} (${a.kind})`);
+  dbg(`dante director: ${a.id} (${a.kind}${plannedId ? ", hard" : ""})`);
   switch (a.id) {
+    case "sitswing": playDantePlannedIdle("sitswing"); break;
+    case "sitcross": playDantePlannedIdle("sitcross"); break;
+    case "sitthink": playDantePlannedIdle("sitthink"); break;
+    case "leanback": playDantePlannedIdle("leanback"); break;
+    case "laugh": playDantePlannedIdle("laugh"); break;
+    case "checkwatch": playDantePlannedIdle("checkwatch"); break;
+    case "yawn": playDantePlannedIdle("yawn"); break;
+    case "nap": playDantePlannedIdle("nap"); break;
+    case "stretch": playDantePlannedIdle("stretch"); break;
+    case "shrug": playDantePlannedIdle("shrug"); break;
+    case "headtilt": playDantePlannedIdle("headtilt"); break;
+    case "lookout": playDantePlannedIdle("lookout"); break;
+    case "cleansword": playDantePlannedIdle("cleansword"); break;
+    case "d_glanceover": playDantePlannedIdle("d_glanceover"); break;
+    case "d_bootswing": playDantePlannedIdle("d_bootswing"); break;
+    case "d_neckroll": playDantePlannedIdle("d_neckroll"); break;
+    case "d_jacketflick": playDantePlannedIdle("d_jacketflick"); break;
+    case "d_knuckles": playDantePlannedIdle("d_knuckles"); break;
+    case "d_hairswipe": playDantePlannedIdle("d_hairswipe"); break;
+    case "d_sigh": playDantePlannedIdle("d_sigh"); break;
+    case "d_sitedge": playDantePlannedIdle("d_sitedge"); break;
+    case "d_phone": playDantePlannedIdle("d_phone"); break;
+    case "d_fingerguns": playDantePlannedIdle("d_fingerguns"); break;
+    case "d_coffee":
+      if (new Date().getHours() >= 10 && new Date().getHours() < 20)
+        playDantePlannedIdle("d_coffee");
+      else dbg("dante hard beat: coffee skipped outside waking day");
+      break;
+    case "d_layback": playDantePlannedIdle("d_layback"); break;
     case "d_standlean": void dantePoseScene(DANTE_STANDLEAN, 3500 + Math.random() * 3500); break;
     case "d_crouchpeer": void dantePoseScene(DANTE_CROUCHPEER, 2500 + Math.random() * 3000); break;
     case "coin": void coinFlourish(); break;
     case "swordspin": void demoSpin(); break;
     case "pizza": demoSeated(PIZZA, "Finally."); break;
-    case "dance": void danceScene(); break;
+    case "dance": void danceScene(undefined, DANCE); break;
+    case "headbang": void danceScene(undefined, HEADBANG); break;
+    case "deviltrigger": void devilTriggerScene(); break;
     case "devilform": void devilFormScene(); break;
     case "moto": void motoScene(); break;
+    case "dive": void diveGag(); break;
+    case "shoot": void shootScene(); break;
+    case "gunspin": void gunFlourish(); break;
+    case "taunt": void danteStandingClipScene(TAUNT, 1); break;
+    case "cheer": void lightWin(); break;
+    case "stagger": void lightError(); break;
+    case "standcross": void danteStandingClipScene(STAND_CROSS, 1); break;
+    case "swordmove": void demoSword(); break;
   }
+  return true;
+}
+
+function runKaelClock(allowBigScenes = true, plannedId?: string): boolean {
+  // Every Kael Director pack starts on the exact standing dormant silhouette.
+  // Connected work/watch/night/combat modes own their own exits and can never
+  // be replaced by an ambient first frame.
+  if (kaelMode !== "idle" || kaelWeaponForm !== "dormant") return false;
+  const situation = currentSituation();
+  const allowBig = allowBigScenes && sceneAllowed();
+  const a = plannedId
+    ? kaelDirector.takePlanned(plannedId, situation, allowBig)
+    : kaelDirector.pick(situation, allowBig);
+  saveKaelDirector();
+  if (!a) return false;
+  if (a.kind === "big") markScene();
+  watchReaction(a.id, kaelDirector);
+  dbg(`kael director: ${a.id} (${a.kind}${plannedId ? ", hard" : ""})`);
+  switch (a.id) {
+    case "cloaksettle": playMicro(KAEL.cloaksettle); break;
+    case "razlomtap": playMicro(KAEL.razlomtap); break;
+    case "swordplant": void kaelSwordPlantScene(); break;
+    case "platypus_sniff": playMicro(KAEL.platypus_sniff); break;
+    case "armcheck": playMicro(KAEL.armcheck_v2); break;
+    case "platypus": playMicro(KAEL.platypus_v2); break;
+    case "scarf": playMicro(KAEL.scarf_adjust); break;
+    case "repair": void kaelRepairScene(); break;
+    case "rest": void kaelRestScene(); break;
+    case "voidorgan": void kaelVoidOrganScene(); break;
+    case "voidstitch": void kaelVoidStitchScene(); break;
+  }
+  return true;
+}
+
+// A live AI session parks the stage in "coding"/"searching"/"speaking" for
+// minutes at a time, so a strict idle gate starved these two Directors exactly
+// when the companion must stay alive — the same bug corvinIdleTick already
+// fixes for Corvin. Work states are allowed, but only on every SECOND window,
+// so session hammering never turns into a beat every 45 seconds.
+const DIRECTOR_WORK_STATES = new Set(["coding", "searching", "speaking"]);
+const directorWorkRuns: Record<string, number> = { dante: 0, kael: 0 };
+function directorStageReady(who: "dante" | "kael"): boolean {
+  const st = stage.dataset.state || "idle";
+  if (st === "idle") {
+    directorWorkRuns[who] = 0;
+    return true;
+  }
+  if (!DIRECTOR_WORK_STATES.has(st)) return false;
+  directorWorkRuns[who] += 1;
+  if (directorWorkRuns[who] < 2) return false;
+  directorWorkRuns[who] = 0;
+  return true;
 }
 
 function scheduleDanteDirector() {
   window.setTimeout(() => {
+    const now = Date.now();
     if (
-      !isCorvin() &&
+      isDante() &&
       home &&
       beatReady() &&
       !introActive &&
       !gamingActive() &&
-      Date.now() >= typingUntil &&
-      stage.dataset.state === "idle"
+      now >= typingUntil
     ) {
-      runDanteClock();
+      // A synchronous throw here (a corrupt director weight, a bad clip) left
+      // the setTimeout chain unarmed for the rest of the session with no way
+      // back — the gaming chain already guards for exactly this reason.
+      try {
+        if (stage.dataset.state === "idle" && runDanteHardPlan(now)) {
+          danteAmbientDueAt = now + nextDanteAmbientDelay();
+        } else if (
+          now >= danteAmbientDueAt &&
+          dantePlanBeatAt(dantePlanCursor) - now > DANTE_HARD_PLAN_GUARD_MS &&
+          directorStageReady("dante")
+        ) {
+          runDanteClock();
+          danteAmbientDueAt = now + nextDanteAmbientDelay();
+        }
+      } catch (e) {
+        dbg(`dante director threw: ${e}`);
+        danteAmbientDueAt = now + nextDanteAmbientDelay();
+      }
     }
     scheduleDanteDirector();
-  }, 45_000 + Math.random() * 45_000);
+  }, DANTE_DIRECTOR_TICK_MS);
+}
+
+function scheduleKaelDirector() {
+  window.setTimeout(() => {
+    const now = Date.now();
+    if (
+      isKael() &&
+      home &&
+      beatReady() &&
+      !introActive &&
+      !gamingActive() &&
+      now >= typingUntil &&
+      kaelMode === "idle"
+    ) {
+      try {
+        if (runKaelHardPlan(now)) {
+          kaelAmbientDueAt = now + nextKaelAmbientDelay();
+        } else if (
+          now >= kaelAmbientDueAt &&
+          kaelPlanBeatAt(kaelPlanCursor) - now > KAEL_HARD_PLAN_GUARD_MS &&
+          directorStageReady("kael")
+        ) {
+          runKaelClock();
+          kaelAmbientDueAt = now + nextKaelAmbientDelay();
+        }
+      } catch (e) {
+        dbg(`kael director threw: ${e}`);
+        kaelAmbientDueAt = now + nextKaelAmbientDelay();
+      }
+    }
+    scheduleKaelDirector();
+  }, KAEL_DIRECTOR_TICK_MS);
+}
+
+function scheduleCorvinHardPlan() {
+  window.setTimeout(() => {
+    const now = Date.now();
+    const state = stage.dataset.state || "idle";
+    if (
+      isCorvin() &&
+      home &&
+      beatReady() &&
+      !gamingActive() &&
+      now >= typingUntil &&
+      (state === "idle" || DIRECTOR_WORK_STATES.has(state))
+    ) {
+      try {
+        runCorvinHardPlan(now);
+      } catch (error) {
+        dbg(`corvin hard plan threw: ${error}`);
+      }
+    }
+    scheduleCorvinHardPlan();
+  }, CORVIN_HARD_PLAN_TICK_MS);
 }
 
 let corvinTickArmed = false;
@@ -3628,6 +5098,22 @@ function corvinIdleTick() {
   corvinIdleTimer = window.setTimeout(
     () => {
       corvinTickArmed = false;
+      // A synchronous throw anywhere below (director.pick on a corrupt weight,
+      // a playMicro path) escapes the setTimeout and leaves the chain unarmed
+      // for the rest of the session — corvinIdleCycle can't revive it either,
+      // it only re-arms when corvinTickArmed is false and the throw happens
+      // after that flag is cleared. Guarantee the re-arm.
+      try {
+        corvinIdleBody();
+      } catch (e) {
+        dbg(`corvin idle tick threw: ${e}`);
+        corvinIdleTick();
+      }
+    },
+    15_000 + Math.random() * 15_000,
+  );
+}
+function corvinIdleBody() {
       // During a hunt, fixed headline beats own the big-scene lane. The local
       // Director still supplies small and pose animations between appointments,
       // otherwise Corvin collapses into one endless huntwatch loop.
@@ -3699,11 +5185,6 @@ function corvinIdleTick() {
       dbg(`idle(corvin) pose=${next}`);
       corvinSetQuiet(next);
       corvinIdleTick();
-    },
-    // user-directed: "хочу другие анимации чаще" — quick pose turns, an urge
-    // roughly every 30-90 s of quiet
-    15_000 + Math.random() * 15_000,
-  );
 }
 
 // ---- Dante's fixed-clock beats (user-directed: hard, frequent, no LLM) ------
@@ -3727,7 +5208,7 @@ function armDanteClocks(startedAt = Date.now()) {
 }
 function scheduleDanteBeats() {
   window.setInterval(() => {
-    if (isCorvin() || !home || !beatReady()) return;
+    if (!isDante() || !home || !beatReady()) return;
     const now = Date.now();
     // These three are GAME-SESSION clocks: once armed they used to run for
     // the rest of the app's life — pizza every hour at the desk with no game
@@ -3738,22 +5219,25 @@ function scheduleDanteBeats() {
       lastDantePizza = 0;
     }
     if (lastDantePizza && now - lastDantePizza > DANTE_PIZZA_EVERY) {
-      lastDantePizza = now;
+      const folded = consumeOverdueDanteClocks("pizza beat", now);
       saveGamingClocks();
+      if (folded.length > 1) dbg(`dante backlog selected pizza from: ${folded.join(", ")}`);
       dbg("dante beat: pizza (game 18:00 + 60m clock)");
       demoSeated(PIZZA, "Finally.");
       return;
     }
     if (lastDanteCoin && now - lastDanteCoin > DANTE_COIN_EVERY) {
-      lastDanteCoin = now;
+      const folded = consumeOverdueDanteClocks("coin beat", now);
       saveGamingClocks();
+      if (folded.length > 1) dbg(`dante backlog selected coin from: ${folded.join(", ")}`);
       dbg("dante beat: coinflip (game 12:00 + 25m clock)");
       void coinFlourish();
       return;
     }
     if (lastDanteSpin && now - lastDanteSpin > 20 * 60_000) {
-      lastDanteSpin = now;
+      const folded = consumeOverdueDanteClocks("spin beat", now);
       saveGamingClocks();
+      if (folded.length > 1) dbg(`dante backlog selected spin from: ${folded.join(", ")}`);
       dbg("dante beat: swordspin (game 6:00 + 20min clock)");
       void demoSpin();
       return;
@@ -3825,6 +5309,33 @@ const GAMING_DEVIL_EVERY = 10 * 60 * 1000;
 // that is the intent: Steam is when he actually fights.
 let lastGamingSword = 0;
 let lastGamingDevil = 0;
+function consumeOverdueDanteClocks(reason: string, now = Date.now()): string[] {
+  if (!gameSessionStartedAt) return [];
+  const overdue: Array<[string, number, () => void]> = [
+    ["devil", GAMING_DEVIL_EVERY, () => (lastGamingDevil = now)],
+    ["sword", GAMING_SWORD_EVERY, () => (lastGamingSword = now)],
+    ["spin", 20 * 60_000, () => (lastDanteSpin = now)],
+    ["coin", DANTE_COIN_EVERY, () => (lastDanteCoin = now)],
+    ["pizza", DANTE_PIZZA_EVERY, () => (lastDantePizza = now)],
+  ];
+  const folded: string[] = [];
+  for (const [name, cadence, consume] of overdue) {
+    const last =
+      name === "devil" ? lastGamingDevil :
+      name === "sword" ? lastGamingSword :
+      name === "spin" ? lastDanteSpin :
+      name === "coin" ? lastDanteCoin : lastDantePizza;
+    if (last > 0 && now - last >= cadence) {
+      consume();
+      folded.push(name);
+    }
+  }
+  if (folded.length) {
+    saveGamingClocks();
+    dbg(`dante backlog folded (${reason}): ${folded.join(", ")}`);
+  }
+  return folded;
+}
 // ---- The hunt table (user-directed: everything he owns fires during Steam) --
 // Each beat gets its own minute mark and its own cadence, so one session walks
 // through the whole repertoire instead of replaying two moves. `firstAt` is
@@ -3858,6 +5369,9 @@ function huntBeatDueSoon(withinMs = HARD_BEAT_RESERVE_MS, now = Date.now()) {
 // Everything that isn't a hunt beat gets a fixed hour instead. One firing per
 // hour per day, remembered in story.json so a restart can't replay it.
 const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
+  // The sleep trilogy used to exist only behind a Director roll. At 02:00 it
+  // now has a real night appointment, after the 00:40 watch has settled.
+  { h: 2, name: "sleep", run: () => void sleepScene() },
   // Afternoon through night (user-directed): mornings played to an empty room.
   // The three hunt beats keep daily slots too, so you see them on days with
   // no games at all.
@@ -3886,6 +5400,15 @@ const DAILY_HOURS: Array<{ h: number; name: string; run: () => void }> = [
 function armHuntClocks(startedAt = Date.now()) {
   for (const c of HUNT_CLOCKS) c.last = startedAt - c.every + c.firstAt * 60_000;
   dbg(`hunt clocks armed: ${HUNT_CLOCKS.map((c) => `${c.name}@${c.firstAt}:00`).join(", ")}`);
+}
+
+function consumeOverdueHuntClocks(reason: string, now = Date.now()) {
+  if (!gameSessionStartedAt) return;
+  const overdue = HUNT_CLOCKS.filter((c) => c.last > 0 && now - c.last >= c.every);
+  if (!overdue.length) return;
+  for (const c of overdue) c.last = now;
+  saveGamingClocks();
+  dbg(`hunt backlog folded (${reason}): ${overdue.map((c) => c.name).join(", ")}`);
 }
 
 function scheduledClockOnResume(
@@ -3982,31 +5505,39 @@ function scheduleGamingBeat() {
         // three-minute scene gap; beatReady() above still prevents overlap.
         const c = due.find((clock) => clock.name === "door") ?? due[0];
         if (c) {
-          c.last = now;
+          // A busy stage can make several appointments overdue together. Play
+          // the strongest one and consume the cohort: replaying each missed
+          // timestamp in turn makes a returning companion look accelerated.
+          for (const clock of due) clock.last = now;
           saveGamingClocks();
           markScene();
+          if (due.length > 1) {
+            dbg(`hunt backlog folded (beat ${c.name}): ${due.map((clock) => clock.name).join(", ")}`);
+          }
           dbg(`hunt ${c.name} (${c.firstAt}:00 + ${Math.round(c.every / 60_000)}m)`);
           await c.run();
-        } else if (!isCorvin() && lastGamingDevil > 0 && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
-          lastGamingDevil = now;
+        } else if (isDante() && lastGamingDevil > 0 && now - lastGamingDevil > GAMING_DEVIL_EVERY && sceneAllowed()) {
+          const folded = consumeOverdueDanteClocks("devil beat", now);
           saveGamingClocks();
+          if (folded.length > 1) dbg(`dante backlog selected devil from: ${folded.join(", ")}`);
           markScene();
           dbg("gaming devil trigger (3:00 + 10min cadence)");
           devilTriggerScene();
         } else if (
-          !isCorvin() &&
+          isDante() &&
           swordReady &&
           lastGamingSword > 0 &&
           now - lastGamingSword > GAMING_SWORD_EVERY &&
           sceneAllowed()
         ) {
-          lastGamingSword = now;
+          const folded = consumeOverdueDanteClocks("sword beat", now);
           saveGamingClocks();
+          if (folded.length > 1) dbg(`dante backlog selected sword from: ${folded.join(", ")}`);
           markScene();
           dbg("gaming sword move (7:00 + 10min cadence)");
           await demoSword();
         } else if (
-          !isCorvin() &&
+          isDante() &&
           now - lastGamingSpecial > 60 * 60 * 1000 &&
           sceneAllowed() && // it blocks the beat chain for up to 2 min — gate it
           Math.random() < 0.35
@@ -4022,6 +5553,10 @@ function scheduleGamingBeat() {
           if (isCorvin()) {
             if (Math.random() < 0.2) await huntwatchPass();
             else runCorvinClock(false);
+          }
+          else if (isKael()) {
+            if (Math.random() < 0.25) await kaelHuntLoopPass();
+            else runKaelClock(false);
           }
           else await gamingAmbience();
         }
@@ -4082,7 +5617,29 @@ let curUrge: IdleUrge | null = null;
 let idlePlaysLeft = 0;
 let lastIdleClip: string | null = null;
 
+function playDantePlannedIdle(name: string) {
+  const urge = dantePolishUrge(name);
+  if (!urge || !isDante() || stage.dataset.state !== "idle") return;
+  curUrge = urge;
+  lastIdleClip = urge.clip;
+  idlePlaysLeft = urge.plays;
+  // Use the normal idle owner so frame speed, mood pace, authored repeats and
+  // hold/reverse physics remain exactly the same as before hard scheduling.
+  startClip(idleClip(urge.clip), idleStepDone);
+}
+
 function playIdleCycle() {
+  if (isKael()) {
+    if (kaelMode === "work" || kaelMode === "watch" || kaelMode === "night" || kaelMode === "away") return;
+    if (gamingActive() && kaelWeaponForm === "sword") {
+      kaelMode = "combat";
+      startClip(KAEL.combat_idle_v2 as Clip);
+    } else {
+      kaelMode = "idle";
+      startClip(KAEL.breathe as Clip);
+    }
+    return;
+  }
   if (isCorvin()) {
     corvinIdleCycle();
     return;
@@ -4155,10 +5712,9 @@ function idleStepDone() {
         }
       : playIdleCycle;
   const heldClip = curUrge.clip;
-  const leaveHold =
-    heldClip === "leanback" || heldClip === "d_layback"
-      ? () => startClip(reversedClip(idleClip(heldClip)), next)
-      : next;
+  const leaveHold = REVERSIBLE_IDLE_POSES.has(heldClip)
+    ? () => startClip(reversedClip(idleClip(heldClip)), next)
+    : next;
   holdStill(idleClip(heldClip), lo + Math.random() * (hi - lo), leaveHold);
 }
 
@@ -4166,16 +5722,50 @@ function playWalk(leaving = false) {
   cancelAnimationFrame(winTween); // walking overrides any sit/stand tween
   // Corvin walks in with the sword over the shoulder and OUT with it slung
   // across his back, the way knights carry it home.
-  startClip(isCorvin() ? ((leaving ? CORVIN.walkout : CORVIN.walkin) as Clip) : WALK);
+  startClip(
+    isKael()
+      ? (KAEL.walkin as Clip) // side-profile walk-in from the Kael references
+      : isCorvin()
+        ? ((leaving ? CORVIN.walkout : CORVIN.walkin) as Clip)
+        : WALK,
+  );
 }
 
-// M1.4: mood pace — tired Dante plays every clip a touch slower, fresh Dante
-// snappier. CLIP playback only; window tweens keep real time or walks drift.
-function paceMul(): number {
-  // Scenes are hand-timed choreography (and the Door overlay runs on raw
-  // wall-clock): while one owns the stage, the mood must not stretch frames —
-  // playCorvin awaits raw totals, so scaling here would amputate clip tails.
-  if (gagActive) return 1;
+// Sprite directories whose frames are authored AGAINST WINDOW MOVEMENT: the
+// gait cycle in slideFootstepWindow, the ride, and the sit that plays while
+// moveWindowY lowers him onto the panel. Matched on the frame path so the
+// reversed variants (stand-up, walk-out) are covered by the same rule.
+const PHYSICAL_DIRS = [
+  "/pixel/sidewalk/",
+  "/pixel/sitpanel/",
+  "/pixel/d_motoride/",
+  "/pixel/corvin/walkin/",
+  "/pixel/corvin/walkout/",
+  "/pixel/corvin/c_bbqwalk/",
+  "/pixel/kael/walkin/",
+];
+const isPhysicalClip = (c?: Clip) =>
+  !!c && PHYSICAL_DIRS.some((d) => c.frames[0]?.includes(d));
+
+// Ambient life breathes with his mood: tired runs a little heavy, wired runs a
+// little quick. Flattening this to a hard 1.0 made every idle, work and loop
+// clip ~14% slower at full energy — that is the sluggishness, not the art.
+//
+// It applies to AMBIENT LIFE ONLY. Everything choreographed against wall-clock
+// stays at exactly 1.0, because nothing else scales with it:
+//   * walking — slideFootstepWindow derives its gait phase from the RAW msSeq
+//     total and moves the window at a fixed px/s. Legs cycling 12% quicker than
+//     the window travels shortens the stride into a mince: the "fast walk that
+//     doesn't land" (user-reported).
+//   * sitting/standing — moveWindowY runs on fixed 300/400/900 ms tweens, so a
+//     quicker sit finishes with him still hanging in the air.
+//   * the intro, the leave and the return — hand-timed `await sleep(...)` beats
+//     between poses, exactly like a scene, just without gagActive. That arrival
+//     chain reading as "very fast moves in 2 seconds" is this.
+function paceMul(c?: Clip): number {
+  if (gagActive || introActive || showcasing || returning || wandering || away) return 1;
+  if (isKael() && kaelMode !== "idle") return 1;
+  if (isPhysicalClip(c)) return 1;
   return Math.min(1.12, Math.max(0.88, 1.14 - life.v.energy * 0.26));
 }
 
@@ -4204,7 +5794,7 @@ function frameLoop() {
   const generation = frameGeneration;
   observedClip = curClip;
   sprite.src = curClip.frames[frameIdx];
-  const shownMs = (curClip.msSeq?.[frameIdx] ?? curClip.ms) * paceMul();
+  const shownMs = (curClip.msSeq?.[frameIdx] ?? curClip.ms) * paceMul(curClip);
   frameIdx++;
   if (frameIdx >= curClip.frames.length) {
     if (curClip.loop) {
@@ -4212,8 +5802,20 @@ function frameLoop() {
     } else if (afterClip) {
       const fn = afterClip;
       afterClip = null;
-      fn(); // e.g. advance the idle cycle
-    } else if (gagActive) {
+      const finishedClip = curClip;
+      // The old loop called the link immediately after painting the final frame,
+      // so its authored hold (often the 300-700 ms weight/contact beat) was never
+      // visible. Finish that frame at normal 1.0 timing before entering the next
+      // pose. This is also the hard ceiling against accidental fast-forward.
+      frameTimer = window.setTimeout(() => {
+        if (generation !== frameGeneration || curClip !== finishedClip) return;
+        fn();
+        // Modern callbacks use startClip() and own the next timer. Legacy links
+        // assign curClip directly; re-arm them here instead of waiting for RAF.
+        if (generation === frameGeneration) restartFrameLoop();
+      }, shownMs);
+      return;
+    } else if (gagActive || (isKael() && kaelMode !== "idle")) {
       // A sleep-driven scene (playCorvin) owns this one-shot: HOLD the settle
       // frame. Running past the end put frames[length] = undefined on screen —
       // the broken-image flash the capture rig kept catching.
@@ -4256,39 +5858,72 @@ function setState(state: State, force = false) {
   const prev = stage.dataset.state;
   stage.dataset.state = state;
   document.documentElement.style.setProperty("--accent", ACCENT[state]);
+  // A state event may arrive while the body is physically between postures.
+  // Record the newest intent, then let the bridge callback apply it from its
+  // contact frame instead of replacing a half-seated body.
+  if (isDante() && dantePostureTransition !== null) return;
   afterClip = null;
-  if (state === "idle") {
+  const applyPose = () => {
+    if (state === "idle") {
+      posture(state);
+      playIdleCycle();
+      return;
+    }
+    // Entering thinking: a low "Hmm." — but only when he's been quiet a while
+    // and I'm not mid-burst, so it reads as a thought, not a tic.
+    if (
+      state === "thinking" &&
+      prev !== "thinking" &&
+      !busyBurst() &&
+      Date.now() - lastVoiceAt > VOICE_MIN_GAP
+    ) {
+      lastVoiceAt = Date.now();
+      say("hmm");
+    }
+    if (isDante() && (state === "coding" || state === "searching" || state === "speaking")) {
+      if (prev !== state) workIdx = (workIdx + 1) % WORK_POSES.length;
+      const name =
+        life.v.cockiness > 0.65 && Math.random() < 0.3 ? "taunt" : WORK_POSES[workIdx];
+      const workClip = clip(name, name === "gunspin" ? 90 : 200, true, name === "gunspin" ? 0 : 8);
+      if (name === "gunspin") workClip.msSeq = GUNSPIN.msSeq;
+      if (name === "taunt") workClip.msSeq = TAUNT.msSeq;
+      if (name === "sit") workClip.msSeq = STAND_CROSS.msSeq;
+      startClip(workClip);
+    } else {
+      startClip(ANIMS[state] ?? ANIMS.idle);
+    }
     posture(state);
-    playIdleCycle(); // rotate seated poses: swing -> arms crossed -> thinking
+  };
+
+  if (isDante()) {
+    const targetSeated = SEATED.has(state);
+    const linked = startDantePostureBridge(targetSeated, () => {
+      const latest = (stage.dataset.state || "idle") as State;
+      if (latest === state) applyPose();
+      else setState(latest, true);
+    });
+    if (linked) return;
+  }
+  if (
+    isCorvin() &&
+    state !== "idle" &&
+    (
+      corvinPostureTransition !== null ||
+      corvinSeatedNow ||
+      corvinQuietPose === "meditate" ||
+      corvinQuietPose === "whet" ||
+      SEATED_CLIPS.has(curClip)
+    )
+  ) {
+    void ensureCorvinStanding(`state ${state}`).then(() => {
+      if (!isCorvin()) return;
+      const latest = (stage.dataset.state || "idle") as State;
+      if (latest === state) applyPose();
+      else setState(latest, true);
+    });
     return;
   }
-  // Entering thinking: a low "Hmm." — but only when he's been quiet a while and
-  // I'm not mid-burst, so it reads as a thought, not a tic.
-  if (
-    state === "thinking" &&
-    prev !== "thinking" &&
-    !busyBurst() &&
-    Date.now() - lastVoiceAt > VOICE_MIN_GAP
-  ) {
-    lastVoiceAt = Date.now();
-    say("hmm"); // ~/.echo/voice/hmm.mp3 if present
-  }
-  // Working states cycle through several poses instead of repeating one.
-  // (Dante only — Corvin's pack answers every state through ANIMS.)
-  if (!isCorvin() && (state === "coding" || state === "searching" || state === "speaking")) {
-    if (prev !== state) workIdx = (workIdx + 1) % WORK_POSES.length;
-    // Cocky Dante taunts more (M1.4: the mood shows).
-    const name =
-      life.v.cockiness > 0.65 && Math.random() < 0.3 ? "taunt" : WORK_POSES[workIdx];
-    const workClip = clip(name, name === "gunspin" ? 90 : 200, true, name === "gunspin" ? 0 : 8);
-    if (name === "gunspin") workClip.msSeq = GUNSPIN.msSeq; // keep the snap-stop curve
-    if (name === "taunt") workClip.msSeq = TAUNT.msSeq;
-    if (name === "sit") workClip.msSeq = STAND_CROSS.msSeq;
-    startClip(workClip);
-  } else {
-    startClip(ANIMS[state] ?? ANIMS.idle);
-  }
-  posture(state); // sit on the panel for thinking, stand for the rest
+  applyPose();
 }
 
 function finishSceneIdle(source: string) {
@@ -4448,20 +6083,68 @@ const SHRUG_LINES = ["Pff.", "Doesn't count."];
 // M2 demon-hunt framing: an error streak is a demon, and demons bite.
 const DEMON_LINES = ["This one bites.", "Big demon.", "It's hunting me."];
 
-// Bridge: smoothly rise to standing, hold a beat, then the scene runs.
-// Every scene that starts from idle goes through this — no instant jumps.
-async function standUp(): Promise<void> {
-  if (!home) return;
+// Dante's posture bridge owns both the authored sitpanel frames and the window
+// height. Callers only begin their pack after the bridge reaches its contact
+// frame, so seated and standing silhouettes can never replace one another.
+let dantePostureTransition: boolean | null = null;
+function startDantePostureBridge(toSeated: boolean, done: () => void): boolean {
+  if (!home || !isDante() || dantePostureTransition !== null || seatedNow === toSeated) return false;
   cancelAnimationFrame(winTween);
-  window.clearTimeout(postureSettle); // a pending sit-settle must not drop him mid-stand
+  window.clearTimeout(postureSettle);
   delete stage.dataset.facing;
   afterClip = null;
-  seatedNow = false; // scenes stand regardless of the dwell
-  postureChangedAt = Date.now();
-  sfxRustle();
-  await sleep(70); // a lean beat — bodies don't launch
-  moveWindowY(home.y, 350);
-  await sleep(380);
+  const bridge = toSeated ? SITDOWN : reversedClip(SITDOWN);
+  dantePostureTransition = toSeated;
+  const total = danteClipTotal(bridge);
+  if (!toSeated) sfxRustle();
+  // Keep the established root-motion timings. Only the missing body frames are
+  // added; no clip `ms`, `msSeq`, or playback multiplier is changed.
+  posture(toSeated ? "idle" : "coding", true);
+  commitFor(total + 180);
+  dbg(`dante posture: ${toSeated ? "standing -> seated" : "seated -> standing"}`);
+  startClip(bridge, () => {
+    const contact = bridge.frames[bridge.frames.length - 1];
+    startClip({ frames: [contact], ms: 600, loop: true, settle: 0 });
+    dantePostureTransition = null;
+    done();
+  });
+  return true;
+}
+
+function ensureDantePosture(toSeated: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const begin = () => {
+      if (!isDante()) {
+        resolve();
+        return;
+      }
+      if (dantePostureTransition !== null) {
+        window.setTimeout(begin, 25);
+        return;
+      }
+      if (!startDantePostureBridge(toSeated, resolve)) {
+        posture(toSeated ? "idle" : "coding", true);
+        resolve();
+      }
+    };
+    begin();
+  });
+}
+
+// Every standing scene for every companion passes here. Dante uses the real
+// reversed sitpanel link; Corvin rises from his quiet seated pose; Kael's
+// Director is already restricted to his connected standing idle.
+async function standUp(): Promise<void> {
+  if (!home) return;
+  if (isDante()) {
+    await ensureDantePosture(false);
+    return;
+  }
+  if (isCorvin()) {
+    await ensureCorvinStanding("scene entry");
+    return;
+  }
+  // Kael's scene catalogue already contains its connected enter/exit clips.
 }
 
 // Light win: stand up, quick arms-up cheer, a smirk. VISIBLE on every win.
@@ -4491,6 +6174,10 @@ function reactWin() {
     reactWinCorvin();
     return;
   }
+  if (isKael()) {
+    void kaelLightSuccess();
+    return;
+  }
   const pick = pickWeighted([
     ["cheer", 0.3],
     ["flourish", 0.12 + life.v.cockiness * 0.18],
@@ -4518,6 +6205,10 @@ function reactError() {
   }
   if (isCorvin()) {
     reactErrorCorvin();
+    return;
+  }
+  if (isKael()) {
+    void kaelLightError();
     return;
   }
   // Low patience forces the cold treatment — anger is quiet.
@@ -4650,7 +6341,7 @@ function applyEvent(e: AgentEvent) {
   // No ambient chatter over a running scene — the scene owns the screen.
   // Corvin is SILENT (user-directed): no work chatter at all — his words live
   // in the stories only. Dante keeps his phrases.
-  if (!gagActive && !showcasing && !isCorvin()) showBubble(e.phrase, PRIO.AMBIENT);
+  if (!gagActive && !showcasing && isDante()) showBubble(e.phrase, PRIO.AMBIENT);
   dbg(
     `event=${e.state} home=${!!home} gag=${gagActive} show=${showcasing} away=${away} winStreak=${winStreak} errStreak=${errStreak}`,
   );
@@ -4714,9 +6405,12 @@ function applyEvent(e: AgentEvent) {
       errStreak = 0;
       markScene();
       budgetScene("breakdown");
-      if (!isCorvin()) showBubble("Come on, seriously?", PRIO.MAJOR);
       if (isCorvin()) void vigilScene(); // his breakdown is a knee and the eagle
-      else diveGag(); // patience gone -> full breakdown
+      else if (isKael()) void kaelOverloadScene();
+      else {
+        showBubble("Come on, seriously?", PRIO.MAJOR);
+        diveGag(); // patience gone -> full breakdown
+      }
       // M2: after the climb — a once-ever first, or a partner's word.
       window.setTimeout(() => {
         if (story.first("breakdown")) showBubble("First real fight. We got up.", PRIO.NOTABLE);
@@ -4756,6 +6450,7 @@ function applyEvent(e: AgentEvent) {
       budgetScene("devil");
       // Unchained is Steam-only (user-directed) — a level-up gets the aura.
       if (isCorvin()) void auraScene();
+      else if (isKael()) void kaelFullWeaponScene();
       else devilTriggerScene();
       // M2 level chapters: levels unlock existing content, told as story.
       if (lastLevel >= 5 && story.unlock("sword_win_pool"))
@@ -4767,6 +6462,7 @@ function applyEvent(e: AgentEvent) {
       markScene();
       budgetScene("dance");
       if (isCorvin()) void nuzzleScene(); // 25★ -> the eagle's rare approval
+      else if (isKael()) void kaelRestScene();
       else danceScene(); // 25★ milestone -> dance
     } else if (winStreak >= 3 && !gamingActive() && !quietNow() && sceneAllowed() && sceneBudgetOk("jackpot")) {
       winStreak = 0;
@@ -4774,6 +6470,7 @@ function applyEvent(e: AgentEvent) {
       budgetScene("jackpot");
       story.today().jackpots += 1;
       if (isCorvin()) void executionScene(); // on a roll -> the Execution
+      else if (isKael()) void kaelStreakScene();
       else shootScene(); // on a roll -> Jackpot
       if (story.first("jackpot"))
         window.setTimeout(() => showBubble("First Jackpot. Remember this one.", PRIO.NOTABLE), 5000);
@@ -4850,7 +6547,7 @@ function posture(state: string, force = false) {
   // Corvin never takes the seated window height: his seated clips (sit,
   // whetstone, guitar, meditate) are bottom-anchored scene poses, and Dante's
   // sit-down transition clip must never play on him.
-  const seated = !isCorvin() && SEATED.has(state);
+  const seated = isDante() && SEATED.has(state);
   const targetY = seated ? home.sitY : home.y;
   window.clearTimeout(postureRetry);
   if (seated === seatedNow) {
@@ -4919,6 +6616,66 @@ function slideWindow(toX: number, pace = 150): Promise<void> {
     winTween = requestAnimationFrame(step);
   });
 }
+
+// Kept only as a compatibility definition for older local scene snippets. No
+// production choreography calls it; all visible walking uses footstep motion.
+void slideWindow;
+
+// Kael's side walk carries its own root motion. The OS window barely moves on
+// planted-foot frames and advances during the leg swing, so the sprite reads as
+// stepping across the taskbar rather than gliding over it.
+function slideFootstepWindow(toX: number, walkClip: CorvinClip | Clip, pace: number): Promise<void> {
+  if (!home) return Promise.resolve();
+  cancelAnimationFrame(winTween);
+  const h = home;
+  const fromX = h.lastX;
+  const dir = Math.sign(toX - fromX) || 1;
+  const distance = Math.abs(toX - fromX);
+  const cycleMs = "frames" in walkClip
+    ? (walkClip.msSeq ?? Array(walkClip.frames.length).fill(walkClip.ms)).reduce((a, b) => a + b, 0)
+    : 1000;
+  let travelled = 0;
+  let previous = performance.now();
+  const started = previous;
+  const scuffs = window.setInterval(sfxScuff, Math.max(420, cycleMs / 2));
+  return new Promise<void>((resolve) => {
+    const step = (now: number) => {
+      const dt = Math.min(50, now - previous);
+      previous = now;
+      const phase = ((now - started) % cycleMs) / cycleMs;
+      // Two smooth contact pulses per cycle. Average rate is exactly 1.0, while
+      // the body keeps at least 71% momentum on a planted foot: weight transfer,
+      // never a visible stop.
+      const contact = Math.pow(Math.cos(phase * Math.PI * 2), 8);
+      const gaitRate = 1.109375 - 0.4 * contact;
+      travelled = Math.min(distance, travelled + (pace * dt * gaitRate) / 1000);
+      const x = Math.round(fromX + dir * travelled);
+      void h.win.setPosition(new PhysicalPosition(x, h.y));
+      h.lastX = x;
+      h.lastY = h.y;
+      if (travelled < distance) {
+        winTween = requestAnimationFrame(step);
+      } else {
+        window.clearInterval(scuffs);
+        winTween = 0;
+        h.lastX = toX;
+        void h.win.setPosition(new PhysicalPosition(toX, h.y));
+        resolve();
+      }
+    };
+    winTween = requestAnimationFrame(step);
+  });
+}
+
+const slideKaelWalk = (toX: number, pace = 125) => {
+  if (!home) return Promise.resolve();
+  const distance = Math.abs(toX - home.lastX);
+  const cycleMs = (KAEL.walkin.msSeq ?? Array(KAEL.walkin.frames.length).fill(KAEL.walkin.ms))
+    .reduce((a, b) => a + b, 0);
+  const cycles = Math.max(1, Math.ceil((distance / pace) * 1000 / cycleMs));
+  const fittedPace = distance / (cycles * cycleMs / 1000);
+  return slideFootstepWindow(toX, KAEL.walkin, fittedPace);
+};
 
 // Motorcycle motion is deliberately separate from walking: no boot-scuff
 // cadence, a short acceleration, then constant speed cleanly through the edge.
@@ -5093,31 +6850,50 @@ async function runIntro() {
     home = { win, ox, oy, scrRight: ox + sw, winW, winH, y, sitY, belowY, cornerX, lastX: startX, lastY: y };
     dbg(`intro home set mon=${sw}x${sh} y=${y} sitY=${sitY} corner=${cornerX}`);
     await win.setPosition(new PhysicalPosition(startX, y));
-    stage.dataset.facing = "right";
+    // Kael's authored side profile faces opposite to the shared walk sheets.
+    // Mirror only his moving entrance; arrival returns to the front pose below.
+    stage.dataset.facing = isKael() ? "left" : "right";
     playWalk(); // side-view walk cycle while moving
-    await slideWindow(cornerX, 150); // realistic walking pace (px/sec)
+    if (isKael()) await slideKaelWalk(cornerX, 125);
+    else if (isCorvin()) await slideFootstepWindow(cornerX, CORVIN.walkin, 125);
+    else await slideFootstepWindow(cornerX, WALK, DANTE_WALK_PACE);
     delete stage.dataset.facing;
-    // deceleration beat — he's stopped walking, takes a breath
-    await sleep(400);
     if (isCorvin()) {
+      await sleep(400);
       // The sentinel arrives his own way: a knightly bow, then the watch.
-      curClip = CORVIN.bow as Clip;
-      frameIdx = 0;
-      await sleep(corvinClipTotal(CORVIN.bow));
+      startClip(CORVIN.bow as Clip);
+      await sleep(corvinClipTotal(CORVIN.bow) * paceMul(CORVIN.bow as Clip));
+      setState("idle");
+    } else if (isKael()) {
+      // Root motion and the walk loop stop together; this link turns the final
+      // side step into the exact front-facing idle without an in-place stride.
+      const token = beginKaelMode("scene");
+      try {
+        await playKaelMode(token, KAEL.arrival);
+        settleKaelMode(token, "kael intro arrival");
+      } catch (error) {
+        if (error !== KAEL_MODE_CANCELLED) throw error;
+        dbg(`kael intro arrival cancelled token=${token}`);
+        return;
+      }
       setState("idle");
     } else {
-      // arrival: stand tall, arms crossed, and LOOK around before settling in
+      // deceleration beat — he's stopped walking, takes a breath
+      await sleep(400);
+      // Arrival: stand tall, arms crossed, hold it, then sit. Nothing else.
+      //
+      // The "look around" that used to live here was not an animation at all —
+      // `facing` is an instant `scaleX(-1)` on the whole sprite, so a glance was
+      // the entire figure snapping to its own reflection and back. Worse, it
+      // fired at sleep(900) while STAND_CROSS (9 x 200 = 1800 ms) was still only
+      // half-played, so he mirrored MID-MOTION, twice, 650 ms apart, and then
+      // stumbled. After an 18-second walk-in that read as teleporting, not
+      // arriving (user-directed: "delete that moment, not realistic").
+      //
+      // The stagger went with it: a stumble is a reaction to being hit, not the
+      // end of a controlled approach to his own corner.
       startClip(STAND_CROSS);
-      await sleep(900);
-      stage.dataset.facing = "left"; // glance left
-      await sleep(650);
-      stage.dataset.facing = "right"; // glance right
-      await sleep(650);
-      delete stage.dataset.facing;
-      await sleep(500); // settle
-      // the arrival stumble (user-directed): a quick stagger sells the stop
-      startClip(ANIMS_DANTE.error);
-      await sleep(danteClipTotal(ANIMS_DANTE.error) + 120);
+      await sleep(danteClipTotal(STAND_CROSS) + 500); // full stand, then hold
       // then sit DOWN onto the panel (stand->sit) while the window lowers
       startClip(SITDOWN);
       posture("idle", true); // drop the window to the seated height
@@ -5151,6 +6927,22 @@ async function leaveScene() {
     delete stage.dataset.facing;
     afterClip = null;
     await new Promise<void>((res) => (moveWindowY(h.y, 300), window.setTimeout(res, 320)));
+    if (isKael()) {
+      const token = beginKaelMode("away");
+      try {
+        await playKaelMode(token, KAEL.leave_v2);
+        if (!kaelModeCurrent(token, "away")) return;
+      } catch (error) {
+        if (error !== KAEL_MODE_CANCELLED) throw error;
+        dbg(`kael leave cancelled token=${token}`);
+        return;
+      }
+      await h.win.hide();
+      away = true;
+      awayAt = Date.now();
+      dbg("kael portal closed -> window hidden");
+      return;
+    }
     curClip = isCorvin() ? (CORVIN.windidle as Clip) : STAND_CROSS;
     frameIdx = 0;
     if (!isCorvin()) showBubble(pickLine(LEAVE_LINES), PRIO.MAJOR);
@@ -5163,7 +6955,7 @@ async function leaveScene() {
     const offX = h.ox - h.winW - 8;
     stage.dataset.facing = "left";
     playWalk(true);
-    await slideWindow(offX, 150); // walk off to the left
+    await slideFootstepWindow(offX, isCorvin() ? CORVIN.walkout : WALK, isCorvin() ? 125 : DANTE_WALK_PACE);
     away = true;
     awayAt = Date.now();
   } finally {
@@ -5178,25 +6970,60 @@ async function returnScene() {
   away = false;
   const h = home;
   try {
+    if (isKael()) {
+      const token = beginKaelMode("scene");
+      await h.win.setPosition(new PhysicalPosition(h.cornerX, h.y));
+      h.lastX = h.cornerX;
+      h.lastY = h.y;
+      delete stage.dataset.facing;
+      try {
+        startKaelModeClip(token, KAEL.return_v2);
+        await h.win.show();
+        await sleep(kaelClipTotal(KAEL.return_v2));
+        requireKaelMode(token);
+      } catch (error) {
+        if (error !== KAEL_MODE_CANCELLED) throw error;
+        dbg(`kael return cancelled token=${token}`);
+        return;
+      }
+      settleKaelMode(token, "kael return");
+      if (gamingActive()) void ensureKaelCombatReady("returned during game");
+      return;
+    }
     h.lastX = h.ox - h.winW - 8; // start fully off-screen left
     await h.win.setPosition(new PhysicalPosition(h.lastX, h.y));
     h.lastY = h.y;
     stage.dataset.facing = "right";
     playWalk();
-    await slideWindow(h.cornerX, 150); // walk back to the corner
+    await slideFootstepWindow(h.cornerX, isCorvin() ? CORVIN.walkin : WALK, isCorvin() ? 125 : DANTE_WALK_PACE);
     delete stage.dataset.facing;
-    // stand and look around before sitting — same arrival beat as the intro
-    curClip = STAND_CROSS;
-    frameIdx = 0;
-    await sleep(danteClipTotal(STAND_CROSS) + 500);
-    curClip = SITDOWN; // sit down onto the panel
-    frameIdx = 0;
-    posture("idle", true);
-    await sleep(danteClipTotal(SITDOWN));
-    setState("idle");
-    showBubble(pickLine(RETURN_LINES), PRIO.MAJOR);
+    // stand tall, hold, then sit — the same arrival beat as the intro
+    if (isCorvin()) {
+      // Corvin returns on his own feet. The old shared branch replaced him with
+      // Dante's crossed-arms and sitpanel frames immediately after walk-in.
+      corvinSeatedNow = false;
+      corvinQuietPose = "watch";
+      await playCorvin(CORVIN.bow);
+      finishSceneIdle("corvin return");
+    } else {
+      // Dante stands tall, holds, then uses his authored panel sit.
+      startClip(STAND_CROSS);
+      await sleep(danteClipTotal(STAND_CROSS) + 500);
+      startClip(SITDOWN);
+      posture("idle", true);
+      await sleep(danteClipTotal(SITDOWN));
+      setState("idle");
+      showBubble(pickLine(RETURN_LINES), PRIO.MAJOR);
+    }
   } finally {
     returning = false;
+    // Arriving IS presence. Without this the presence loop still saw a
+    // stale lastActivity on its very next 30-second tick and sent him
+    // straight back off-screen: on an idle machine he walked in and out
+    // every ~10 minutes forever. The event-driven wake path was fine —
+    // those kinds stamp lastActivity themselves — only the blind
+    // AWAY_RETURN_MS timer produced the loop.
+    lastActivity = Date.now();
   }
 }
 
@@ -5301,6 +7128,11 @@ async function shootScene(shots = 1) {
 // `window.__echoShowcase()`. Never auto-fires — discovery > demonstration.
 // @ts-ignore – attached to window for console access
 window.__echoShowcase = showcase;
+async function danteReviewScene() {
+  if (!home || !isDante() || gagActive || showcasing || introActive || wandering || away || returning) return;
+  await showcase();
+}
+
 async function showcase() {
   if (!home) {
     dbg("showcase SKIPPED (home null)");
@@ -5322,8 +7154,21 @@ async function showcase() {
     rearm();
     await sleep(ms);
   };
+  const demoWalk = async () => {
+    showBubble("walking", PRIO.AMBIENT);
+    moveWindowY(h.y, 300);
+    await sleep(320);
+    const reviewX = Math.max(h.ox + 8, h.cornerX - Math.min(360, h.winW));
+    stage.dataset.facing = "left";
+    startClip(WALK);
+    await slideFootstepWindow(reviewX, WALK, DANTE_WALK_PACE);
+    stage.dataset.facing = "right";
+    startClip(WALK);
+    await slideFootstepWindow(h.cornerX, WALK, DANTE_WALK_PACE);
+    delete stage.dataset.facing;
+  };
   try {
-    await sleep(700);
+    await sleep(1400);
     // seated idle rotation
     await demo(IDLE_CYCLE[0], "sitting", 1700, true); // legs swinging
     await demo(IDLE_CYCLE[1], "arms crossed", 1900, true); // arms crossed
@@ -5332,17 +7177,17 @@ async function showcase() {
     await demo(LAUGH, "laughing", 1500, true); // laugh
     // standing work
     await demo(ANIMS.coding, "coding", 2000, false); // front work loop
-    await demo(WALK, "walking", 1600, false); // side walk cycle
+    await demoWalk(); // both directions with physical root motion
     afterClip = null;
     dbg("showcase SCENES begin");
     // scenes — kept INSIDE the showcasing guard so a live event can't grab
     // gagActive and make a scene early-return (that was skipping the fall/climb).
     await shootScene(); // Jackpot (+ gun-spin / taunt follow-through)
-    await sleep(300);
+    await sleep(900);
     await devilTriggerScene(); // Devil Trigger power pose
-    await sleep(300);
+    await sleep(900);
     await diveGag(); // fall → climb up
-    await sleep(300);
+    await sleep(900);
     await danceScene(); // dance
   } finally {
     showcasing = false;
@@ -5389,19 +7234,120 @@ function gifSize(url: string): Promise<{ w: number; h: number } | null> {
   });
 }
 
+// The плакат window, detached from whoever is standing under it. Dante holds it
+// overhead, Corvin plays to it, Kael's organ rises beside it — the GIF is the
+// same beat for all three (user-directed: "not only Dante"). Returns the closer
+// so each scene disposes of it in its own finally.
+// `handsOffsetPx` places the poster's bottom edge relative to the sprite top:
+// Dante's raised hands sit ~12 px into it, the others hold nothing.
+async function raisePosterWindow(handsOffsetPx = 12): Promise<() => void> {
+  const noop = () => {};
+  if (!home) return noop;
+  const h = home;
+  // Poster window shaped to the gif: fit inside 250x170 logical + frame chrome.
+  const sz = (await gifSize(posterMedia.get("poster") ?? "/media/poster.gif")) ?? {
+    w: 84,
+    h: 107,
+  };
+  const chrome = 18;
+  const k = Math.min((250 - chrome) / sz.w, (170 - chrome) / sz.h);
+  const pwL = Math.round(sz.w * k) + chrome;
+  const phL = Math.round(sz.h * k) + chrome;
+  let win: WebviewWindow | null = new WebviewWindow("poster", {
+    url: "index.html?poster=1",
+    width: pwL,
+    height: phL,
+    visible: false, // built hidden; revealed by the caller's beat
+    transparent: true,
+    decorations: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focus: false,
+    shadow: false,
+  });
+  const posterOk = await new Promise<boolean>((res) => {
+    win!.once("tauri://created", () => res(true));
+    win!.once("tauri://error", (e) => {
+      dbg(`poster window error: ${JSON.stringify(e)}`);
+      res(false);
+    });
+  });
+  // A failed poster window must degrade to song-plus-performance, not abort the
+  // whole beat with an unhandled rejection on a dead handle (hard review).
+  if (!posterOk) win = null;
+  const sf = window.devicePixelRatio || 1;
+  const pw = Math.round(pwL * sf);
+  const ph = Math.round(phL * sf);
+  const spriteW = Math.round(190 * sf);
+  // The sprite is right-aligned inside a wider 260px stage. Centering from the
+  // OS-window left put the poster left of him; center on the 190px sprite box.
+  const spriteLeft = h.lastX + h.winW - spriteW;
+  const px = Math.max(
+    h.ox + 6,
+    Math.min(Math.round(spriteLeft + (spriteW - pw) / 2), h.scrRight - pw - 6),
+  );
+  const spriteTop = h.lastY + h.winH - spriteW;
+  const py = Math.max(h.oy + 6, spriteTop + Math.round(handsOffsetPx * sf) - ph);
+  const placePoster = async () => {
+    await win?.setPosition(new PhysicalPosition(px, py)).catch((e) => {
+      dbg(`poster position failed: ${e}`);
+    });
+  };
+  await placePoster();
+  await sleep(250); // small settle so the webview is ready to paint
+  await win?.show().catch(() => {});
+  // Windows can ignore a layered child position assigned before its first
+  // show. Re-apply it now so it never remains at the default top of screen.
+  await placePoster();
+  void emit("poster-show");
+  // A slow ±3px bob so the held poster feels alive.
+  let t = 0;
+  const bob = window.setInterval(() => {
+    t += 1;
+    void win
+      ?.setPosition(new PhysicalPosition(px, py + Math.round(Math.sin(t) * 3)))
+      .catch((e) => dbg(`poster bob failed: ${e}`));
+  }, 420);
+  return () => {
+    window.clearInterval(bob);
+    if (win) void win.close().catch(() => {});
+  };
+}
+
+// Preloaded so the gif reveal and the first note land in the same second.
+function prepareSong(url: string, volume = 0.45) {
+  const audio = new Audio(url);
+  audio.volume = volume;
+  audio.preload = "auto";
+  audio.onerror = () => dbg(`song decode error: code=${audio.error?.code}`);
+  return {
+    play: () =>
+      audio
+        .play()
+        .then(() => dbg("song playing"))
+        .catch((e) => dbg(`song play failed: ${e}`)),
+    stop: () => {
+      const fade = window.setInterval(() => {
+        audio.volume = Math.max(0, audio.volume - 0.06);
+        if (audio.volume <= 0.01) {
+          audio.pause();
+          window.clearInterval(fade);
+        }
+      }, 80);
+    },
+  };
+}
+
 async function posterScene(durationMs: number) {
   if (!home || gagActive) return;
   gagActive = true;
-  let win: WebviewWindow | null = null;
-  let audio: HTMLAudioElement | null = null;
-  let bob = 0;
-  const h = home;
+  let closePoster: (() => void) | null = null;
+  let stopSong: (() => void) | null = null;
   try {
-    // Song is created (preloading) now but PLAYS at the poster reveal below,
-    // so gif and music start in the same second.
-    audio = new Audio(posterMedia.get("song") ?? POSTER_SONG_URL);
-    audio.volume = 0.45;
-    audio.preload = "auto";
+    ownedMediaUntil = Date.now() + durationMs + 5_000;
+    const song = prepareSong(posterMedia.get("song") ?? POSTER_SONG_URL);
+    stopSong = song.stop;
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     await standUp();
@@ -5409,85 +7355,20 @@ async function posterScene(durationMs: number) {
     curClip = { frames: [DANCE.frames[5]], ms: 500, loop: true, settle: 0 };
     frameIdx = 0;
     showBubble("Too easy.", PRIO.MAJOR);
-    // Poster window shaped to the gif: fit inside 250x170 logical + frame chrome.
-    const sz = (await gifSize(posterMedia.get("poster") ?? "/media/poster.gif")) ?? {
-      w: 84,
-      h: 107,
-    };
-    const chrome = 18;
-    const k = Math.min((250 - chrome) / sz.w, (170 - chrome) / sz.h);
-    const pwL = Math.round(sz.w * k) + chrome;
-    const phL = Math.round(sz.h * k) + chrome;
-    win = new WebviewWindow("poster", {
-      url: "index.html?poster=1",
-      width: pwL,
-      height: phL,
-      visible: false, // built hidden; revealed in sync with the song below
-      transparent: true,
-      decorations: false,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      focus: false,
-      shadow: false,
-    });
-    const posterOk = await new Promise<boolean>((res) => {
-      win!.once("tauri://created", () => res(true));
-      win!.once("tauri://error", (e) => {
-        dbg(`poster window error: ${JSON.stringify(e)}`);
-        res(false);
-      });
-    });
-    // A failed poster window must degrade to song-plus-dance, not abort the
-    // whole beat with an unhandled rejection on a dead handle (hard review).
-    if (!posterOk) win = null;
-    // Directly above his raised hands, centered on the sprite window; a slow
-    // ±3px bob so the held poster feels alive.
-    const sf = window.devicePixelRatio || 1;
-    const pw = Math.round(pwL * sf);
-    const ph = Math.round(phL * sf);
-    const winW = Math.round(190 * sf);
-    // Centered over him, but a wide poster must not run off the screen edge.
-    const px = Math.min(Math.round(h.lastX + (winW - pw) / 2), h.scrRight - pw - 6);
-    const py = Math.round(h.y - ph + 26);
-    await win?.setPosition(new PhysicalPosition(px, py)).catch(() => {});
-    // The synchronized beat: reveal the poster, start its gif, start the song —
-    // all in the same tick. Small settle first so the webview is ready.
-    await sleep(250);
-    await win?.show().catch(() => {});
-    void emit("poster-show");
-    audio.onerror = () => dbg(`song decode error: code=${audio?.error?.code}`);
-    audio
-      .play()
-      .then(() => dbg("song playing"))
-      .catch((e) => dbg(`song play failed: ${e}`));
-    let t = 0;
-    bob = window.setInterval(() => {
-      t += 1;
-      void win?.setPosition(new PhysicalPosition(px, py + Math.round(Math.sin(t) * 3)));
-    }, 420);
+    closePoster = await raisePosterWindow();
+    void song.play();
     dbg("poster scene (media open)");
     await sleep(durationMs);
   } finally {
-    window.clearInterval(bob);
-    if (win) void win.close().catch(() => {});
-    if (audio) {
-      const a = audio;
-      const fade = window.setInterval(() => {
-        a.volume = Math.max(0, a.volume - 0.06);
-        if (a.volume <= 0.01) {
-          a.pause();
-          window.clearInterval(fade);
-        }
-      }, 80);
-    }
+    closePoster?.();
+    stopSong?.();
     gagActive = false;
     setState("idle");
   }
 }
 
 // Milestone celebration: stand up and dance a couple of loops, then sit.
-async function danceScene(durationMs?: number) {
+async function danceScene(durationMs?: number, forcedClip?: Clip) {
   if (!home || gagActive) return;
   gagActive = true;
   try {
@@ -5497,7 +7378,7 @@ async function danceScene(durationMs?: number) {
     await standUp();
     await sleep(240 + Math.random() * 120); // a breath before the first move
     // §10: headbang leads; the classic moves become the rarer treat.
-    const danceClip = Math.random() < 0.8 ? HEADBANG : DANCE;
+    const danceClip = forcedClip ?? (Math.random() < 0.8 ? HEADBANG : DANCE);
     startClip(danceClip);
     showBubble("Too easy.", PRIO.MAJOR);
     const loop = danteClipTotal(danceClip);
@@ -5515,7 +7396,7 @@ async function danceScene(durationMs?: number) {
 
 // Level up -> Devil Trigger: stand, strike the power pose, red aura + vignette.
 async function devilTriggerScene() {
-  if (isCorvin() || !home || gagActive) return;
+  if (!isDante() || !home || gagActive) return;
   gagActive = true;
   try {
     stage.dataset.state = "success";
@@ -5537,7 +7418,7 @@ async function devilTriggerScene() {
 // ---- Dante's headline transformations --------------------------------------
 // Sequential Dante clip playback: set the clip, wait out its real duration.
 const danteClipTotal = (c: Clip): number =>
-  (c.msSeq ? c.msSeq.reduce((a, b) => a + b, 0) : c.frames.length * c.ms) * paceMul();
+  (c.msSeq ? c.msSeq.reduce((a, b) => a + b, 0) : c.frames.length * c.ms) * paceMul(c);
 async function playDante(c: Clip, plays = 1): Promise<void> {
   for (let i = 0; i < plays; i++) {
     startClip(c);
@@ -5564,8 +7445,41 @@ const MOTO_WHEELIE = clip("d_motowheelie", 130, false, 10, 11);
 const MOTO_OFF = clip("d_motooff", 160, false, 10, 11);
 preloadClips([MOTO_WHEELIE, MOTO_OFF]);
 
+// The complete v0.2.4 choreography, kept as its own reusable scene: walk past
+// the desktop edge, mount out of sight, cross, wheelie, ride home and dismount.
+// The caller owns the surrounding idle/watch transition and busy flag.
+async function danteLegacyMotoTourBody() {
+  if (!home || !isDante()) return;
+  const h = home;
+  const homeX = h.cornerX;
+
+  const offRight = h.scrRight + 12;
+  stage.dataset.facing = "right";
+  playWalk();
+  await slideFootstepWindow(offRight, WALK, DANTE_WALK_PACE);
+  dbg("dante legacy motorcycle: off-screen mount");
+  await sleep(550);
+
+  const leftTurnX = h.ox + 18;
+  stage.dataset.facing = "left";
+  startClip(DANTE_MOTORIDE);
+  dbg("dante legacy motorcycle: full-width ride right-to-left");
+  await rideWindow(leftTurnX, 520);
+  sfxEngineRev(1300);
+  dbg("dante legacy motorcycle: wheelie at left edge");
+  await playDante(MOTO_WHEELIE);
+
+  stage.dataset.facing = "right";
+  startClip(DANTE_MOTORIDE);
+  dbg("dante legacy motorcycle: ride home left-to-right");
+  await rideWindow(homeX, 520);
+  sfxTyreScreech();
+  dbg("dante legacy motorcycle: dismount");
+  await playDante(MOTO_OFF);
+}
+
 async function motoScene() {
-  if (!home || gagActive || isCorvin()) return;
+  if (!home || gagActive || !isDante()) return;
   gagActive = true;
   const h = home;
   const homeX = h.cornerX;
@@ -5574,32 +7488,7 @@ async function motoScene() {
     stage.dataset.state = "success";
     document.documentElement.style.setProperty("--accent", ACCENT.success);
     await standUp();
-
-    // Mounting is private: he walks fully outside the desktop first.
-    const offRight = h.scrRight + 12;
-    stage.dataset.facing = "right";
-    playWalk();
-    await slideWindow(offRight, 140);
-    dbg("dante motorcycle: off-screen mount");
-    await sleep(550);
-
-    // One full-width pass, using motorcycle physics rather than walking easing.
-    const leftTurnX = h.ox + 18;
-    stage.dataset.facing = "left";
-    startClip(DANTE_MOTORIDE);
-    dbg("dante motorcycle: full-width ride right-to-left");
-    await rideWindow(leftTurnX, 520);
-    sfxEngineRev(1300);
-    dbg("dante motorcycle: wheelie at left edge");
-    await playDante(MOTO_WHEELIE); // the flourish at the far end
-
-    stage.dataset.facing = "right";
-    startClip(DANTE_MOTORIDE);
-    dbg("dante motorcycle: ride home left-to-right");
-    await rideWindow(homeX, 520); // and back to his corner
-    sfxTyreScreech();
-    dbg("dante motorcycle: dismount");
-    await playDante(MOTO_OFF);
+    await danteLegacyMotoTourBody();
   } finally {
     delete stage.dataset.facing;
     cancelAnimationFrame(winTween);
@@ -5615,7 +7504,7 @@ async function motoScene() {
 // The full Devil Form — the beautiful one: eruption, the winged demon burning
 // in place, then a graceful return to the man.
 async function devilFormScene() {
-  if (!home || gagActive || isCorvin()) return;
+  if (!home || gagActive || !isDante()) return;
   gagActive = true;
   try {
     stage.dataset.state = "success";
@@ -5634,13 +7523,25 @@ async function devilFormScene() {
 }
 
 async function dantePoseScene(c: Clip, holdMs: number) {
-  if (!home || gagActive || isCorvin()) return;
+  if (!home || gagActive || !isDante()) return;
   gagActive = true;
   try {
     await standUp();
     await playDante(c);
     await sleep(holdMs);
     await playDante(reversedClip(c));
+  } finally {
+    gagActive = false;
+    setState("idle");
+  }
+}
+
+async function danteStandingClipScene(c: Clip, plays = 1) {
+  if (!home || gagActive || !isDante()) return;
+  gagActive = true;
+  try {
+    await standUp();
+    await playDante(c, plays);
   } finally {
     gagActive = false;
     setState("idle");
@@ -5722,7 +7623,10 @@ async function doorFightScene(force = false) {
       await sleep(300); // — the silence after
       await playCorvin(CORVIN.swordtake); // he pulls the blade free — the watch resumes
       window.setTimeout(sfxSlashWhoosh, 200); // steel leaving the earth
-      await slideWindow(homeX, 400); // and walks back to his post
+      stage.dataset.facing = "right";
+      startClip(CORVIN.walkin as Clip);
+      await slideFootstepWindow(homeX, CORVIN.walkin, 125);
+      delete stage.dataset.facing;
     } finally {
       stopStrain.forEach((s) => s());
       stopWind();
@@ -5777,19 +7681,24 @@ async function main() {
   void initPosterMedia(); // ~/.echo/media poster.gif + song.mp3 for the media beat
   startBreathing(); // M1.5: the constant tier — he's never a statue again
   scheduleMidnight(); // Corvin's 00:00 guitar + the MIDNIGHT arc
+  scheduleCorvinHardPlan(); // guaranteed living reel; Director only gates safe windows
   scheduleDanteBeats(); // fixed clocks: spin 6/20m, coin 12/25m, pizza 18/60m, shrug
   scheduleDanteDirector(); // situational Dante beats between fixed appointments
+  scheduleKaelDirector(); // Kael's quiet Abyss/platypus beats
   initTts(); // system voices — the fallback under the pre-rendered pack
   void initCorvinVoice(); // his real, neural voice (public/voice/corvin)
 
   // Character pack: ~/.echo/character decides who walks in (default Dante).
   try {
     const c = await invoke<string>("character_load");
-    if (c === "corvin") character = "corvin";
+    if (c === "corvin" || c === "kael") character = c;
   } catch {
     /* dante */
   }
   applyCharacter();
+  if (isDante()) resetDanteHardPlan("startup");
+  if (isCorvin()) resetCorvinHardPlan("startup");
+  if (isKael()) resetKaelHardPlan("startup");
 
   // M2: load the story; a new day gets a greeting built from yesterday's REAL
   // numbers — he remembers, and says so once the walk-in has finished.
@@ -5799,6 +7708,7 @@ async function main() {
   // Rebind to the loaded state — this is what makes learning survive restarts.
   director.st = { weights: {}, lastPlayed: {}, ...story.s.director };
   danteDirector.st = { weights: {}, lastPlayed: {}, ...story.s.danteDirector };
+  kaelDirector.st = { weights: {}, lastPlayed: {}, ...story.s.kaelDirector };
   const todayKey = dateKey();
   const newDay = !!story.s.lastSeenDate && story.s.lastSeenDate !== todayKey;
   const y = story.yesterday();
@@ -5862,7 +7772,7 @@ async function main() {
   }
   window.setInterval(() => {
     if (Date.now() - lastDevil < DEVIL_EVERY) return;
-    if (isCorvin()) return;
+    if (!isDante()) return;
     if (gagActive || showcasing || wandering || away || returning || committed() || quietNow()) return;
     if (stage.dataset.state !== "idle") return;
     lastDevil = Date.now();

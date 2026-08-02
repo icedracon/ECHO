@@ -12,6 +12,27 @@ use crate::events::{classify, Detected};
 use crate::phrases::Phrases;
 use crate::{level_for, AgentEvent, Store};
 
+/// Append a watcher diagnostic to ~/.echo/echo.log. `windows_subsystem =
+/// "windows"` means stdout goes nowhere, so eprintln! was invisible — and this
+/// subsystem's failures are the ones that look like "he just doesn't react".
+fn wlog(msg: &str) {
+    let Some(home) = dirs::home_dir() else { return };
+    let dir = home.join(".echo");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("echo.log"))
+    {
+        use std::io::Write;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "{ts}\twatcher\t{msg}");
+    }
+}
+
 /// How a watched source is interpreted.
 enum Kind {
     /// Claude Code session logs — parsed line-by-line into rich states.
@@ -62,7 +83,7 @@ fn seed_offsets(root: &Path, offsets: &mut HashMap<PathBuf, u64>) {
 pub fn spawn(app: AppHandle, store: Arc<Mutex<Store>>, phrases: Arc<Phrases>) {
     let srcs = sources();
     if srcs.is_empty() {
-        eprintln!("[watcher] no AI log sources found; disabled");
+        wlog("no AI log sources found; agent reactions disabled for this run");
         return;
     }
 
@@ -88,14 +109,19 @@ pub fn spawn(app: AppHandle, store: Arc<Mutex<Store>>, phrases: Arc<Phrases>) {
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[watcher] failed to init: {e}");
+                wlog(&format!("FAILED to init: {e}"));
                 return;
             }
         };
         for (root, _) in &srcs {
             match watcher.watch(root, RecursiveMode::Recursive) {
-                Ok(()) => eprintln!("[watcher] watching {}", root.display()),
-                Err(e) => eprintln!("[watcher] failed to watch {}: {e}", root.display()),
+                // These used to be stdout-only. Under windows_subsystem there is
+                // no stdout at all, so "the companion never reacts to Claude
+                // Code" (an exhausted inotify watch limit, a permissions error)
+                // was undiagnosable. This is the one subsystem that never wrote
+                // to ~/.echo/echo.log; now it does.
+                Ok(()) => wlog(&format!("watching {}", root.display())),
+                Err(e) => wlog(&format!("FAILED to watch {}: {e}", root.display())),
             }
         }
 
@@ -131,7 +157,9 @@ fn process_file(
     offsets: &mut HashMap<PathBuf, u64>,
     path: &Path,
 ) {
-    let Ok(mut file) = File::open(path) else { return };
+    let Ok(mut file) = File::open(path) else {
+        return;
+    };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let start = *offsets.get(path).unwrap_or(&0);
 
@@ -154,7 +182,9 @@ fn process_file(
     let mut buf = String::new();
     loop {
         buf.clear();
-        let Ok(n) = reader.read_line(&mut buf) else { break };
+        let Ok(n) = reader.read_line(&mut buf) else {
+            break;
+        };
         if n == 0 {
             break;
         }
@@ -214,7 +244,11 @@ fn log_sync(state: &str, stars: i64, level: u32) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         use std::io::Write;
         let _ = writeln!(f, "{ts}\t{state}\tstars={stars}\tlevel={level}");
     }

@@ -34,6 +34,14 @@ export interface DirectorAction {
   kind: "big" | "small" | "pose";
   cooldownSec: number; // личное «не чаще, чем»
   base: (s: Situation) => number; // 0 = нельзя сейчас, 1 = обычно, >1 = самое время
+  // Planned actions are dispatched by an absolute character clock. They stay
+  // in the catalogue so Director owns gating, history and feedback, but never
+  // enter the weighted ambient lottery.
+  planned?: boolean;
+  // The dispatcher must establish this physical pose before frame zero. This
+  // prevents a valid timed action from teleporting between seated and standing
+  // silhouettes just because Director selected it at an awkward moment.
+  posture?: "seated" | "standing";
 }
 
 const night = (s: Situation) => s.hour >= 22 || s.hour < 6;
@@ -58,7 +66,7 @@ export const ACTIONS: DirectorAction[] = [
   { id: "leanspell", kind: "pose", cooldownSec: 900, base: (s) => (s.workMinutes > 30 ? 1.4 : 0.8) },
   { id: "crouchcheck", kind: "small", cooldownSec: 700, base: (s) => (s.gaming ? 1.5 : 0.8) },
   { id: "swordcarry", kind: "pose", cooldownSec: 900, base: () => 0.9 }, // на плечо и обратно
-  { id: "swordrest", kind: "pose", cooldownSec: 3600, base: (s) => (s.typing ? 0 : s.sinceSceneSec > 900 ? 0.85 : 0.35) },
+  { id: "swordrest", kind: "big", cooldownSec: 3600, base: (s) => (s.typing ? 0 : s.sinceSceneSec > 900 ? 0.85 : 0.35) },
   { id: "stretch2", kind: "small", cooldownSec: 800, base: (s) => (s.workMinutes > 45 ? 1.7 : 0.7) },
   { id: "crouchrest", kind: "pose", cooldownSec: 1100, base: (s) => (s.workMinutes > 60 ? 1.4 : 0.6) },
   // --- быт: низкая энергия, тихие часы ---
@@ -83,20 +91,208 @@ export const ACTIONS: DirectorAction[] = [
   { id: "rain", kind: "big", cooldownSec: 3200, base: (s) => (night(s) ? 1.1 : 0.5) },
 ];
 
+export const CORVIN_HARD_PLAN_CYCLE_SEC = 3 * 60 * 60;
+export const CORVIN_HARD_PLAN: DirectorPlanBeat[] = [
+  { id: "shiftweight", atSec: 3 * 60 },
+  { id: "coatdust", atSec: 8 * 60 },
+  { id: "glanceback", atSec: 13 * 60 },
+  { id: "eaglelook", atSec: 18 * 60 },
+  { id: "hairwind", atSec: 23 * 60 },
+  { id: "flinch", atSec: 28 * 60 },
+  { id: "nodself", atSec: 33 * 60 },
+  { id: "lookarm", atSec: 38 * 60 },
+  { id: "breathfog", atSec: 43 * 60 },
+  { id: "knuckle", atSec: 48 * 60 },
+  { id: "stepright", atSec: 54 * 60 },
+  { id: "crouchcheck", atSec: 60 * 60 },
+  { id: "stretch2", atSec: 66 * 60 },
+  { id: "crouchrest", atSec: 72 * 60 },
+  { id: "turnpair", atSec: 80 * 60 },
+  { id: "leanspell", atSec: 88 * 60 },
+  { id: "swordcarry", atSec: 98 * 60 },
+  { id: "swordrest", atSec: 110 * 60 },
+  { id: "feedeagle", atSec: 124 * 60 },
+  { id: "leanstone", atSec: 136 * 60 },
+  { id: "tale", atSec: 148 * 60 },
+  { id: "aura", atSec: 158 * 60 },
+  { id: "road", atSec: 166 * 60 },
+  { id: "rain", atSec: 172 * 60 },
+  { id: "stonerest", atSec: 178 * 60 },
+];
+
+const corvinHardActionIds = new Set(CORVIN_HARD_PLAN.map((beat) => beat.id));
+for (const action of ACTIONS) {
+  if (corvinHardActionIds.has(action.id)) action.planned = true;
+  action.posture = "standing";
+}
+
 // Dante has his own repertoire and memory. His director favours small lived-in
 // beats, with the headline scenes kept rare; fixed daily/game clocks still own
 // their exact appointments.
-export const DANTE_ACTIONS: DirectorAction[] = [
-  { id: "d_standlean", kind: "pose", cooldownSec: 900, base: (s) => (s.present ? 1.1 : 0.5) },
-  { id: "d_crouchpeer", kind: "pose", cooldownSec: 1100, base: (s) => (s.typing ? 0.3 : 1) },
-  { id: "coin", kind: "small", cooldownSec: 1200, base: (s) => (s.winStreak > 0 ? 1.5 : 0.8) },
-  { id: "swordspin", kind: "small", cooldownSec: 1500, base: (s) => (s.present ? 1 : 0.4) },
-  { id: "pizza", kind: "big", cooldownSec: 7200, base: (s) => (s.workMinutes > 45 ? 1.7 : 0) },
-  { id: "dance", kind: "big", cooldownSec: 5400, base: (s) => (evening(s) ? 1.5 : 0.35) },
-  { id: "devilform", kind: "big", cooldownSec: 14400, base: (s) => (night(s) && s.present ? 1.5 : 0) },
-  // the motorcycle: a loud, rare joyride — only when someone is watching
-  { id: "moto", kind: "big", cooldownSec: 10800, base: (s) => (!s.present || s.typing ? 0 : evening(s) || night(s) ? 1.4 : 0.9) },
+export const DANTE_HARD_PLAN_CYCLE_SEC = 4 * 60 * 60;
+export const DANTE_HARD_PLAN: DirectorPlanBeat[] = [
+  { id: "d_glanceover", atSec: 3 * 60 },
+  { id: "sitswing", atSec: 8 * 60 },
+  { id: "d_bootswing", atSec: 13 * 60 },
+  { id: "headtilt", atSec: 18 * 60 },
+  { id: "d_neckroll", atSec: 23 * 60 },
+  { id: "checkwatch", atSec: 28 * 60 },
+  { id: "d_jacketflick", atSec: 33 * 60 },
+  { id: "stretch", atSec: 38 * 60 },
+  { id: "d_knuckles", atSec: 43 * 60 },
+  { id: "leanback", atSec: 48 * 60 },
+  { id: "d_crouchpeer", atSec: 53 * 60 },
+  { id: "laugh", atSec: 58 * 60 },
+  { id: "d_hairswipe", atSec: 63 * 60 },
+  { id: "cleansword", atSec: 68 * 60 },
+  { id: "d_sigh", atSec: 73 * 60 },
+  { id: "cheer", atSec: 78 * 60 },
+  { id: "d_sitedge", atSec: 83 * 60 },
+  { id: "yawn", atSec: 88 * 60 },
+  { id: "d_phone", atSec: 93 * 60 },
+  { id: "shrug", atSec: 98 * 60 },
+  { id: "d_standlean", atSec: 103 * 60 },
+  { id: "sitthink", atSec: 108 * 60 },
+  { id: "d_fingerguns", atSec: 113 * 60 },
+  { id: "coin", atSec: 118 * 60 },
+  { id: "nap", atSec: 123 * 60 },
+  { id: "gunspin", atSec: 128 * 60 },
+  { id: "d_layback", atSec: 133 * 60 },
+  { id: "lookout", atSec: 138 * 60 },
+  { id: "taunt", atSec: 143 * 60 },
+  { id: "sitcross", atSec: 148 * 60 },
+  { id: "standcross", atSec: 153 * 60 },
+  { id: "swordspin", atSec: 158 * 60 },
+  { id: "pizza", atSec: 163 * 60 },
+  { id: "shoot", atSec: 169 * 60 },
+  { id: "stagger", atSec: 175 * 60 },
+  { id: "dance", atSec: 181 * 60 },
+  { id: "dive", atSec: 188 * 60 },
+  { id: "headbang", atSec: 196 * 60 },
+  { id: "swordmove", atSec: 204 * 60 },
+  { id: "deviltrigger", atSec: 212 * 60 },
+  { id: "devilform", atSec: 222 * 60 },
+  { id: "moto", atSec: 234 * 60 },
 ];
+
+export const DANTE_ACTIONS: DirectorAction[] = [
+  { id: "d_glanceover", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_bootswing", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_neckroll", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_jacketflick", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_knuckles", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_hairswipe", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_sigh", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_sitedge", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_phone", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_fingerguns", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_coffee", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_layback", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_standlean", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "d_crouchpeer", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "sitswing", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "sitcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "sitthink", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "leanback", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "laugh", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "checkwatch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "yawn", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "nap", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "stretch", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "shrug", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "headtilt", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "lookout", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "cleansword", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "coin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "swordspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "pizza", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "dance", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "headbang", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "deviltrigger", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "devilform", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "moto", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "dive", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "shoot", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "gunspin", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "taunt", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "cheer", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "stagger", kind: "small", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "standcross", kind: "pose", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "swordmove", kind: "big", cooldownSec: 0, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+];
+const danteSeatedActionIds = new Set([
+  "sitswing",
+  "sitcross",
+  "sitthink",
+  "leanback",
+  "laugh",
+  "checkwatch",
+  "yawn",
+  "nap",
+  "stretch",
+  "shrug",
+  "headtilt",
+  "lookout",
+  "cleansword",
+  "d_glanceover",
+  "d_bootswing",
+  "d_neckroll",
+  "d_jacketflick",
+  "d_knuckles",
+  "d_hairswipe",
+  "d_sigh",
+  "d_sitedge",
+  "d_phone",
+  "d_fingerguns",
+  "d_coffee",
+  "d_layback",
+  "pizza",
+]);
+const danteHardActionIds = new Set(DANTE_HARD_PLAN.map((beat) => beat.id));
+for (const action of DANTE_ACTIONS) {
+  if (danteHardActionIds.has(action.id)) action.planned = true;
+  action.posture = danteSeatedActionIds.has(action.id) ? "seated" : "standing";
+}
+
+export interface DirectorPlanBeat {
+  id: string;
+  atSec: number;
+}
+
+// Kael's living animation is deliberately clocked, not random. Every ordinary
+// micro/pose gets a guaranteed slot in this 90-minute reel. The rare narrative
+// scenes keep their explicit hotkey/error/night routes below the reel, while
+// the three-minute sword rest has a clean ending before the next beat.
+export const KAEL_HARD_PLAN_CYCLE_SEC = 90 * 60;
+export const KAEL_HARD_PLAN: DirectorPlanBeat[] = [
+  { id: "cloaksettle", atSec: 3 * 60 },
+  { id: "razlomtap", atSec: 8 * 60 },
+  { id: "platypus_sniff", atSec: 14 * 60 },
+  { id: "armcheck", atSec: 21 * 60 },
+  { id: "scarf", atSec: 29 * 60 },
+  { id: "platypus", atSec: 38 * 60 },
+  { id: "repair", atSec: 48 * 60 },
+  { id: "cloaksettle", atSec: 58 * 60 },
+  { id: "razlomtap", atSec: 65 * 60 },
+  { id: "platypus_sniff", atSec: 72 * 60 },
+  { id: "swordplant", atSec: 78 * 60 },
+  { id: "rest", atSec: 86 * 60 },
+];
+
+export const KAEL_ACTIONS: DirectorAction[] = [
+  { id: "cloaksettle", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? (s.present ? 1 : 0.45) : 0) },
+  { id: "razlomtap", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? (s.present ? 0.9 : 0.35) : 0) },
+  { id: "swordplant", kind: "big", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && s.sinceSceneSec > 1200 ? 1 : 0) },
+  { id: "platypus_sniff", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? (s.present ? 0.9 : 0.35) : 0) },
+  { id: "armcheck", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "platypus", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "scarf", kind: "small", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "repair", kind: "pose", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming ? 1 : 0) },
+  { id: "rest", kind: "big", cooldownSec: 0, planned: true, base: (s) => (!s.typing && !s.gaming && s.sinceSceneSec > 900 ? 1 : 0) },
+  { id: "voidorgan", kind: "big", cooldownSec: 4 * 24 * 3600, base: (s) => (!s.typing && !s.gaming && s.present && (evening(s) || night(s)) ? 1.25 : 0) },
+  { id: "voidstitch", kind: "big", cooldownSec: 12 * 3600, base: (s) => (!s.typing && s.present && (s.errStreak > 1 || night(s)) ? 0.75 : 0) },
+];
+for (const action of KAEL_ACTIONS) action.posture = "standing";
 
 export interface DirectorState {
   weights: Record<string, number>; // обучение: 0.3 .. 2.5
@@ -118,6 +314,7 @@ export class Director {
     let total = 0;
     const scored: Array<[DirectorAction, number]> = [];
     for (const a of this.actions) {
+      if (a.planned) continue;
       if (a.kind === "big" && !allowBig) continue;
       const last = this.st.lastPlayed[a.id] ?? 0;
       const since = (now - last) / 1000;
@@ -147,6 +344,16 @@ export class Director {
     const last = scored[scored.length - 1][0];
     this.st.lastPlayed[last.id] = now;
     return last;
+  }
+
+  // Hard-plan dispatch still passes through Director: situational vetoes,
+  // last-played history and feedback remain character-specific. The plan itself
+  // is the cooldown, so no weighted roll or secondary cooldown is applied.
+  takePlanned(id: string, s: Situation, allowBig: boolean): DirectorAction | null {
+    const action = this.actions.find((candidate) => candidate.id === id && candidate.planned);
+    if (!action || (action.kind === "big" && !allowBig) || action.base(s) <= 0) return null;
+    this.st.lastPlayed[action.id] = Date.now();
+    return action;
   }
 
   // Обучение: ok=true — пользователь спокойно продолжил (сцена уместна),

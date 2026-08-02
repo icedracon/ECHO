@@ -123,9 +123,11 @@ jobs:
           Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Windows-Portable.exe"
           Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Corvin.exe"
           Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Dante.exe"
+          Copy-Item "src-tauri/target/release/ECHO.exe" "release-friendly/ECHO-Kael.exe"
           $assets += "release-friendly/ECHO-Windows-Portable.exe"
           $assets += "release-friendly/ECHO-Corvin.exe"
           $assets += "release-friendly/ECHO-Dante.exe"
+          $assets += "release-friendly/ECHO-Kael.exe"
           $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -First 1
           if ($setup) {
             Copy-Item $setup.FullName "release-friendly/ECHO-Windows-Setup.exe"
