@@ -41,3 +41,7 @@ mitm_mcp_traffic.db
 
 # generated at build from the real-named gif
 public/media/poster.gif
+
+# Python bytecode
+__pycache__/
+*.pyc
