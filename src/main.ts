@@ -6628,16 +6628,34 @@ function startDantePostureBridge(toSeated: boolean, done: () => void): boolean {
   return true;
 }
 
+// Ограничено, как и у Корвина. Раньше здесь был бесконечный опрос, а флаг
+// dantePostureTransition снимается ВНУТРИ колбэка startClip — то есть только
+// если клип перехода доиграл. Любой клип, заменивший его на полпути, колбэк
+// отменяет, флаг остаётся, и это ожидание не кончается никогда.
+//
+// Цена — вся сцена, которая его ждала. Просмотр видео зависал на входе, до
+// своего цикла, с gagActive навсегда: пятнадцать минут heartbeat каждые три
+// секунды и ни одного бита. Компаньон замирал целиком.
+//
+// После грации флаг объявляется протухшим и снимается. Худший случай —
+// обрезанный переход позы; альтернатива — персонаж, который перестал жить.
+const DANTE_POSTURE_WAIT_MS = 4000;
 function ensureDantePosture(toSeated: boolean): Promise<void> {
   return new Promise((resolve) => {
+    const until = Date.now() + DANTE_POSTURE_WAIT_MS;
     const begin = () => {
       if (!isDante()) {
         resolve();
         return;
       }
       if (dantePostureTransition !== null) {
-        window.setTimeout(begin, 25);
-        return;
+        if (Date.now() >= until) {
+          dbg(`dante posture lock stale ("${dantePostureTransition}") -> cleared`);
+          dantePostureTransition = null;
+        } else {
+          window.setTimeout(begin, 25);
+          return;
+        }
       }
       if (!startDantePostureBridge(toSeated, resolve)) {
         posture(toSeated ? "idle" : "coding", true);
