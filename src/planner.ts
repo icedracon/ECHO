@@ -17,47 +17,58 @@ interface UrgeDef extends IdleUrge {
   weight: (l: Life) => number;
 }
 
+// РАВНОВЕРОЯТНО (user-directed). Раньше веса были разными, и пять движений
+// забирали 69% выборов: sitswing 19.8%, sitcross 16.3%, checkwatch 12%,
+// leanback 11.3%, sitthink 9.9% — а хвост вроде nap (0.8%) или cleansword
+// (2.5%) не показывался почти никогда.
+//
+// Уместность по времени и состоянию теперь держит РАСПИСАНИЕ: у каждого из 43
+// движений свой слот в часовых корзинах. Холостая лотерея работает только в
+// паузах между битами, и там правильнее равный шанс, чем скрытая иерархия.
+//
+// Два исключения оставлены, потому что это не предпочтение, а смысл:
+// napGate (спать только ночью) и coffeeGate (кофе только днём).
 const URGES: UrgeDef[] = [
   // Calm poses settle in for a real while (up to ~60 s) instead of shifting fast.
-  { clip: "sitswing", plays: 3, hold: [18000, 50000], weight: () => 28 }, // shake legs, then rest
-  { clip: "sitcross", plays: 1, hold: [35000, 75000], weight: (l) => 18 + l.v.focus * 10 }, // arms crossed
-  { clip: "sitthink", plays: 1, hold: [15000, 40000], weight: (l) => 10 + l.v.focus * 8 },
-  { clip: "leanback", plays: 1, hold: [35000, 70000], weight: (l) => 10 + l.v.confidence * 10 },
+  { clip: "sitswing", plays: 3, hold: [18000, 50000], weight: () => 10 }, // shake legs, then rest
+  { clip: "sitcross", plays: 1, hold: [35000, 75000], weight: () => 10 }, // arms crossed
+  { clip: "sitthink", plays: 1, hold: [15000, 40000], weight: () => 10 },
+  { clip: "leanback", plays: 1, hold: [35000, 70000], weight: () => 10 },
   // Livelier, shorter beats:
-  { clip: "laugh", plays: 1, hold: [8000, 18000], weight: (l) => 3 + l.v.cockiness * 10 }, // chuckles to himself
+  { clip: "laugh", plays: 1, hold: [8000, 18000], weight: () => 10 }, // chuckles to himself
   {
     clip: "checkwatch",
     plays: 1,
     hold: [8000, 15000],
-    weight: (l) => 6 + l.v.boredom * 16 + (1 - l.v.patience) * 10,
+    weight: () => 10,
   },
-  { clip: "yawn", plays: 1, hold: [10000, 22000], weight: (l) => 3 + (1 - l.v.energy) * 22 },
-  { clip: "nap", plays: 1, hold: [40000, 90000], weight: (l) => (1 - l.v.energy) * 26 * napGate(l) },
+  { clip: "yawn", plays: 1, hold: [10000, 22000], weight: () => 10 },
+  { clip: "nap", plays: 1, hold: [40000, 90000], weight: (l) => 10 * napGate(l) },
   // M3 batch: stretch when stiff (long uptime, low energy), shrug when bored,
   // a curious head-tilt so subtle it earns "did he just move?".
-  { clip: "stretch", plays: 1, hold: [6000, 14000], weight: (l) => 4 + (1 - l.v.energy) * 9 },
-  { clip: "shrug", plays: 1, hold: [4000, 9000], weight: (l) => 2 + l.v.boredom * 8 },
-  { clip: "headtilt", plays: 1, hold: [4000, 8000], weight: (l) => 2 + l.v.curiosity * 7 },
+  { clip: "stretch", plays: 1, hold: [6000, 14000], weight: () => 10 },
+  { clip: "shrug", plays: 1, hold: [4000, 9000], weight: () => 10 },
+  { clip: "headtilt", plays: 1, hold: [4000, 8000], weight: () => 10 },
   // M5: peers out past the screen edge when curiosity runs high.
-  { clip: "lookout", plays: 1, hold: [5000, 10000], weight: (l) => 1 + l.v.curiosity * 9 },
+  { clip: "lookout", plays: 1, hold: [5000, 10000], weight: () => 10 },
   // M5: quiet sword care in focused moments — rare, and Partner-chapter only
   // (gated in playIdleCycle; the planner doesn't know the story).
-  { clip: "cleansword", plays: 1, hold: [6000, 12000], weight: (l) => 1.5 + l.v.focus * 4 },
+  { clip: "cleansword", plays: 1, hold: [6000, 12000], weight: () => 10 },
   // Dante polish batch (parity with Corvin's micro set) — seated micro-beats,
   // all anchored back to the seated pose so they slot into the rotation.
-  { clip: "d_neckroll", plays: 1, hold: [8000, 16000], weight: (l) => 4 + (1 - l.v.energy) * 6 },
-  { clip: "d_jacketflick", plays: 1, hold: [6000, 14000], weight: (l) => 3 + l.v.cockiness * 8 },
-  { clip: "d_fingerguns", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.cockiness * 10 },
-  { clip: "d_knuckles", plays: 1, hold: [6000, 14000], weight: (l) => 3 + l.v.confidence * 6 },
-  { clip: "d_hairswipe", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.cockiness * 7 },
-  { clip: "d_sigh", plays: 1, hold: [8000, 18000], weight: (l) => 2 + l.v.boredom * 8 + (1 - l.v.energy) * 4 },
-  { clip: "d_bootswing", plays: 2, hold: [8000, 18000], weight: (l) => 5 + l.v.boredom * 6 },
-  { clip: "d_glanceover", plays: 1, hold: [6000, 12000], weight: (l) => 2 + l.v.curiosity * 8 },
-  { clip: "d_layback", plays: 1, hold: [30000, 60000], weight: (l) => 4 + l.v.confidence * 8 },
-  { clip: "d_sitedge", plays: 1, hold: [20000, 45000], weight: (l) => 3 + l.v.focus * 6 },
+  { clip: "d_neckroll", plays: 1, hold: [8000, 16000], weight: () => 10 },
+  { clip: "d_jacketflick", plays: 1, hold: [6000, 14000], weight: () => 10 },
+  { clip: "d_fingerguns", plays: 1, hold: [6000, 12000], weight: () => 10 },
+  { clip: "d_knuckles", plays: 1, hold: [6000, 14000], weight: () => 10 },
+  { clip: "d_hairswipe", plays: 1, hold: [6000, 12000], weight: () => 10 },
+  { clip: "d_sigh", plays: 1, hold: [8000, 18000], weight: () => 10 },
+  { clip: "d_bootswing", plays: 2, hold: [8000, 18000], weight: () => 10 },
+  { clip: "d_glanceover", plays: 1, hold: [6000, 12000], weight: () => 10 },
+  { clip: "d_layback", plays: 1, hold: [30000, 60000], weight: () => 10 },
+  { clip: "d_sitedge", plays: 1, hold: [20000, 45000], weight: () => 10 },
   // Daily life: an espresso through the working day, doomscrolling when bored.
-  { clip: "d_coffee", plays: 1, hold: [10000, 20000], weight: (l) => coffeeGate() * (3 + (1 - l.v.energy) * 10) },
-  { clip: "d_phone", plays: 1, hold: [15000, 30000], weight: (l) => 2 + l.v.boredom * 12 },
+  { clip: "d_coffee", plays: 1, hold: [10000, 20000], weight: () => coffeeGate() * 10 },
+  { clip: "d_phone", plays: 1, hold: [15000, 30000], weight: () => 10 },
 ];
 
 // Espresso belongs to the waking day — not at 3 a.m.
