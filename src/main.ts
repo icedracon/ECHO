@@ -5210,6 +5210,24 @@ function runDanteClock(allowBigScenes = true, plannedId?: string): boolean {
   // Enforce it once, here, for every action: bridge to the tagged pose with the
   // real sit/stand transition, then dispatch. ensureDantePosture is a no-op when
   // he is already in the right pose, so this costs nothing in the common case.
+  // Пока идёт работа с сессией, он СТОИТ в рабочей позе (gunspin, скрещённые
+  // руки, taunt). Сидячий плановый бит в это время усаживал его, а следующее
+  // событие сессии через несколько секунд поднимало обратно — 36 смен позы за
+  // прогон. Четвёртая пара сигналов с противоположными позами, после thinking,
+  // idle и печати.
+  //
+  // Ответ здесь другой, чем в тех трёх: сидячие микро-жесты — это его СВОБОДНОЕ
+  // время. Пока ты работаешь, он занят вместе с тобой, и такой бит просто ждёт
+  // следующего слота, вместо того чтобы драться за позу.
+  if (
+    isDante() &&
+    a.posture === "seated" &&
+    !seatedNow &&
+    Date.now() - lastDanteWorkAt < DANTE_WORK_SETTLE_MS
+  ) {
+    dbg(`dante hard beat deferred (work session standing): ${a.id}`);
+    return false;
+  }
   if (a.posture && isDante() && !gagActive && seatedNow !== (a.posture === "seated")) {
     dbg(`dante posture bridge for ${a.id}: -> ${a.posture}`);
     void ensureDantePosture(a.posture === "seated").then(() => dispatchDanteAction(a));
@@ -6272,6 +6290,11 @@ function setState(state: State, force = false) {
   if (isDante() && (state === "coding" || state === "searching" || state === "speaking")) {
     lastDanteWorkAt = Date.now();
   }
+  // ОДНО решение о позе на весь вызов. Раньше их было два: мост смотрел на
+  // targetSeated, а applyPose в конце звал posture(state) с сырым состоянием —
+  // и для `coding` это «стоя». Мост решал «остаёмся сидеть», а следующая
+  // строка молча поднимала флаг: posture() пишет в лог только через мост, так
+  // что в логе это выглядело как посадка без подъёма, три раза подряд.
   const danteThinksOnFeet = isDante() && state === "thinking" && !seatedNow;
   // Same rule for the gaps between bursts: `idle` may not seat him while the
   // session is still warm. It keeps him on his feet in the standing considering
@@ -6285,7 +6308,9 @@ function setState(state: State, force = false) {
   // posture() would queue its own retry and later move the window with no
   // sit/stand clip at all, which is the silhouette teleport the bridge exists
   // to prevent.
-  const applyPose = (movePosture = true) => {
+  const applyPose = (movePosture = true, resolvedSeated?: boolean) => {
+    // Имя состояния для КЛИПА, разрешённая поза — для ОКНА. Их нельзя путать.
+    const postureState = resolvedSeated === undefined ? state : resolvedSeated ? "idle" : "coding";
     if (state === "idle") {
       if (danteWaitsOnFeet) {
         // Standing pause between bursts. playIdleCycle() would start his seated
@@ -6295,7 +6320,7 @@ function setState(state: State, force = false) {
         startClip(wait);
         return;
       }
-      if (movePosture) posture(state);
+      if (movePosture) posture(postureState);
       playIdleCycle();
       return;
     }
@@ -6328,7 +6353,7 @@ function setState(state: State, force = false) {
     } else {
       startClip(ANIMS[state] ?? ANIMS.idle);
     }
-    if (movePosture) posture(state);
+    if (movePosture) posture(postureState);
   };
 
   if (isDante()) {
@@ -6387,10 +6412,14 @@ function setState(state: State, force = false) {
     }
     const linked = startDantePostureBridge(targetSeated, () => {
       const latest = (stage.dataset.state || "idle") as State;
-      if (latest === state) applyPose();
+      if (latest === state) applyPose(true, targetSeated);
       else setState(latest, true);
     });
     if (linked) return;
+    // Мост вернул false — он УЖЕ в нужной позе. Окно двигать по разрешённому
+    // решению, а не по имени состояния, иначе `coding` снова поднимет флаг.
+    applyPose(true, targetSeated);
+    return;
   }
   if (
     isCorvin() &&
