@@ -6165,6 +6165,24 @@ function restartFrameLoop() {
   frameGeneration += 1;
   frameLoop();
 }
+// Та же поза уже играет? Не перезапускать. startClip всегда бросает клип на
+// нулевой кадр, а STAND_CROSS («armcross») живёт сразу в четырёх местах: он и
+// рабочая поза из WORK_POSES, и стоячее размышление, и стоячая пауза между
+// всплесками, и действие standcross. Состояние прыгает coding -> thinking ->
+// coding за секунды, и каждый переход бросал ОДНУ И ТУ ЖЕ анимацию в начало:
+// снаружи это выглядит как «сделал armcross дважды за три секунды», хотя он
+// просто дёргается с первого кадра.
+//
+// Клипы строятся заново каждый раз, поэтому сравнивать объекты бесполезно —
+// сравниваем первый кадр: один и тот же файл значит одна и та же поза.
+function samePoseAlready(c: Clip): boolean {
+  return curClip.frames[0] === c.frames[0] && curClip.loop === c.loop;
+}
+function startPose(c: Clip) {
+  if (samePoseAlready(c)) return; // пусть доигрывает, это то же самое движение
+  startClip(c);
+}
+
 function startClip(c: Clip, next: (() => void) | null = null) {
   if (frameCues && frameCues.clip !== c) frameCues = null;
   curClip = c;
@@ -6317,7 +6335,7 @@ function setState(state: State, force = false) {
         // idle art at standing height, which reads as sunk under the taskbar.
         const wait = clip("sit", 200, true, 8);
         wait.msSeq = STAND_CROSS.msSeq;
-        startClip(wait);
+        startPose(wait);
         return;
       }
       if (movePosture) posture(postureState);
@@ -6343,13 +6361,13 @@ function setState(state: State, force = false) {
       if (name === "gunspin") workClip.msSeq = GUNSPIN.msSeq;
       if (name === "taunt") workClip.msSeq = TAUNT.msSeq;
       if (name === "sit") workClip.msSeq = STAND_CROSS.msSeq;
-      startClip(workClip);
+      startPose(workClip);
     } else if (danteThinksOnFeet) {
       // Standing think: arms crossed, considering. Loops like the other work
       // poses so a long pause holds instead of falling back to seated art.
       const think = clip("sit", 200, true, 8);
       think.msSeq = STAND_CROSS.msSeq;
-      startClip(think);
+      startPose(think);
     } else {
       startClip(ANIMS[state] ?? ANIMS.idle);
     }
